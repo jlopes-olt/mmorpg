@@ -1,0 +1,21 @@
+{
+  "name": "wildrift-server",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Backend temps réel de WildRift RPG (prototype)",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "sprites": "node tools/strip-bg.js",
+    "test": "node test-game.js && node test-socket.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "pngjs": "^7.0.0",
+    "puppeteer-core": "^25.3.0",
+    "socket.io-client": "^4.8.1"
+  }
+}

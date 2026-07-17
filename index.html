@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#14181d">
+  <title>WildRift RPG — Prototype</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%94%EF%B8%8F%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="app">
+    <canvas id="map"></canvas>
+
+    <!-- HUD supérieur : PV, PA (+ cooldown), position -->
+    <header id="hud">
+      <div class="hud-panel hp-panel">
+        <div class="hud-panel-head">
+          <span class="hud-label">Vitalité</span>
+          <div class="hud-meta pos" id="posText">(0, 0)</div>
+        </div>
+        <div class="bar hp"><div class="bar-fill" id="hpFill"></div><span class="bar-text" id="hpText"></span></div>
+      </div>
+      <div class="hud-panel pa-panel">
+        <div class="hud-panel-head">
+          <span class="hud-label">Endurance</span>
+          <div class="hud-meta pa-next" id="paNext"></div>
+        </div>
+        <div class="bar pa"><div class="bar-fill" id="paFill"></div><span class="bar-text" id="paText"></span></div>
+      </div>
+    </header>
+
+    <div id="lobbyBanner" class="hidden">
+      <span id="lobbyText"></span>
+      <button id="lobbyStart" class="hidden">⚡ Lancer le combat maintenant</button>
+    </div>
+    <div id="toasts"></div>
+
+    <!-- Action contextuelle : visible uniquement sur la case (0,0) -->
+    <button id="ctxAction" class="hidden">⚒ Capitale — PNJ &amp; Forgeron</button>
+
+    <!-- Bottom sheet (Inventaire / Profil / Carte / Social / Capitale) -->
+    <section id="sheet" class="hidden">
+      <div id="sheetHead">
+        <h2 id="sheetTitle"></h2>
+        <button id="sheetClose" aria-label="Fermer">✕</button>
+      </div>
+      <div id="sheetBody"></div>
+    </section>
+
+    <!-- HUD inférieur : 4 boutons larges, tactile first -->
+    <nav id="nav">
+      <button data-panel="inventory"><span class="ico nav-ico nav-ico-inventory" aria-hidden="true"></span><span>Inventaire</span></button>
+      <button data-panel="shop"><span class="ico nav-ico nav-ico-shop" aria-hidden="true"></span><span>Boutique</span></button>
+      <button data-panel="profile"><span class="ico nav-ico nav-ico-profile" aria-hidden="true"></span><span>Profil</span></button>
+      <button data-panel="map"><span class="ico nav-ico nav-ico-map" aria-hidden="true"></span><span>Carte</span></button>
+      <button data-panel="social"><span class="ico nav-ico nav-ico-social" aria-hidden="true"></span><span>Social</span></button>
+    </nav>
+
+    <!-- Pop-ups contextuelles (récolte, raid, résultats) -->
+    <div id="popup" class="hidden"></div>
+    <div id="combatFx" class="hidden"></div>
+    <div id="harvestFx" class="hidden"></div>
+
+    <!-- Création de personnage -->
+    <div id="creation" class="overlay hidden"></div>
+
+    <!-- Panneau DEV : accélération du temps pour tester le greybox -->
+    <button id="devBtn" aria-label="Panneau développeur">⚙</button>
+    <div id="devPanel" class="hidden">
+      <b>DEV</b>
+      <div class="dev-row">
+        <button data-speed="1" class="active">x1</button>
+        <button data-speed="10">x10</button>
+        <button data-speed="60">x60</button>
+      </div>
+      <button id="devPa">+50 PA</button>
+      <button id="devReveal">Révéler la carte</button>
+      <button id="devReset" class="danger">Réinitialiser</button>
+    </div>
+  </div>
+
+  <!-- Fourni par le backend Node ; échoue silencieusement en local pur
+       (file:// / artifact) et le jeu bascule alors en simulation solo. -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/world.js"></script>
+  <script src="js/server.js"></script>
+  <script src="js/net.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
