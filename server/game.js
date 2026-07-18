@@ -524,18 +524,15 @@ class Game {
       if (druid) p.hp = Math.min(maxHp(p), p.hp + Math.round(maxHp(p) * CONFIG.COMBAT.DRUID_HEAL_PCT));
 
       if (victory && !p.bot) {
+        // Les monstres ne lâchent que de l'or (+ XP de maîtrise) — les
+        // ressources viennent exclusivement de la récolte.
         const xp = 15 + Math.min(5, monster.tier) * 15;
         p.weaponXp += xp;
-        // Chapardeur (Renard Voleur) : +50 % de butin, or compris
+        // Chapardeur (Renard Voleur) : +50 % d'or pour lui
         const lootMult = p.speciesClass === 'RENARD_VOLEUR' ? 1.5 : 1;
-        const lootType = monster.tier >= 6 ? dungeonResourceFor(this.mapOf(raid.mapId).terrain) : Object.keys(RESOURCES)[Math.floor(Math.random() * 3)];
-        const lootTier = monster.tier >= 6 ? 6 : monster.tier;
-        const lootKey = stackKey(lootType, lootTier);
-        const qty = Math.ceil((2 + Math.floor(Math.random() * 3)) * lootMult);
-        p.inventory[lootKey] = (p.inventory[lootKey] || 0) + qty;
         const gold = Math.ceil(rollGoldLoot(monster.tier) * lootMult);
         p.gold = (p.gold || 0) + gold;
-        rewards.set(p.id, { loot: { [lootKey]: qty }, gold, xp });
+        rewards.set(p.id, { gold, xp });
         this.checkLevelUp(p, 'weapon');
       }
       if (!p.bot) this.pushSelf(p);
@@ -562,7 +559,6 @@ class Game {
         teamForce: force,
         monsterForce: raid.monsterForce,
         participants: members.map((m) => m.username),
-        loot: rw ? rw.loot : null,
         gold: rw ? rw.gold : 0,
         hpLoss: lossById.get(p.id) || 0,
         xp: rw ? rw.xp : 0,

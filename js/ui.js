@@ -616,15 +616,8 @@ showDungeonPopup(tile, onEnter) {
     if (r.victory) {
       lines.push('<p><span class="battle-label">PV perdus</span> <b class="hp-c">−' + r.hpLoss + '</b>' +
         (r.druid ? ' <span class="ok-c">(Sève : +15 % des PV max)</span>' : '') + '</p>');
-      if (r.loot) {
-        const items = Object.entries(r.loot).map(([k, n]) => {
-          const p = parseStackKey(k);
-          return n + '× ' + RESOURCES[p.type].label + ' <span class="tier t' + p.tier + '">T' + p.tier + '</span>';
-        });
-        lines.push('<p><span class="battle-label">Butin</span> ' + items.join(' · ') + '</p>');
-        if (r.gold) lines.push('<p><span class="battle-label">Or</span> <b class="gold-c">+' + r.gold + ' 🪙</b></p>');
-        lines.push('<p><span class="battle-label">Maîtrise</span> +' + r.xp + ' XP d’arme</p>');
-      }
+      if (r.gold) lines.push('<p><span class="battle-label">Or</span> <b class="gold-c">+' + r.gold + ' 🪙</b></p>');
+      lines.push('<p><span class="battle-label">Maîtrise</span> +' + r.xp + ' XP d’arme</p>');
     } else {
       lines.push('<p class="hp-c"><b>☠ Vous êtes mort.</b> Rapatriement à la Capitale — reposez-vous à la fontaine avant de repartir.</p>');
     }

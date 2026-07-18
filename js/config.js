@@ -77,7 +77,7 @@ const CLASSES = {
   RENARD_VOLEUR: {
     label: 'Renard Voleur', icon: 'RV', color: '#d98f3d', baseForce: 19,
     role: 'Butin',
-    bonus: 'Chapardeur : +50 % de butin pour lui en raid, or compris',
+    bonus: 'Chapardeur : +50 % d’or looté en raid pour lui',
   },
   CHAT_MAGICIEN: {
     label: 'Chat Magicien', icon: 'CM', color: '#7f7fd9', baseForce: 18,
@@ -130,7 +130,9 @@ const MONSTERS = {
  * ratio = 1 (≈70 % de victoire) quand l'équipement (arme + armure) est au
  * tier inférieur, à pleine vie. Le T6 de donjon vaut ~2 joueurs T5 :
  * insoloable (2 %), confortable à 3-4. */
-const MONSTER_FORCE = { 1: 26, 2: 54, 3: 82, 4: 110, 5: 138, 6: 360 };
+/* T6 (squelettes de donjon) : ~3 joueurs T5 (94 %) — le duo T5 est
+ * dissuasif (29 %) ; en équipement T6 le duo devient tentable (52 %). */
+const MONSTER_FORCE = { 1: 26, 2: 54, 3: 82, 4: 110, 5: 138, 6: 400 };
 
 const TERRAINS = {
   PLAINE:   { label: 'Plaine',   color: '#4f6b3c' },

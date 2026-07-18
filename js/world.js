@@ -89,13 +89,15 @@ function biomeBasis(terrain) {
   return { axis: [0, 1], tangent: [1, 0] };
 }
 
+/* Boss de donjon : calibrés pour ~5 joueurs équipés T5 (~92 % à cinq,
+ * ~57 % à quatre) — en équipement T6, quatre suffisent (~82 %). */
 function dungeonBossFor(terrain) {
   return {
-    FORET: { type: 'BOSS_FORET', label: 'Roi Roncier', force: 188 },
-    PLAINE: { type: 'BOSS_PLAINE', label: 'Cerf-Orage', force: 186 },
-    MONTAGNE: { type: 'BOSS_MONTAGNE', label: 'Golem Couronne', force: 196 },
-    MARECAGE: { type: 'BOSS_MARECAGE', label: 'Hydre de Vase', force: 192 },
-  }[terrain] || { type: 'BOSS', label: 'Seigneur du Donjon', force: 190 };
+    FORET: { type: 'BOSS_FORET', label: 'Roi Roncier', force: 670 },
+    PLAINE: { type: 'BOSS_PLAINE', label: 'Cerf-Orage', force: 660 },
+    MONTAGNE: { type: 'BOSS_MONTAGNE', label: 'Golem Couronne', force: 700 },
+    MARECAGE: { type: 'BOSS_MARECAGE', label: 'Hydre de Vase', force: 685 },
+  }[terrain] || { type: 'BOSS', label: 'Seigneur du Donjon', force: 680 };
 }
 
 function dungeonResourceFor(terrain) {

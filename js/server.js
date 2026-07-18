@@ -382,7 +382,7 @@ class ServerSim {
     const victory = this.rng() < chance;
     const druid = victory && members.some((p) => p.speciesClass === 'CERF_DRUIDE');
     const rampart = members.some((p) => p.speciesClass === 'OURS_GUERRIER');
-    let myLoot = null, myHpLoss = 0, myXp = 0, myGold = 0;
+    let myHpLoss = 0, myXp = 0, myGold = 0;
 
     for (const p of members) {
       p.status = 'IDLE';
@@ -410,18 +410,14 @@ class ServerSim {
       if (p.id === this.meId) myHpLoss = loss;
 
       if (victory && !p.bot) {
+        // Les monstres ne lâchent que de l'or (+ XP de maîtrise) — les
+        // ressources viennent exclusivement de la récolte.
         const xp = 15 + Math.min(5, monster.tier) * 15;
-        // Chapardeur (Renard Voleur) : +50 % de butin, or compris
+        // Chapardeur (Renard Voleur) : +50 % d'or pour lui
         const lootMult = p.speciesClass === 'RENARD_VOLEUR' ? 1.5 : 1;
-        const loot = {};
-        const lootType = monster.tier >= 6 ? (tile.content.dungeonResource ? tile.content.type : dungeonResourceFor(this.mapOf(raid.mapId).terrain)) : Object.keys(RESOURCES)[Math.floor(Math.random() * 3)];
-        const lootTier = monster.tier >= 6 ? 6 : monster.tier;
-        loot[stackKey(lootType, lootTier)] = Math.ceil((2 + Math.floor(Math.random() * 3)) * lootMult);
         p.weaponXp += xp;
-        for (const k in loot) p.inventory[k] = (p.inventory[k] || 0) + loot[k];
         const gold = Math.ceil(rollGoldLoot(monster.tier) * lootMult);
         p.gold = (p.gold || 0) + gold;
-        myLoot = loot;
         myXp = xp;
         myGold = gold;
         this.checkLevelUp(p, 'weapon');
@@ -443,7 +439,6 @@ class ServerSim {
       teamForce: force,
       monsterForce: raid.monsterForce,
       participants: members.map((p) => p.username),
-      loot: myLoot,
       gold: myGold,
       hpLoss: myHpLoss,
       xp: myXp,

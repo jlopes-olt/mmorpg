@@ -226,11 +226,23 @@ assert.ok(
   winChance(teamPowerOf([wounded]), MONSTER_FORCE[1]) < winChance(teamPowerOf([fullHp]), MONSTER_FORCE[1]),
   'blessé → % de victoire plus faible'
 );
-// T6 de donjon : insoloable même en T5 complet
-const t5full = { speciesClass: 'OURS_GUERRIER', weapon: { tier: 5 }, armor: { tier: 5 }, weaponMastery: 5, hp: 175 };
-assert.strictEqual(winChance(teamPowerOf([t5full]), MONSTER_FORCE[6]), CONFIG.COMBAT.MIN_CHANCE, 'T6 insoloable (2 %)');
-assert.ok(winChance(teamPowerOf([t5full, { ...t5full }, { ...t5full }]), MONSTER_FORCE[6]) > 0.9, 'T6 confortable à trois');
-console.log('Courbe de probabilité : parité ~70 %, bornes 2/98 %, PV influents, T6 groupe ✔');
+// Donjons T6 : squelette ≈ 3 joueurs T5, boss ≈ 5 joueurs T5 —
+// et l'équipement T6 allège d'une personne.
+const t5p = (cls) => ({ speciesClass: cls || 'RENARD_VOLEUR', weapon: { tier: 5 }, armor: { tier: 5 }, weaponMastery: 5, hp: 175 });
+const t6p = (cls) => ({ speciesClass: cls || 'RENARD_VOLEUR', weapon: { tier: 6 }, armor: { tier: 6 }, weaponMastery: 5, hp: 190 });
+const team = (n, mk) => Array.from({ length: n }, () => mk());
+const BOSS_FORCE = 680;
+
+assert.strictEqual(winChance(teamPowerOf(team(1, t5p)), MONSTER_FORCE[6]), CONFIG.COMBAT.MIN_CHANCE, 'squelette T6 insoloable (2 %)');
+assert.ok(winChance(teamPowerOf(team(2, t5p)), MONSTER_FORCE[6]) < 0.4, 'squelette : duo T5 dissuasif');
+assert.ok(winChance(teamPowerOf(team(3, t5p)), MONSTER_FORCE[6]) > 0.85, 'squelette : trio T5 confortable');
+assert.ok(winChance(teamPowerOf(team(2, t6p)), MONSTER_FORCE[6]) > 0.45, 'squelette : duo T6 tentable');
+
+assert.ok(winChance(teamPowerOf(team(4, t5p)), BOSS_FORCE) < 0.7, 'boss : 4 joueurs T5 risqué');
+assert.ok(winChance(teamPowerOf(team(5, t5p)), BOSS_FORCE) > 0.85, 'boss : 5 joueurs T5 confortable');
+assert.ok(winChance(teamPowerOf(team(4, t6p)), BOSS_FORCE) > 0.75, 'boss : 4 joueurs T6 suffisent');
+console.log('Donjons : squelette 3×T5 ✔ (duo T6 tentable), boss 5×T5 ✔ (4×T6 suffisent)');
+console.log('Courbe de probabilité : parité ~70 %, bornes 2/98 %, PV influents ✔');
 
 // --- Personnages multiples : création, métamorphose, partages ---
 assert.strictEqual(alice.characters.length, 1, 'un personnage à l’inscription');
