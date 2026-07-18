@@ -10,6 +10,8 @@ services:
       - "${APP_PORT:-3000}:3000"
     environment:
       PORT: 3000
+      DB_FILE: /app/server/data/wildrift.db
+      # Ancien format JSON : encore lu une fois pour la migration automatique
       STATE_FILE: /app/server/data/state.json
     volumes:
       - mmorpg_state:/app/server/data

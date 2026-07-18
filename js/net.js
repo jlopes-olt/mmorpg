@@ -1,12 +1,8 @@
 'use strict';
 
 /* ============================================================
- * net.js — RemoteServer : client Socket.io.
- *
- * Expose exactement la même surface que ServerSim (tiles,
- * players, raids, now, me, move(), harvest()…) : le reste du
- * client (render/ui/main) ne voit pas la différence. Les
- * actions renvoient des Promesses résolues par l'ack serveur.
+ * net.js — RemoteServer : client Socket.io
+ * Support des cartes world + dungeon:*
  * ============================================================ */
 
 class RemoteServer {
@@ -16,7 +12,9 @@ class RemoteServer {
     this.listeners = {};
     this.players = new Map();
     this.raids = new Map();
+    this.maps = new Map();
     this.tiles = new Map();
+    this.currentMapId = 'world';
     this.seed = 0;
     this.now = 0;
     this.speed = 1;
@@ -26,21 +24,46 @@ class RemoteServer {
 
   on(ev, cb) { (this.listeners[ev] = this.listeners[ev] || []).push(cb); }
   emit(ev, data) { (this.listeners[ev] || []).forEach((cb) => cb(data)); }
-
   get me() { return this.meId ? this.players.get(this.meId) : null; }
-
-  chebyshev(a, b) {
-    return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
-  }
-
-  /* Le serveur pré-calcule la force d'équipe dans le payload des raids */
+  mapOf(id) { return this.maps.get(id) || this.maps.get('world'); }
+  chebyshev(a, b) { return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)); }
   teamForce(raid) { return raid.teamForce || 0; }
+  raidChance(raid) { return raid.winChance || 0; }
 
-  /* Horloge : interpolation locale entre deux synchros serveur */
   tick(dt) {
     this.now += dt * this.speed;
     const me = this.me;
     if (me && me.pa < CONFIG.PA.MAX) me.paMs += dt * this.speed;
+  }
+
+  applyMapDiffs(mapDiffs) {
+    for (const [mapId, diffs] of Object.entries(mapDiffs || {})) {
+      const map = this.mapOf(mapId);
+      if (!map) continue;
+      for (const [key, until] of diffs) {
+        const t = map.tiles.get(key);
+        if (t && t.content) t.content.inactiveUntil = until;
+      }
+    }
+  }
+
+  applyMapStates(mapStates) {
+    for (const [mapId, state] of Object.entries(mapStates || {})) {
+      const map = this.mapOf(mapId);
+      if (!map || map.kind !== 'dungeon' || !map.dungeon) continue;
+      map.dungeon.kills = Number(state.kills) || 0;
+      map.dungeon.killsRequired = Number(state.killsRequired) || map.dungeon.killsRequired;
+      map.dungeon.bossAlive = !!state.bossAlive;
+      const bossTile = map.tiles.get(map.dungeon.bossTileKey);
+      if (bossTile) bossTile.content = map.dungeon.bossAlive ? { ...map.dungeon.bossTemplate } : null;
+    }
+  }
+
+  switchMap(mapId) {
+    this.currentMapId = mapId || 'world';
+    const map = this.mapOf(this.currentMapId);
+    this.tiles = map ? map.tiles : new Map();
+    this.emit('map', { mapId: this.currentMapId, bounds: boundsOf(this.tiles) });
   }
 
   connect(token) {
@@ -54,10 +77,17 @@ class RemoteServer {
       this.emit('creation');
     });
     s.on('init', (d) => this.onInit(d));
+    s.on('map', (d) => {
+      this.applyMapStates(d.mapStates || {});
+      this.applyMapDiffs(d.mapDiffs || {});
+      this.switchMap(d.mapId || (this.me && this.me.mapId) || 'world');
+    });
 
     s.on('self', (p) => {
       if (!this.meId) return;
+      const prev = this.me;
       this.players.set(this.meId, p);
+      if (!prev || prev.mapId !== p.mapId) this.switchMap(p.mapId || 'world');
       this.emit('self', p);
     });
     s.on('players', (list) => {
@@ -69,7 +99,8 @@ class RemoteServer {
       }
     });
     s.on('world', (patch) => {
-      const t = this.tiles.get(patch.key);
+      const map = this.mapOf(patch.mapId || this.currentMapId);
+      const t = map && map.tiles.get(patch.key);
       if (t && t.content) t.content.inactiveUntil = patch.inactiveUntil;
     });
     s.on('raids', (list) => {
@@ -90,26 +121,27 @@ class RemoteServer {
     this.seed = d.seed;
     this.now = d.now;
     this.speed = d.speed || 1;
-    this.tiles = generateWorld(d.seed);
-    for (const [key, until] of d.worldDiffs || []) {
-      const t = this.tiles.get(key);
-      if (t && t.content) t.content.inactiveUntil = until;
-    }
+    this.maps = generateGameMaps(d.seed);
+    this.applyMapStates(d.mapStates || {});
+    this.applyMapDiffs(d.mapDiffs || {});
     this.players = new Map([[d.selfId, d.self]]);
     for (const p of d.players || []) {
       if (p.id !== d.selfId) this.players.set(p.id, p);
     }
     this.raids = new Map((d.raids || []).map((r) => [r.key, r]));
+    this.switchMap(d.mapId || (d.self && d.self.mapId) || 'world');
     this.emit('ready');
     this.emit('self', this.me);
   }
 
-  /* Création de compte (depuis l'écran de création) */
-  join(username, speciesClass) {
-    this.socket.emit('auth', { token: this.token, username, speciesClass });
+  register(username, password, speciesClass) {
+    this.socket.emit('register', { username, password, speciesClass });
   }
 
-  /* Requête avec ack + timeout : toutes les actions passent par là */
+  login(username, password) {
+    this.socket.emit('login', { username, password });
+  }
+
   req(ev, payload) {
     return new Promise((resolve) => {
       let done = false;
@@ -127,9 +159,13 @@ class RemoteServer {
   createRaid(x, y) { return this.req('raid:create', { x, y }); }
   joinRaid(key) { return this.req('raid:join', { key }); }
   startRaidNow(key) { return this.req('raid:start', { key }); }
+  enterDungeon(mapId) { return this.req('dungeon:enter', { mapId }); }
+  usePortal() { return this.req('portal:use', {}); }
   upgrade(slot) { return this.req('upgrade', { slot }); }
   rest() { return this.req('rest', {}); }
   teleportVillage(x, y) { return this.req('village:teleport', { x, y }); }
+  createCharacter(speciesClass) { return this.req('char:create', { speciesClass }); }
+  switchCharacter(index) { return this.req('char:switch', { index }); }
   setAdminTier(kind, tier) { return this.req('admin:tier', { kind, tier }); }
   setAdminGear(slot, tier) { return this.req('admin:gear', { slot, tier }); }
   dev(action) { return this.req('dev', action); }

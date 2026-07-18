@@ -21,7 +21,7 @@ const express = require('express');
 const { Server } = require('socket.io');
 const { Game } = require('./game.js');
 const { Store } = require('./store.js');
-const { CONFIG } = require('../js/config.js');
+const { CONFIG, syncActiveCharacter } = require('../js/config.js');
 
 const ROOT = path.join(__dirname, '..');
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'data', 'wildrift.db');
@@ -68,6 +68,7 @@ const game = new Game(seed, initialState);
 
 function saveAccountOf(p) {
   try {
+    syncActiveCharacter(p);   // recopie la forme active dans son slot
     store.saveAccount(p, game.credentials.get(p.id));
   } catch (e) {
     console.error('Sauvegarde compte impossible :', e.message);
@@ -173,6 +174,7 @@ io.on('connection', (socket) => {
     }
     if (r && r.ok) {
       socket.emit('self', player);
+      io.emit('raids', game.raidsPayload());
       saveAccountOf(player);
     }
     ack(r);
@@ -183,9 +185,13 @@ io.on('connection', (socket) => {
   socket.on('raid:create', act((d) => game.createRaid(player, Number(d.x), Number(d.y))));
   socket.on('raid:join', act((d) => game.joinRaid(player, String(d.key))));
   socket.on('raid:start', act((d) => game.startRaidNow(player, String(d.key))));
+  socket.on('dungeon:enter', act((d) => game.enterDungeon(player, String(d.mapId))));
+  socket.on('portal:use', act(() => game.usePortal(player)));
   socket.on('upgrade', act((d) => game.upgrade(player, d.slot)));
   socket.on('rest', act(() => game.rest(player)));
   socket.on('village:teleport', act((d) => game.teleportVillage(player, Number(d.x), Number(d.y))));
+  socket.on('char:create', act((d) => game.createCharacter(player, String(d.speciesClass))));
+  socket.on('char:switch', act((d) => game.switchCharacter(player, d.index)));
   socket.on('admin:tier', act((d) => game.setAdminTier(player, String(d.kind), Number(d.tier))));
   socket.on('admin:gear', act((d) => game.setAdminGear(player, String(d.slot), Number(d.tier))));
   socket.on('dev', act((d) => {
@@ -213,6 +219,7 @@ io.on('connection', (socket) => {
 /* ---------- Boucles serveur ---------- */
 setInterval(() => game.tick(TICK_MS), TICK_MS);
 setInterval(() => io.emit('players', game.publicPlayers()), 500);
+setInterval(() => io.emit('raids', game.raidsPayload()), 500);
 setInterval(() => io.emit('time', { now: game.now, speed: game.speed }), 2000);
 // État perso : recharge passive PA/PV visible sans attendre une action
 setInterval(() => {

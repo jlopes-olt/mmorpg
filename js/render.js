@@ -59,12 +59,18 @@ const WORLD_ICON_FILES = {
       4: 'assets/bois_04_acacia.png',
       5: 'assets/bois_05_arbre_mort.png',
     },
+    BOIS_ANCIEN: {
+      6: 'assets/bois_ancien_t6.png',
+    },
     MINERAI: {
       1: 'assets/minerai_01_cuivre.png',
       2: 'assets/minerai_02_fer.png',
       3: 'assets/minerai_03_argent.png',
       4: 'assets/minerai_04_or.png',
       5: 'assets/minerai_05_cristal.png',
+    },
+    MINERAI_RUNIQUE: {
+      6: 'assets/minerai_runique_t6.png',
     },
     PLANTE: {
       1: 'assets/plante_01_menthe.png',
@@ -73,13 +79,24 @@ const WORLD_ICON_FILES = {
       4: 'assets/plante_04_aloe_vera.png',
       5: 'assets/plante_05_fougere.png',
     },
+    FLEUR_ASTRALE: {
+      6: 'assets/fleur_astrale_t6.png',
+    },
+    TOURBE_VIVANTE: {
+      6: 'assets/tourbe_vivante_t6.png',
+    },
   },
   monster: {
-    1: 'assets/monstre_01_lupus.png',
-    2: 'assets/monstre_02_ours.png',
-    3: 'assets/monstre_03_spectre.png',
-    4: 'assets/monstre_04_basilic.png',
-    5: 'assets/monstre_05_wyrm.png',
+    LUPUS: 'assets/monstre_01_lupus.png',
+    OURS_PIERRE: 'assets/monstre_02_ours.png',
+    SPECTRE: 'assets/monstre_03_spectre.png',
+    BASILIC: 'assets/monstre_04_basilic.png',
+    WYRM: 'assets/monstre_05_wyrm.png',
+    SQUELETTE: 'assets/monstre_t6_squelette.png',
+    BOSS_FORET: 'assets/boss_foret_t6.png',
+    BOSS_PLAINE: 'assets/boss_plaine_t6.png',
+    BOSS_MONTAGNE: 'assets/boss_montagne_t6.png',
+    BOSS_MARECAGE: 'assets/boss_marecage_t6.png',
   },
   capital: 'assets/capitale_chibi_src.png',
   village: {
@@ -126,8 +143,8 @@ function contentSpriteSize(kind, type, tier) {
   if (kind === 'village') return { w: 98, h: 82, groundOffset: 14, shadowW: 22, shadowH: 7 };
   if (kind === 'dungeon') return { w: 84, h: 76, groundOffset: 12, shadowW: 20, shadowH: 6 };
   if (kind === 'monster') return { w: 66 + tier * 2, h: 52 + tier * 2, groundOffset: 10, shadowW: 18 + tier * 2, shadowH: 7 + tier * 0.4 };
-  if (type === 'BOIS') return { w: 62 + tier * 3, h: 74 + tier * 3, groundOffset: 8, shadowW: 16 + tier * 2, shadowH: 6 + tier * 0.5 };
-  if (type === 'MINERAI') return { w: 50 + tier * 2, h: 42 + tier * 2, groundOffset: 8, shadowW: 15 + tier * 1.5, shadowH: 5 + tier * 0.4 };
+  if (type === 'BOIS' || type === 'BOIS_ANCIEN') return { w: 62 + tier * 3, h: 74 + tier * 3, groundOffset: 8, shadowW: 16 + tier * 2, shadowH: 6 + tier * 0.5 };
+  if (type === 'MINERAI' || type === 'MINERAI_RUNIQUE') return { w: 50 + tier * 2, h: 42 + tier * 2, groundOffset: 8, shadowW: 15 + tier * 1.5, shadowH: 5 + tier * 0.4 };
   return { w: 46 + tier * 2, h: 46 + tier * 2, groundOffset: 8, shadowW: 14 + tier * 1.2, shadowH: 5 + tier * 0.4 };
 }
 
@@ -172,8 +189,8 @@ class Renderer {
         this.worldIcons.resource[type][tier] = this.loadSimpleImage(src, profile);
       }
     }
-    for (const [tier, src] of Object.entries(WORLD_ICON_FILES.monster)) {
-      this.worldIcons.monster[tier] = this.loadSimpleImage(src, 'monster');
+    for (const [type, src] of Object.entries(WORLD_ICON_FILES.monster)) {
+      this.worldIcons.monster[type] = this.loadSimpleImage(src, 'monster');
     }
     this.worldIcons.capital = this.loadSimpleImage(WORLD_ICON_FILES.capital, 'structure');
     for (const [terrain, src] of Object.entries(WORLD_ICON_FILES.village)) {
@@ -565,6 +582,22 @@ class Renderer {
     return { dw, dh, topY: groundY - dh };
   }
 
+  /* Case vide de donjon : losange quasi noir, plus sombre que le fond */
+  drawVoidTile(cx, cy) {
+    const ctx = this.ctx;
+    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - TH2);
+    ctx.lineTo(cx + TW2, cy);
+    ctx.lineTo(cx, cy + TH2);
+    ctx.lineTo(cx - TW2, cy);
+    ctx.closePath();
+    ctx.fillStyle = '#06080b';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+    ctx.stroke();
+  }
+
   drawTerrainTile(tile, cx, cy, visible) {
     const ctx = this.ctx;
     const variants = this.terrainTiles[tile.terrain] || this.terrainTiles.MONTAGNE || [];
@@ -643,32 +676,57 @@ class Renderer {
     const poi = [];
     for (let y = py - R; y <= py + R; y++) {
       for (let x = px - R; x <= px + R; x++) {
-        if (!inBounds(x, y)) continue;
+        if (!inBounds(x, y, s.tiles)) continue;
         const key = tileKey(x, y);
         const visible = Math.hypot(x - px, y - py) <= CONFIG.VIEW_RADIUS + 0.5;
-        if (!visible && !this.explored.has(key)) continue;
         const tile = s.tiles.get(key);
+        // Repères permanents : visibles même à travers le brouillard
+        const landmark = tile.content &&
+          (tile.content.kind === 'capital' || tile.content.kind === 'village' || tile.content.kind === 'dungeon');
+        const known = visible || this.explored.has(key);
+        // Donjon : zones vides (non praticables) en noir profond, dessinées
+        // même sous brouillard — on lit la silhouette des couloirs d'un
+        // coup d'œil et on comprend que ce n'est pas du sol
+        if (!known && !landmark && !tile.blocked) continue;
         const cx = this.isoX(x, y) - this.cam.x + this.w / 2;
         const cy = this.isoY(x, y) - this.cam.y + this.h / 2;
         if (cx < -TILE_W * 2 || cx > this.w + TILE_W * 2 || cy < -TILE_H * 4 || cy > this.h + TILE_H * 3) continue;
 
-        this.drawTerrainTile(tile, cx, cy, visible);
-        if (tile.content && visible) poi.push({ tile, cx, cy, visible });
+        if (tile.blocked) {
+          this.drawVoidTile(cx, cy);
+          continue;
+        }
+
+        if (known) {
+          this.drawTerrainTile(tile, cx, cy, visible);
+        } else {
+          // Îlot de terrain fantôme sous le repère non exploré
+          ctx.globalAlpha = 0.5;
+          this.drawTerrainTile(tile, cx, cy, false);
+          ctx.globalAlpha = 1;
+        }
+
+        if (landmark) poi.push({ tile, cx, cy, visible, fogged: !known });
+        else if (tile.content && visible) poi.push({ tile, cx, cy, visible, fogged: false });
       }
     }
 
     poi.sort((a, b) => a.cy - b.cy);
-    for (const p of poi) this.drawContent(p.tile, p.cx, p.cy, p.visible);
+    for (const p of poi) this.drawContent(p.tile, p.cx, p.cy, p.visible, p.fogged);
 
     const others = [...s.players.values()]
-      .filter((p) => p.id !== me.id && p.pos && Math.hypot(p.pos.x - px, p.pos.y - py) <= CONFIG.VIEW_RADIUS + 0.5)
+      .filter((p) => p.id !== me.id && p.mapId === (me.mapId || 'world') && p.pos && Math.hypot(p.pos.x - px, p.pos.y - py) <= CONFIG.VIEW_RADIUS + 0.5)
       .sort((a, b) => (a.pos.x + a.pos.y) - (b.pos.x + b.pos.y));
     for (const p of others) this.drawPlayer(p, false);
     this.drawPlayer(me, true);
   }
 
-  drawContent(tile, cx, cy, visible) {
+  drawContent(tile, cx, cy, visible, fogged) {
     const ctx = this.ctx, c = tile.content, s = this.server;
+
+    // Repère aperçu à travers le brouillard : rendu fantôme
+    const isLandmark = c.kind === 'capital' || c.kind === 'village' || c.kind === 'dungeon';
+    if (isLandmark && fogged) ctx.globalAlpha = 0.62;
 
     if (c.kind === 'capital') {
       this.drawCapitalBase(cx, cy);
@@ -702,6 +760,7 @@ class Renderer {
         ctx.fillText('C', cx, cy - 6);
       }
       this.label(cx, cy + TH2 + 14, 'CAPITALE', '#f4cd6e', 10);
+      ctx.globalAlpha = 1;
       return;
     }
 
@@ -723,10 +782,11 @@ class Renderer {
         size.shadowH
       );
       this.label(cx, cy + TH2 + 12, 'VILLAGE', '#f1e1ad', 9);
+      ctx.globalAlpha = 1;
       return;
     }
 
-    if (c.kind === 'dungeon') {
+if (c.kind === 'dungeon') {
       const size = contentSpriteSize('dungeon');
       const sprite = this.worldIcons.dungeon[c.terrain || tile.terrain];
       this.drawPoiBase(cx, cy, {
@@ -744,6 +804,25 @@ class Renderer {
         size.shadowH
       );
       this.label(cx, cy + TH2 + 12, 'DONJON', '#b8d8e6', 9);
+      ctx.globalAlpha = 1;
+      return;
+    }
+
+    if (c.kind === 'portal') {
+      this.drawPoiBase(cx, cy, {
+        fill: 'rgba(244, 205, 110, 0.16)',
+        stroke: 'rgba(244, 205, 110, 0.5)',
+        glow: 'rgba(244, 205, 110, 0.22)',
+      });
+      ctx.beginPath();
+      ctx.arc(cx, cy - 6, 11, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(36, 47, 72, 0.88)';
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#f4cd6e';
+      ctx.stroke();
+      this.label(cx, cy + TH2 + 10, 'SORTIE', '#f4cd6e', 9);
+      ctx.globalAlpha = 1;
       return;
     }
 
@@ -753,6 +832,11 @@ class Renderer {
     if (c.kind === 'resource') {
       const sprite = this.worldIcons.resource[c.type] && this.worldIcons.resource[c.type][c.tier];
       const size = contentSpriteSize('resource', c.type, c.tier);
+      if (c.tier >= 6) {
+        size.w = Math.round(size.w * 1.12);
+        size.h = Math.round(size.h * 1.12);
+        size.shadowW = Math.round(size.shadowW * 1.08);
+      }
       const drawInfo = this.drawWorldSprite(
         sprite,
         cx,
@@ -783,8 +867,18 @@ class Renderer {
         this.badge(cx, cy + 26, 'T' + c.tier, TIER_COLORS[c.tier]);
       }
     } else if (c.kind === 'monster') {
-      const sprite = this.worldIcons.monster[c.tier];
+      const sprite = this.worldIcons.monster[c.type] || this.worldIcons.monster[MONSTERS[c.tier] && MONSTERS[c.tier].type];
       const size = contentSpriteSize('monster', '', c.tier);
+      if (c.boss) {
+        size.w = Math.round(size.w * 1.55);
+        size.h = Math.round(size.h * 1.55);
+        size.groundOffset += 4;
+        size.shadowW = Math.round(size.shadowW * 1.45);
+        size.shadowH = Math.round(size.shadowH * 1.2);
+      } else if (c.tier >= 6) {
+        size.w = Math.round(size.w * 1.15);
+        size.h = Math.round(size.h * 1.15);
+      }
       const drawInfo = this.drawWorldSprite(
         sprite,
         cx,
@@ -816,7 +910,7 @@ class Renderer {
         this.badge(cx, cy + 28, 'T' + c.tier, TIER_COLORS[c.tier]);
       }
 
-      const raid = s.raids.get(tileKey(tile.x, tile.y));
+      const raid = s.raids.get(raidKey((s.currentMapId || (s.me && s.me.mapId) || 'world'), tile.x, tile.y));
       if (raid) {
         const pulse = pulseBase + Math.sin(performance.now() / 180) * 3;
         ctx.beginPath();
@@ -1004,8 +1098,9 @@ class Renderer {
   drawMinimap(canvas) {
     const ctx = canvas.getContext('2d');
     const size = canvas.width;
-    const scale = size / (CONFIG.WORLD.MAX - CONFIG.WORLD.MIN + 1);
-    const toPx = (v) => (v - CONFIG.WORLD.MIN) * scale;
+    const b = boundsOf(this.server.tiles);
+    const scale = size / (b.max - b.min + 1);
+    const toPx = (v) => (v - b.min) * scale;
     const markers = [];
 
     ctx.fillStyle = '#101318';
@@ -1013,13 +1108,17 @@ class Renderer {
 
     for (const key of this.explored) {
       const tile = this.server.tiles.get(key);
-      if (!tile) continue;
-      const tier = tierAtDistance(Math.hypot(tile.x, tile.y));
+      if (!tile || tile.blocked) continue;   // les vides du donjon restent noirs
+      const tier = tile.content && tile.content.tier ? tile.content.tier : Math.min(5, tierAtDistance(Math.hypot(tile.x, tile.y)));
       ctx.fillStyle = mixColors(TERRAINS[tile.terrain].color, TIER_COLORS[tier], 0.22);
       ctx.fillRect(toPx(tile.x), toPx(tile.y), Math.ceil(scale), Math.ceil(scale));
-      if (tile.content && (tile.content.kind === 'capital' || tile.content.kind === 'village' || tile.content.kind === 'dungeon')) {
+    }
+
+    // Repères permanents : cartographiés sur tout le monde, brouillard compris
+    for (const tile of this.server.tiles.values()) {
+      if (tile.content && (tile.content.kind === 'capital' || tile.content.kind === 'village' || tile.content.kind === 'dungeon' || tile.content.kind === 'portal')) {
         markers.push({
-          kind: tile.content.kind,
+          kind: tile.content.kind === 'portal' ? 'capital' : tile.content.kind,
           x: toPx(tile.x) + scale / 2,
           y: toPx(tile.y) + scale / 2,
         });

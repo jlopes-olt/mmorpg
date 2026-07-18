@@ -13,8 +13,15 @@
 
 (function () {
   const remote = typeof io !== 'undefined' && location.protocol.indexOf('http') === 0;
+
+  // PWA : service worker (cache + installation sur l'écran d'accueil).
+  // Échec silencieux en file:// / artifact.
+  if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
+    navigator.serviceWorker.register('/sw.js').catch(() => { /* indisponible */ });
+  }
   const server = remote ? new RemoteServer() : new ServerSim(CONFIG.WORLD.SEED);
   const canvas = document.getElementById('map');
+  const splash = document.getElementById('splash');
   const explored = new Set();
   const renderer = new Renderer(canvas, server, explored);
   const ui = new UI(server, renderer);
@@ -38,13 +45,23 @@
   let moveQueue = [];         // chemin en cours (liste de {x,y})
   let stepFrom = null;        // dernière case dispatchée (référence des pas)
   let lastFrame = 0, lastStep = 0, lastSave = 0, lastMini = 0;
+  const splashStartedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  let splashDismissed = false;
+
+  function hideSplash(minVisibleMs) {
+    if (!splash || splashDismissed) return;
+    splashDismissed = true;
+    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    const wait = Math.max(0, (minVisibleMs || 0) - (now - splashStartedAt));
+    setTimeout(() => splash.classList.add('hidden'), wait);
+  }
 
   /* ---------- Brouillard de guerre : mémoire d'exploration ---------- */
   function updateExploredAt(x, y) {
     const R = CONFIG.VIEW_RADIUS;
     for (let dy = -R; dy <= R; dy++) {
       for (let dx = -R; dx <= R; dx++) {
-        if (Math.hypot(dx, dy) <= R + 0.5 && inBounds(x + dx, y + dy)) {
+        if (Math.hypot(dx, dy) <= R + 0.5 && inBounds(x + dx, y + dy, server.tiles)) {
           explored.add(tileKey(x + dx, y + dy));
         }
       }
@@ -148,13 +165,16 @@
   function handleTap(tx, ty) {
     const me = server.me;
     if (!me || me.status === 'LOBBY_COMBAT') return;
-    if (!inBounds(tx, ty)) return;
+    if (!inBounds(tx, ty, server.tiles)) return;
     const key = tileKey(tx, ty);
     const visible = Math.hypot(tx - me.pos.x, ty - me.pos.y) <= CONFIG.VIEW_RADIUS + 0.5;
-    if (!explored.has(key) && !visible) return;   // hors brouillard : inerte
-
     const tile = server.tiles.get(key);
+    if (!tile || tile.blocked) return;   // vide de donjon : inerte
     const c = tile.content;
+    // Hors brouillard : inerte — sauf les repères permanents (capitale,
+    // villages, donjons), visibles et ciblables à travers le brouillard.
+    const landmark = c && (c.kind === 'capital' || c.kind === 'village' || c.kind === 'dungeon');
+    if (!explored.has(key) && !visible && !landmark) return;
     const adjacent = server.chebyshev(me.pos, tile) <= 1;
     moveQueue = [];
 
@@ -183,7 +203,10 @@
     }
 
     if (c && c.kind === 'dungeon') {
-      if (me.pos.x === tx && me.pos.y === ty) ui.showDungeonPopup(tile);
+      if (me.pos.x === tx && me.pos.y === ty) ui.showDungeonPopup(tile, async () => {
+        const r = await Promise.resolve(server.enterDungeon(c.mapId));
+        if (!r.ok) ui.toast(r.error);
+      });
       else confirmWalk(tx, ty, {
         title: 'Aller au donjon ?',
         kicker: 'Voyage',
@@ -191,6 +214,25 @@
         mediaClass: 'structure',
         badge: 'Donjon',
       });
+      return;
+    }
+
+    if (c && c.kind === 'portal') {
+      if (me.pos.x === tx && me.pos.y === ty) {
+        ui.confirmAction({
+          title: 'Quitter le donjon ?',
+          bodyHtml: '<p>Voulez-vous emprunter le portail de sortie ?</p>',
+          okLabel: 'Sortir',
+          cb: async () => {
+            const r = await Promise.resolve(server.usePortal());
+            if (!r.ok) ui.toast(r.error);
+          },
+          kicker: 'Portail',
+          tone: 'travel',
+        });
+      } else {
+        confirmWalk(tx, ty, { title: 'Aller au portail ?', kicker: 'Voyage', badge: 'Sortie' });
+      }
       return;
     }
 
@@ -246,7 +288,7 @@
         }
         return;
       }
-      const raid = server.raids.get(key);
+      const raid = server.raids.get(raidKey(server.currentMapId || (server.me && server.me.mapId) || 'world', tx, ty));
       if (raid) {
         const dist = server.chebyshev(me.pos, tile);
         if (dist > CONFIG.JOIN_RADIUS) {
@@ -259,14 +301,16 @@
           });
           return;
         }
+        const nowChance = server.raidChance(raid);
+        const withMeChance = winChance(server.teamForce(raid) + combatPower(me), raid.monsterForce);
         ui.confirmAction({
           title: 'Rejoindre le raid ' + ml + ' ? (5 PA)',
-          bodyHtml: '<p>' + raid.participants.length + ' participant(s) — force actuelle <b>' +
-            server.teamForce(raid) + '</b> vs <b>' + raid.monsterForce + '</b>.</p>' +
+          bodyHtml: '<p>' + raid.participants.length + ' participant(s) — ' +
+            ui.chanceHtml(nowChance) + ' de victoire, <b>≈ ' + Math.round(withMeChance * 100) + ' %</b> avec vous.</p>' +
             '<p class="dim">Résolution dans ' + Math.max(0, Math.ceil((raid.endsAt - server.now) / 1000)) + ' s.</p>',
           okLabel: 'Rejoindre',
           cb: async () => {
-            const r = await Promise.resolve(server.joinRaid(key));
+            const r = await Promise.resolve(server.joinRaid(raidKey(server.currentMapId || (server.me && server.me.mapId) || 'world', tx, ty)));
             if (!r.ok) ui.toast(r.error);
           },
           kicker: 'Raid',
@@ -287,10 +331,12 @@
         });
         return;
       }
+      const soloChance = winChance(teamPowerOf([me]), c.force);
       ui.confirmAction({
         title: 'Lancer Raid ' + ml + ' ? (5 PA)',
-        bodyHtml: '<p>Force du monstre : <b>' + c.force + '</b> — votre force : <b>' + playerForce(me) + '</b>.</p>' +
-          '<p class="dim">Le lobby reste ouvert 30 s (les joueurs proches peuvent rejoindre), ou lancez le combat immédiatement depuis la bannière.</p>',
+        bodyHtml: '<p>Seul, vous avez ' + ui.chanceHtml(soloChance) + ' de chances de victoire.</p>' +
+          '<p class="dim hp-c">⚠ Une défaite est mortelle : retour à la Capitale.</p>' +
+          '<p class="dim">Le lobby reste ouvert 30 s — chaque allié qui rejoint fait grimper vos chances (visibles en direct dans la bannière).</p>',
         okLabel: 'Créer Lobby',
         cb: async () => {
           const r = await Promise.resolve(server.createRaid(tx, ty));
@@ -335,12 +381,22 @@
   });
   window.addEventListener('resize', () => renderer.resize());
 
-  document.getElementById('ctxAction').addEventListener('click', () => ui.showSheet('capital'));
+document.getElementById('ctxAction').addEventListener('click', () => ui.showSheet('capital'));
 
   // Téléportation serveur (KO → Capitale) : on abandonne le chemin en cours
   server.on('self', (p) => {
     if (moveQueue.length && stepFrom && server.chebyshev(p.pos, stepFrom) > 2) moveQueue = [];
     updateExploredAt(p.pos.x, p.pos.y);
+  });
+  server.on('map', () => {
+    moveQueue = [];
+    stepFrom = null;
+    explored.clear();
+    try {
+      const exp = JSON.parse(localStorage.getItem(exploredKey()) || '[]');
+      for (const k of exp) explored.add(k);
+    } catch (e) { /* ignore */ }
+    updateExplored();
   });
 
   /* ---------- Panneau DEV ---------- */
@@ -379,7 +435,7 @@
 
   /* ---------- Persistance ---------- */
   function exploredKey() {
-    return CONFIG.SAVE_KEY + '_exp_' + (server.me ? server.me.username : '');
+    return CONFIG.SAVE_KEY + '_exp_' + (server.me ? server.me.username : '') + '_' + (server.currentMapId || 'world');
   }
 
   function save() {
@@ -392,7 +448,7 @@
         localStorage.setItem(CONFIG.SAVE_KEY, JSON.stringify({
           version: CONFIG.VERSION,
           server: server.serialize(),
-          explored: [...explored],
+          exploredByMap: { [(server.currentMapId || 'world')]: [...explored] },
         }));
       }
     } catch (e) { /* stockage indisponible (iframe privée…) : on joue sans save */ }
@@ -406,6 +462,7 @@
       if (!raw) return null;
       const data = JSON.parse(raw);
       if (data.version !== CONFIG.VERSION) return null;
+      if (!data.exploredByMap && data.explored) data.exploredByMap = { world: data.explored };
       return data;
     } catch (e) { return null; }
   }
@@ -445,11 +502,21 @@
 
   /* ---------- Démarrage ---------- */
   if (remote) {
+    // Se déconnecter = oublier le token de session local (le compte reste en base)
+    ui.onLogout = () => {
+      try { localStorage.removeItem(TOKEN_KEY); } catch (e) { /* stockage indisponible */ }
+      location.reload();
+    };
     server.on('creation', () => {
-      ui.showCreation((name, cls) => server.join(name, cls));
+      hideSplash(1100);
+      ui.showAuth({
+        login: (username, password) => server.login(username, password),
+        register: (username, password, cls) => server.register(username, password, cls),
+      });
     });
     server.on('ready', () => {
       document.getElementById('creation').classList.add('hidden');
+      hideSplash(1100);
       try {
         localStorage.setItem(TOKEN_KEY, server.token);
         const exp = JSON.parse(localStorage.getItem(exploredKey()) || '[]');
@@ -464,9 +531,11 @@
     const saved = loadSave();
     if (saved) {
       server.restore(saved.server);
-      for (const k of saved.explored || []) explored.add(k);
+      for (const k of ((saved.exploredByMap && saved.exploredByMap[server.currentMapId || 'world']) || [])) explored.add(k);
       updateExplored();
+      hideSplash(1100);
     } else {
+      hideSplash(1100);
       ui.showCreation((name, cls) => {
         server.join(name, cls);
         updateExplored();

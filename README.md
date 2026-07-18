@@ -13,11 +13,26 @@ npm install
 npm start           # http://localhost:3000
 ```
 
-- Comptes persistants par **token** (stocké dans le localStorage du navigateur) ;
-  l'état du monde et des joueurs est sauvegardé dans `server/data/state.json`
-  (toutes les 30 s + à l'arrêt), et les PA/PV se rechargent hors-ligne.
+- **Inscription / connexion** : compte par nom + mot de passe (hash scrypt +
+  sel, comparaison à temps constant). La session est reprise automatiquement
+  par un token stocké dans le localStorage, régénéré à chaque connexion.
+  Bouton « Se déconnecter » dans le Profil.
+- **Persistance SQLite** (`server/data/wildrift.db`, module natif
+  `node:sqlite`, WAL) : chaque compte est écrit immédiatement après un
+  événement important (action réussie, fin de récolte, raid, déconnexion) —
+  plus l'horloge et les respawns toutes les 30 s. Un ancien
+  `server/data/state.json` est migré automatiquement au premier démarrage
+  (puis archivé en `.imported`) ; les comptes d'avant les mots de passe
+  définissent le leur à la première connexion.
 - Variables utiles : `PORT=8080`, `SPEED=10` (accélère tout le serveur pour
-  tester), `STATE_FILE=...` (chemin d'état alternatif).
+  tester), `DB_FILE=...` (chemin de la base), `STATE_FILE=...` (JSON legacy à
+  migrer).
+- **PWA installable** : manifest + service worker (`manifest.webmanifest`,
+  `sw.js`, icônes générées par `server/tools/make-icons.js`). Sur mobile,
+  « Ajouter à l'écran d'accueil » installe le jeu en plein écran portrait.
+  La coquille est précachée (stale-while-revalidate) ; `/socket.io/` n'est
+  jamais caché : hors-ligne, le jeu bascule automatiquement en mode solo.
+  Incrémenter `VERSION` dans `sw.js` pour forcer un rafraîchissement.
 - Ouvrir plusieurs navigateurs/onglets = plusieurs joueurs en temps réel.
 
 ### Mode solo (sans backend)
@@ -66,7 +81,9 @@ js/net.js             RemoteServer : client Socket.io (même API que ServerSim)
 js/render.js          canvas iso (atlas, POI, sprites) + minimap
 js/ui.js              HUD, bottom-sheets, popups, création de perso
 js/main.js            boucle, entrées, pathfinding, choix du mode, persistance
-server/index.js       Express + Socket.io + persistance JSON
+server/index.js       Express + Socket.io + branchement persistance
+server/store.js       persistance SQLite (node:sqlite, WAL)
+server/game.js        logique autoritaire + comptes (scrypt)
 server/game.js        logique autoritaire multijoueur (mêmes règles que ServerSim)
 server/tools/         strip-bg.js (détourage sprites)
 server/test-game.js   test logique multijoueur    (npm test)
@@ -83,7 +100,7 @@ render/ui/main ne voient pas la différence.
 
 | Client → serveur (ack `{ok, error?}`) | Serveur → client |
 | --- | --- |
-| `auth {token \| username+speciesClass}` | `init`, `creation`, `self` |
+| `auth {token}` / `register {username, password, speciesClass}` / `login {username, password}` | `init`, `creation {error?}`, `self` |
 | `move {dx, dy}` | `players` (500 ms), `time` (2 s) |
 | `harvest {x, y}` | `world {key, inactiveUntil}` |
 | `raid:create {x,y}` / `raid:join {key}` / `raid:start {key}` | `raids` (liste complète, `teamForce` pré-calculée) |
@@ -99,7 +116,10 @@ render/ui/main ne voient pas la différence.
 
 ## Limites connues / suite
 
-- Auth par token simple (pas de mot de passe) — suffisant pour un prototype.
+- Auth nom + mot de passe (scrypt) : pas d'e-mail ni de récupération de
+  compte, et pas de limitation de tentatives — à ajouter avant une mise en
+  ligne publique. Servir en HTTPS (reverse proxy) pour protéger les mots de
+  passe en transit.
 - L'armure est gatée par la maîtrise d'arme (pas de maîtrise dédiée au spec).
 - Diffusion `players` globale (pas de partitionnement spatial) — à optimiser
   au-delà de quelques dizaines de joueurs simultanés.

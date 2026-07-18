@@ -85,6 +85,17 @@ class UI {
     });
   }
 
+  /* ---------- % de victoire : classes de couleur + rendu ---------- */
+  chanceClass(chance) {
+    if (chance >= 0.75) return 'chance-good';
+    if (chance >= 0.4) return 'chance-mid';
+    return 'chance-bad';
+  }
+
+  chanceHtml(chance) {
+    return '<b class="' + this.chanceClass(chance) + '">' + Math.round(chance * 100) + ' %</b>';
+  }
+
   terrainLabel(terrain) {
     return {
       FORET: 'Forêt',
@@ -217,18 +228,18 @@ class UI {
     wrap.classList.remove('hidden');
   }
 
-  showDungeonPopup(tile) {
+showDungeonPopup(tile, onEnter) {
     const terrain = this.terrainLabel(tile.terrain);
     this.popup(
       'Donjon ' + terrain,
       '<p>Entrée détectée en biome <b>' + terrain + '</b>.</p>' +
-      '<p class="dim">Le vrai contenu donjon arrivera dans une prochaine étape : carte dédiée, minimap persistante, monstres et ressources spéciales, puis zone T6 pensée pour le groupe.</p>',
+      '<p class="dim">Ce donjon mène vers une carte partagée avec couloirs, monstres T6, boss de biome et ressource spéciale.</p>',
       [
         { label: 'Fermer' },
         {
           label: 'Entrer',
           primary: true,
-          cb: () => this.toast('Donjon T6 : contenu à venir.')
+          cb: () => { if (onEnter) onEnter(); }
         },
       ]
     );
@@ -247,23 +258,60 @@ class UI {
     const nextIn = Math.ceil((CONFIG.PA.REGEN_MS - me.paMs) / 1000);
     $('paNext').textContent = me.pa >= CONFIG.PA.MAX ? 'PA max' : '+1 PA dans ' + nextIn + ' s';
 
-    // Bouton contextuel : PNJ de la Capitale
-    const onCapital = me.pos.x === 0 && me.pos.y === 0;
+    // Bouton contextuel : PNJ de la Capitale (monde uniquement — l'entrée
+    // d'un donjon est aussi en (0,0))
+    const onCapital = (me.mapId || 'world') === 'world' && me.pos.x === 0 && me.pos.y === 0;
     $('ctxAction').classList.toggle('hidden', !onCapital);
 
-    // Bannière de lobby (+ bouton "lancer maintenant" pour le chef)
+    // Bannière de lobby : compte à rebours + % de victoire en direct
     const banner = $('lobbyBanner');
     if (me.status === 'LOBBY_COMBAT' && me.raidKey) {
       const raid = this.server.raids.get(me.raidKey);
       if (raid) {
         banner.classList.remove('hidden');
+        const chance = this.server.raidChance(raid);
+        const pct = Math.round(chance * 100);
         $('lobbyText').textContent = '⚔ Raid ' + raid.label + ' T' + raid.tier + ' — résolution dans ' +
           Math.max(0, Math.ceil((raid.endsAt - this.server.now) / 1000)) + ' s — ' +
           raid.participants.length + ' participant(s)';
+        const chanceEl = $('lobbyChance');
+        chanceEl.classList.remove('hidden');
+        chanceEl.textContent = pct + ' % de victoire';
+        chanceEl.className = 'chance-badge ' + this.chanceClass(chance);
         $('lobbyStart').classList.toggle('hidden', raid.leaderId !== me.id);
       }
     } else {
       banner.classList.add('hidden');
+    }
+
+    const dungeonBanner = $('dungeonBanner');
+    const currentMap = this.server.mapOf(this.server.currentMapId || (me.mapId || 'world'));
+    if (currentMap && currentMap.kind === 'dungeon' && currentMap.dungeon) {
+      const state = currentMap.dungeon;
+      const hud = $('hud');
+      const bossIcon = $('dungeonBannerBossIcon');
+      const title = $('dungeonBannerTitle');
+      const fill = $('dungeonBannerFill');
+      const count = $('dungeonBannerCount');
+      const hint = $('dungeonBannerHint');
+      const progress = state.bossAlive ? 1 : Math.max(0, Math.min(1, state.kills / Math.max(1, state.killsRequired)));
+      const bossSrc = currentMap.boss ? this.getMonsterTargetSrc({ type: currentMap.boss.type, tier: 6 }) : '';
+      dungeonBanner.style.top = (hud ? (hud.offsetHeight + 10) : 118) + 'px';
+      dungeonBanner.classList.remove('hidden');
+      dungeonBanner.classList.toggle('boss-ready', !!state.bossAlive);
+      bossIcon.src = bossSrc;
+      bossIcon.style.visibility = bossSrc ? 'visible' : 'hidden';
+      title.textContent = state.bossAlive ? 'Le boss est apparu' : 'Invocation du boss';
+      fill.style.width = Math.round(progress * 100) + '%';
+      count.textContent = state.bossAlive ? 'PRÊT' : (state.kills + ' / ' + state.killsRequired);
+      hint.textContent = state.bossAlive
+        ? 'Rassemblez votre groupe et terrassez le boss du biome.'
+        : ('Abattez encore ' + Math.max(0, state.killsRequired - state.kills) + ' squelettes pour le faire apparaître.');
+    } else {
+      dungeonBanner.style.top = '';
+      dungeonBanner.classList.add('hidden');
+      dungeonBanner.classList.remove('boss-ready');
+      $('dungeonBannerBossIcon').src = '';
     }
   }
 
@@ -491,11 +539,12 @@ class UI {
   }
 
   getHarvestToolKind(resourceType) {
+    const family = resourceFamily(resourceType);
     return {
       MINERAI: 'mineral',
       BOIS: 'wood',
       PLANTE: 'plant',
-    }[resourceType] || 'generic';
+    }[family] || 'generic';
   }
 
   getSpriteSrc(sprite) {
@@ -524,7 +573,8 @@ class UI {
     const sprite = this.renderer &&
       this.renderer.worldIcons &&
       this.renderer.worldIcons.monster &&
-      this.renderer.worldIcons.monster[monster.tier];
+      (this.renderer.worldIcons.monster[monster.type] ||
+        this.renderer.worldIcons.monster[MONSTERS[monster.tier] && MONSTERS[monster.tier].type]);
     return this.getSpriteSrc(sprite);
   }
 
@@ -559,17 +609,24 @@ class UI {
     const lines = [
       '<div class="vs battle-vs"><span>Équipe <b>' + r.teamForce + '</b></span><span class="vs-x">contre</span><span><b>' + r.monsterForce + '</b> ' + esc(r.label) + ' T' + r.tier + '</span></div>',
       '<p><span class="battle-label">Participants</span> ' + r.participants.map(esc).join(', ') + '</p>',
-      '<p><span class="battle-label">PV perdus</span> <b class="hp-c">−' + r.hpLoss + '</b>' + (r.druid ? ' <span class="ok-c">(+15 Sève du Druide)</span>' : '') + '</p>',
     ];
-    if (r.victory && r.loot) {
-      const items = Object.entries(r.loot).map(([k, n]) => {
-        const p = parseStackKey(k);
-        return n + '× ' + RESOURCES[p.type].label + ' <span class="tier t' + p.tier + '">T' + p.tier + '</span>';
-      });
-      lines.push('<p><span class="battle-label">Butin</span> ' + items.join(' · ') + '</p>');
-      lines.push('<p><span class="battle-label">Maîtrise</span> +' + r.xp + ' XP d’arme</p>');
+    if (typeof r.chance === 'number') {
+      lines.push('<p><span class="battle-label">Chances</span> ' + this.chanceHtml(r.chance) + ' de victoire — le sort a ' + (r.victory ? 'souri' : 'tranché') + '.</p>');
+    }
+    if (r.victory) {
+      lines.push('<p><span class="battle-label">PV perdus</span> <b class="hp-c">−' + r.hpLoss + '</b>' +
+        (r.druid ? ' <span class="ok-c">(Sève : +15 % des PV max)</span>' : '') + '</p>');
+      if (r.loot) {
+        const items = Object.entries(r.loot).map(([k, n]) => {
+          const p = parseStackKey(k);
+          return n + '× ' + RESOURCES[p.type].label + ' <span class="tier t' + p.tier + '">T' + p.tier + '</span>';
+        });
+        lines.push('<p><span class="battle-label">Butin</span> ' + items.join(' · ') + '</p>');
+        if (r.gold) lines.push('<p><span class="battle-label">Or</span> <b class="gold-c">+' + r.gold + ' 🪙</b></p>');
+        lines.push('<p><span class="battle-label">Maîtrise</span> +' + r.xp + ' XP d’arme</p>');
+      }
     } else {
-      lines.push('<p class="dim battle-empty">Aucun butin. Revenez plus nombreux…</p>');
+      lines.push('<p class="hp-c"><b>☠ Vous êtes mort.</b> Rapatriement à la Capitale — reposez-vous à la fontaine avant de repartir.</p>');
     }
     this.popup(
       r.victory ? 'Victoire' : 'Défaite',
@@ -623,7 +680,8 @@ class UI {
     const tierColor = TIER_COLORS[resource.tier] || TIER_COLORS[1];
     const label = RESOURCES[resource.type] ? RESOURCES[resource.type].label : resource.type;
     const targetSrc = this.getHarvestTargetSrc(resource);
-    const toolSrc = this.harvestToolSrc[resource.type] || this.harvestToolSrc.MINERAI;
+    const family = resourceFamily(resource.type);
+    const toolSrc = this.harvestToolSrc[family] || this.harvestToolSrc.MINERAI;
     const toolKind = this.getHarvestToolKind(resource.type);
     const totalMs = Math.max(900, durationMs || CONFIG.HARVEST_MS);
     const cycleMs = Math.max(520, Math.min(780, Math.round(totalMs / 4)));
@@ -663,10 +721,17 @@ class UI {
   }
 
   build_inventory(body) {
-    const inv = this.server.me.inventory;
+    const me = this.server.me;
+    const inv = me.inventory;
+    const goldHtml =
+      '<div class="gold-banner">' +
+        '<span class="gold-coin">🪙</span>' +
+        '<span class="gold-label">Or</span>' +
+        '<span class="gold-amount">' + (me.gold || 0).toLocaleString('fr-FR') + '</span>' +
+      '</div>';
     const keys = Object.keys(inv).sort();
     if (!keys.length) {
-      body.innerHTML = '<p class="empty">Inventaire vide. Récoltez des ressources sur la carte (2 PA).</p>';
+      body.innerHTML = goldHtml + '<p class="empty">Inventaire vide. Récoltez des ressources sur la carte (2 PA).</p>';
       return;
     }
     const typeOrder = { BOIS: 0, MINERAI: 1, PLANTE: 2 };
@@ -696,6 +761,7 @@ class UI {
       '</div>';
     });
     body.innerHTML =
+      goldHtml +
       '<div class="sortbar">' +
         '<span class="sortbar-label">Trier</span>' +
         '<div class="sortbar-actions">' +
@@ -734,7 +800,7 @@ class UI {
     body.innerHTML =
       '<div class="profile-head">' +
         this.spriteAvatar(me.speciesClass) +
-        '<div><b class="profile-name">' + esc(me.username) + '</b><br><span class="profile-class">' + cls.label + '</span></div>' +
+        '<div><b class="profile-name">' + esc(me.username) + '</b><br><span class="profile-class">' + cls.label + '</span> <span class="role-chip">' + cls.role + '</span></div>' +
       '</div>' +
       '<p class="bonus">' + cls.bonus + '</p>' +
       '<div class="statgrid">' +
@@ -748,6 +814,7 @@ class UI {
         '<div class="gear-card"><span class="dim">Armure</span><b>' + me.armor.type + '</b><span class="tier t' + me.armor.tier + '">T' + me.armor.tier + '</span></div>' +
       '</div>' +
       '<p class="dim small">Arme et armure sont uniques et évolutives — améliorez-les chez le Forgeron de la Capitale (0,0).</p>' +
+      this.buildCharactersSection(me) +
       '<div class="admin-card">' +
         '<div class="upg-head"><b>Admin</b><span class="dim">Gestion personnage</span></div>' +
         '<p class="dim small">Efface ce personnage et rouvre l’écran de création.</p>' +
@@ -757,11 +824,13 @@ class UI {
           '<button class="btn" data-admin-tier="harvest:3">Récolte T3</button>' +
           '<button class="btn" data-admin-tier="harvest:4">Récolte T4</button>' +
           '<button class="btn" data-admin-tier="harvest:5">Récolte T5</button>' +
+          '<button class="btn" data-admin-tier="harvest:6">Récolte T6</button>' +
           '<button class="btn" data-admin-tier="weapon:1">Maîtrise T1</button>' +
           '<button class="btn" data-admin-tier="weapon:2">Maîtrise T2</button>' +
           '<button class="btn" data-admin-tier="weapon:3">Maîtrise T3</button>' +
           '<button class="btn" data-admin-tier="weapon:4">Maîtrise T4</button>' +
           '<button class="btn" data-admin-tier="weapon:5">Maîtrise T5</button>' +
+          '<button class="btn" data-admin-tier="weapon:6">Maîtrise T6</button>' +
         '</div>' +
         '<div class="admin-grid">' +
           '<button class="btn" data-admin-gear="weapon:0">Arme T0</button>' +
@@ -776,9 +845,13 @@ class UI {
           '<button class="btn" data-admin-gear="armor:4">Armure T4</button>' +
           '<button class="btn" data-admin-gear="weapon:5">Arme T5</button>' +
           '<button class="btn" data-admin-gear="armor:5">Armure T5</button>' +
+          '<button class="btn" data-admin-gear="weapon:6">Arme T6</button>' +
+          '<button class="btn" data-admin-gear="armor:6">Armure T6</button>' +
         '</div>' +
+        '<button id="adminSpawnBossBtn" class="btn primary wide">Faire apparaître le boss</button>' +
         '<button id="profileResetBtn" class="btn danger wide">Réinitialiser le personnage</button>' +
-      '</div>';
+      '</div>' +
+      (this.server.remote ? '<button id="logoutBtn" class="btn wide">🚪 Se déconnecter</button>' : '');
     body.querySelectorAll('[data-admin-tier]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const [kind, tier] = btn.dataset.adminTier.split(':');
@@ -793,12 +866,121 @@ class UI {
         this.toast(r.ok ? ((slot === 'weapon' ? 'Arme' : 'Armure') + ' fixée à T' + tier) : r.error);
       });
     });
+    $('adminSpawnBossBtn').addEventListener('click', async () => {
+      const r = await Promise.resolve(this.server.remote
+        ? this.server.dev({ spawnBoss: true })
+        : this.server.adminSpawnBoss());
+      this.toast(r.ok ? 'Boss invoqué.' : r.error);
+    });
     $('profileResetBtn').addEventListener('click', () => {
       if (this.onAdminReset) this.onAdminReset();
     });
+    if (this.server.remote) {
+      $('logoutBtn').addEventListener('click', () => {
+        if (this.onLogout) this.onLogout();
+      });
+    }
+    body.querySelectorAll('.char-switch').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.switchCharacter(Number(btn.dataset.char)));
+        this.toast(r.ok ? 'Métamorphose !' : r.error);
+      });
+    });
+    body.querySelectorAll('.char-create').forEach((btn) => {
+      btn.addEventListener('click', () => this.showCharacterCreatePopup());
+    });
+  }
+
+  /* ---------- Personnages multiples (formes) ---------- */
+
+  buildCharactersSection(me) {
+    if (!Array.isArray(me.characters)) return '';
+    const cards = [];
+    for (let i = 0; i < me.characters.length; i++) {
+      // La forme active vit "à plat" sur le joueur ; les autres dans leur slot
+      const c = i === me.activeChar ? me : me.characters[i];
+      const cls = CLASSES[c.speciesClass];
+      cards.push(
+        '<div class="char-card' + (i === me.activeChar ? ' active' : '') + '">' +
+          this.spriteAvatar(c.speciesClass) +
+          '<span class="char-info">' +
+            '<b>' + cls.label + ' <span class="role-chip">' + cls.role + '</span></b>' +
+            '<small>Maîtrise T' + c.weaponMastery + ' · Récolte T' + c.harvestLevel +
+            ' · Arme T' + c.weapon.tier + ' · Armure T' + c.armor.tier + '</small>' +
+          '</span>' +
+          (i === me.activeChar
+            ? '<span class="char-active-badge">Actif</span>'
+            : '<button class="btn char-switch" data-char="' + i + '">Incarner</button>') +
+        '</div>'
+      );
+    }
+    for (let i = me.characters.length; i < me.charSlots; i++) {
+      cards.push(
+        '<button class="char-card empty char-create">➕ Éveiller une nouvelle forme' +
+        '<small>Gratuit — à la Capitale ou dans un village</small></button>'
+      );
+    }
+    cards.push(
+      '<div class="char-card locked">🔒 Emplacement supplémentaire' +
+      '<small>Bientôt disponible en boutique</small></div>'
+    );
+    return '<div class="chars-section">' +
+      '<div class="upg-head"><b>Mes personnages</b><span class="dim">' +
+        me.characters.length + ' / ' + me.charSlots + ' emplacements</span></div>' +
+      '<p class="dim small">PA, PV et inventaire sont partagés ; chaque forme garde ses maîtrises et son équipement. ' +
+      'La métamorphose se fait à la Capitale ou dans un village.</p>' +
+      '<div class="char-list">' + cards.join('') + '</div>' +
+    '</div>';
+  }
+
+  showCharacterCreatePopup() {
+    const me = this.server.me;
+    const owned = new Set(me.characters.map((c) => c.speciesClass));
+    const wrap = $('popup');
+    wrap.innerHTML = '';
+    const card = document.createElement('div');
+    card.className = 'popup-card';
+    card.innerHTML =
+      '<h3>Éveiller une nouvelle forme</h3>' +
+      '<div class="popup-body">' +
+        '<p class="dim">Chaque forme progresse séparément (maîtrises, équipement). ' +
+        'L’inventaire, l’endurance et les PV restent partagés — et le choix est définitif.</p>' +
+        '<div class="class-grid"></div>' +
+      '</div>';
+    const grid = card.querySelector('.class-grid');
+    for (const [key, c] of Object.entries(CLASSES)) {
+      if (owned.has(key)) continue;
+      const btn = document.createElement('button');
+      btn.className = 'class-card';
+      btn.innerHTML =
+        this.spriteAvatar(key) +
+        '<span class="class-info"><b>' + c.label + ' <span class="role-chip">' + c.role + '</span></b>' +
+        '<small>' + c.bonus + '</small></span>';
+      btn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.createCharacter(key));
+        if (!r.ok) { this.toast(r.error); return; }
+        this.toast(c.label + ' éveillé !');
+        this.closePopup();
+      });
+      grid.appendChild(btn);
+    }
+    const row = document.createElement('div');
+    row.className = 'popup-actions';
+    const cancel = document.createElement('button');
+    cancel.className = 'btn';
+    cancel.textContent = 'Annuler';
+    cancel.addEventListener('click', () => this.closePopup());
+    row.appendChild(cancel);
+    card.appendChild(row);
+    wrap.appendChild(card);
+    wrap.classList.remove('hidden');
   }
 
   xpBar(label, lvl, xp) {
+    if (lvl >= 6) {
+      return '<div class="xp"><div class="xp-head"><span>' + label + '</span><span class="tier t6">T6 â€” max</span></div>' +
+        '<div class="xp-track"><div class="xp-fill" style="width:100%"></div></div></div>';
+    }
     if (lvl >= 5) {
       return '<div class="xp"><div class="xp-head"><span>' + label + '</span><span class="tier t5">T5 — max</span></div>' +
         '<div class="xp-track"><div class="xp-fill" style="width:100%"></div></div></div>';
@@ -919,12 +1101,117 @@ class UI {
   }
 
   /* ---------- Création de personnage ---------- */
-  showCreation(onDone) {
+  /* ---------- Inscription / connexion (mode connecté) ---------- */
+  showAuth(handlers) {
     const overlay = $('creation');
+
+    // Le serveur a refusé (mauvais mot de passe, nom pris…) : l'écran est
+    // déjà affiché avec les saisies de l'utilisateur — on réactive juste
+    // les boutons, le toast d'erreur est arrivé par ailleurs.
+    if (overlay.dataset.mode === 'auth' && !overlay.classList.contains('hidden')) {
+      const lb = $('loginBtn'), rb = $('registerBtn');
+      if (lb) { lb.disabled = false; lb.textContent = 'Se connecter'; }
+      if (rb) { rb.disabled = false; rb.textContent = 'Créer mon aventurier'; }
+      return;
+    }
+    overlay.dataset.mode = 'auth';
+
     const cards = Object.entries(CLASSES).map(([key, c]) =>
       '<button class="class-card" data-class="' + key + '">' +
         this.spriteAvatar(key, 'big') +
-        '<span class="class-info"><b>' + c.label + '</b><small>' + c.bonus + '</small></span>' +
+        '<span class="class-info"><b>' + c.label + ' <span class="role-chip">' + c.role + '</span></b><small>' + c.bonus + '</small></span>' +
+      '</button>'
+    ).join('');
+
+    overlay.innerHTML =
+      '<div class="creation-card">' +
+        '<h1>WildRift <span class="dim">RPG</span></h1>' +
+        '<div class="auth-tabs">' +
+          '<button id="tabLogin" class="auth-tab active" type="button">Se connecter</button>' +
+          '<button id="tabRegister" class="auth-tab" type="button">Créer un compte</button>' +
+        '</div>' +
+        '<div id="paneLogin">' +
+          '<input id="loginName" type="text" maxlength="16" placeholder="Nom d’aventurier…" autocomplete="username">' +
+          '<input id="loginPass" type="password" maxlength="64" placeholder="Mot de passe" autocomplete="current-password">' +
+          '<button id="loginBtn" class="btn primary wide" disabled>Se connecter</button>' +
+        '</div>' +
+        '<div id="paneRegister" class="hidden">' +
+          '<input id="regName" type="text" maxlength="16" placeholder="Nom d’aventurier (3 caractères min.)" autocomplete="username">' +
+          '<input id="regPass" type="password" maxlength="64" placeholder="Mot de passe (4 caractères min.)" autocomplete="new-password">' +
+          '<input id="regPass2" type="password" maxlength="64" placeholder="Confirmez le mot de passe" autocomplete="new-password">' +
+          '<p id="regHint" class="hp-c small hidden"></p>' +
+          '<p class="dim small">Choisissez votre combo espèce / classe — il est définitif.</p>' +
+          '<div class="class-grid">' + cards + '</div>' +
+          '<button id="registerBtn" class="btn primary wide" disabled>Créer mon aventurier</button>' +
+        '</div>' +
+      '</div>';
+    overlay.classList.remove('hidden');
+
+    const setTab = (login) => {
+      $('paneLogin').classList.toggle('hidden', !login);
+      $('paneRegister').classList.toggle('hidden', login);
+      $('tabLogin').classList.toggle('active', login);
+      $('tabRegister').classList.toggle('active', !login);
+    };
+    $('tabLogin').addEventListener('click', () => setTab(true));
+    $('tabRegister').addEventListener('click', () => setTab(false));
+
+    // --- Connexion ---
+    const refreshLogin = () => {
+      $('loginBtn').disabled = !$('loginName').value.trim() || !$('loginPass').value;
+    };
+    const submitLogin = () => {
+      if ($('loginBtn').disabled) return;
+      $('loginBtn').disabled = true;
+      $('loginBtn').textContent = 'Connexion…';
+      handlers.login($('loginName').value.trim(), $('loginPass').value);
+    };
+    $('loginName').addEventListener('input', refreshLogin);
+    $('loginPass').addEventListener('input', refreshLogin);
+    $('loginPass').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitLogin(); });
+    $('loginBtn').addEventListener('click', submitLogin);
+
+    // --- Inscription ---
+    let chosen = null;
+    const refreshRegister = () => {
+      $('registerBtn').disabled =
+        !chosen ||
+        $('regName').value.trim().length < 3 ||
+        $('regPass').value.length < 4 ||
+        !$('regPass2').value;
+    };
+    overlay.querySelectorAll('.class-card').forEach((card) => {
+      card.addEventListener('click', () => {
+        chosen = card.dataset.class;
+        overlay.querySelectorAll('.class-card').forEach((c) => c.classList.toggle('selected', c === card));
+        refreshRegister();
+      });
+    });
+    for (const id of ['regName', 'regPass', 'regPass2']) {
+      $(id).addEventListener('input', () => {
+        $('regHint').classList.add('hidden');
+        refreshRegister();
+      });
+    }
+    $('registerBtn').addEventListener('click', () => {
+      if ($('regPass').value !== $('regPass2').value) {
+        $('regHint').textContent = 'Les deux mots de passe ne correspondent pas.';
+        $('regHint').classList.remove('hidden');
+        return;
+      }
+      $('registerBtn').disabled = true;
+      $('registerBtn').textContent = 'Création…';
+      handlers.register($('regName').value.trim(), $('regPass').value, chosen);
+    });
+  }
+
+  showCreation(onDone) {
+    const overlay = $('creation');
+    overlay.dataset.mode = 'creation';
+    const cards = Object.entries(CLASSES).map(([key, c]) =>
+      '<button class="class-card" data-class="' + key + '">' +
+        this.spriteAvatar(key, 'big') +
+        '<span class="class-info"><b>' + c.label + ' <span class="role-chip">' + c.role + '</span></b><small>' + c.bonus + '</small></span>' +
       '</button>'
     ).join('');
     overlay.innerHTML =

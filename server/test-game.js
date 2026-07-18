@@ -6,7 +6,10 @@ process.env.SPEED = '1';
 
 const assert = require('assert');
 const { Game } = require('./game.js');
-const { CONFIG, CLASSES, MONSTER_FORCE, playerForce } = require('../js/config.js');
+const {
+  CONFIG, CLASSES, MONSTER_FORCE, playerForce, maxHp,
+  combatPower, teamPowerOf, winChance,
+} = require('../js/config.js');
 
 const g = new Game(CONFIG.WORLD.SEED, null);
 const sent = [];
@@ -61,21 +64,27 @@ for (let target = 1; target <= 5; target++) {
   for (const key of Object.keys(armorRecipe)) assert.ok(key.endsWith('_' + target), 'armure T' + target + ' consomme ressource T' + target);
 }
 
+// Calibrage probabiliste : à parité (équipement au tier inférieur, plein PV),
+// chaque classe doit avoir des chances raisonnables ; avec l'équipement du
+// tier du monstre, la victoire doit être quasi sûre.
 for (let tier = 1; tier <= 5; tier++) {
-  let minSoloForce = Infinity;
   for (const speciesClass of Object.keys(CLASSES)) {
-    const sample = {
+    const parity = {
       speciesClass,
       weapon: { tier: tier - 1 },
-      armor: { tier: Math.max(0, tier - 1) },
+      armor: { tier: tier - 1 },
       weaponMastery: tier,
+      hp: 100 + (tier - 1) * 15,
     };
-    let force = playerForce(sample);
-    if (speciesClass === 'CORBEAU_NECROMANCIEN') force *= 1.08;
-    if (speciesClass === 'LION_PALADIN') force *= 1.10;
-    minSoloForce = Math.min(minSoloForce, Math.round(force));
+    const pParity = winChance(teamPowerOf([parity]), MONSTER_FORCE[tier]);
+    assert.ok(pParity >= 0.5 && pParity <= 0.92,
+      speciesClass + ' à parité vs T' + tier + ' : ' + Math.round(pParity * 100) + ' % (attendu 50-92)');
+
+    const geared = { ...parity, weapon: { tier }, armor: { tier }, hp: 100 + tier * 15 };
+    const pGeared = winChance(teamPowerOf([geared]), MONSTER_FORCE[tier]);
+    assert.ok(pGeared >= 0.9,
+      speciesClass + ' suréquipé vs T' + tier + ' : ' + Math.round(pGeared * 100) + ' % (attendu ≥ 90)');
   }
-  assert.ok(minSoloForce >= MONSTER_FORCE[tier], 'monstre T' + tier + ' battable avec équipement T' + (tier - 1));
 }
 
 // --- Récolte ---
@@ -103,14 +112,16 @@ assert.ok(g.createRaid(alice, mon.x, mon.y).ok, 'lobby créé');
 assert.ok(g.joinRaid(bob, tileKeyOf(mon)).ok, 'Bob rejoint');
 g.tick(5000);   // le temps que les bots rejoignent
 
-const key = tileKeyOf(mon);
+const key = 'world|' + tileKeyOf(mon);   // clé de raid multi-cartes
 const raid = g.raids.get(key);
 assert.ok(raid, 'lobby encore ouvert (30 s non écoulées)');
 assert.ok(raid.participants.length >= 2, 'participants présents : ' + raid.participants.length);
 
 assert.ok(!g.startRaidNow(bob, key).ok, 'seul le chef peut lancer');
+g.rng = () => 0;   // victoire forcée pour tester les récompenses
 assert.ok(g.startRaidNow(alice, key).ok, 'lancement immédiat par le chef');
 g.tick(300);
+g.rng = Math.random;
 assert.ok(!g.raids.has(key), 'raid résolu');
 
 const results = sent.filter((m) => m.ev === 'result');
@@ -119,6 +130,13 @@ assert.ok(results[0].data.victory, 'victoire attendue');
 console.log('Raid T2 : équipe ' + results[0].data.teamForce + ' vs ' + results[0].data.monsterForce +
   ' (' + results[0].data.participants.length + ' participants)');
 assert.strictEqual(alice.status, 'IDLE');
+
+// --- Or looté en victoire (rapport + solde du compte) ---
+assert.ok(results[0].data.hpLoss > 0, 'le rapport indique les PV réellement perdus');
+const goldWon = results[0].data.gold;
+assert.ok(goldWon >= 11 && goldWon <= 15, 'or T2 dans la fourchette 11-15 : ' + goldWon);
+assert.strictEqual(alice.gold, goldWon, 'or crédité sur le compte');
+console.log('Or looté (T2) : +' + goldWon + ' 🪙, rapport PV −' + results[0].data.hpLoss);
 
 // --- Forge ---
 alice.pos = { x: 0, y: 0 };
@@ -140,8 +158,8 @@ alice.pos = { x: village.x, y: village.y };
 assert.ok(g.teleportVillage(alice, 0, 0).ok, 'téléportation vers la capitale');
 assert.deepStrictEqual(alice.pos, { x: 0, y: 0 }, 'arrivée à la capitale');
 
-// --- Talents de groupe : Sève (soin même en défaite) & Rempart ---
-// Bots éloignés pour un combat 100 % déterministe
+// --- Combat probabiliste : mort en défaite, Sève %, Rempart ---
+// Bots éloignés + rng injecté pour des scénarios déterministes
 for (const b of g.bots.values()) { b.pos = { x: -45, y: -45 }; b.home = b.pos; }
 let boss = null;
 for (const t of g.tiles.values()) {
@@ -149,33 +167,39 @@ for (const t of g.tiles.values()) {
       Math.max(Math.abs(t.x + 45), Math.abs(t.y + 45)) > 12) { boss = t; break; }
 }
 
-// 1) Défaite Alice (Lion) + Bob (Cerf Druide) contre un T5 : Sève soigne quand même
+// 1) Défaite forcée (rng → 0,999) : MORT, retour Capitale, or intact
 alice.pos = { x: boss.x - 1, y: boss.y };
 bob.pos = { x: boss.x + 1, y: boss.y };
 alice.pa = 50; bob.pa = 50;
 alice.hp = 100; bob.hp = 100;
+const goldBeforeDeath = alice.gold;
 sent.length = 0;
+g.rng = () => 0.999;
 assert.ok(g.createRaid(alice, boss.x, boss.y).ok, 'lobby T5 créé');
 assert.ok(g.joinRaid(bob, boss.x + ',' + boss.y).ok, 'Bob rejoint le T5');
 assert.ok(g.startRaidNow(alice, boss.x + ',' + boss.y).ok);
 g.tick(300);
 let res = sent.filter((m) => m.ev === 'result').map((m) => m.data);
 assert.strictEqual(res.length, 2, 'résultats envoyés');
-assert.ok(!res[0].victory, 'défaite attendue contre le T5');
-assert.strictEqual(res[0].hpLoss, 52, 'perte pleine sans Rempart (22 + 5×6)');
-assert.strictEqual(alice.hp, 100 - 52 + 15, 'Sève soigne aussi en défaite');
-assert.strictEqual(bob.hp, 100 - 52 + 15, 'Sève soigne toute l’équipe');
+assert.ok(!res[0].victory && res[0].died, 'défaite = mort');
+assert.ok(typeof res[0].chance === 'number' && res[0].chance > 0, '% de victoire dans le rapport');
+assert.deepStrictEqual(alice.pos, { x: 0, y: 0 }, 'mort → rapatriement Capitale');
+assert.strictEqual(alice.mapId, 'world', 'mort → carte monde');
+assert.strictEqual(alice.hp, Math.ceil(maxHp(alice) * CONFIG.COMBAT.DEATH_HP_PCT), 'réveil à 25 % des PV');
+assert.strictEqual(alice.gold, goldBeforeDeath, 'aucune perte d’or à la mort');
 
-// 2) Ajout de Cara (Ours Guerrier) : victoire, et Rempart réduit la perte de tous
+// 2) Victoire forcée (rng → 0) : Rempart d'équipe + Sève en % des PV max
 let rr = g.register({ username: 'Cara', password: 'secret3', speciesClass: 'OURS_GUERRIER' });
 assert.ok(rr.ok, 'troisième compte');
 const cara = rr.player;
 cara.online = true;
+alice.pos = { x: boss.x - 1, y: boss.y };
+bob.pos = { x: boss.x + 1, y: boss.y };
 cara.pos = { x: boss.x, y: boss.y + 1 };
-cara.pa = 50;
-alice.pa = 50; bob.pa = 50;
+cara.pa = 50; alice.pa = 50; bob.pa = 50;
 alice.hp = 50; bob.hp = 50; cara.hp = 50;
 sent.length = 0;
+g.rng = () => 0;
 assert.ok(g.createRaid(alice, boss.x, boss.y).ok, 'second lobby T5');
 assert.ok(g.joinRaid(bob, boss.x + ',' + boss.y).ok);
 assert.ok(g.joinRaid(cara, boss.x + ',' + boss.y).ok);
@@ -183,17 +207,76 @@ assert.ok(g.startRaidNow(alice, boss.x + ',' + boss.y).ok);
 g.tick(300);
 res = sent.filter((m) => m.ev === 'result').map((m) => m.data);
 assert.strictEqual(res.length, 3, 'résultats envoyés aux trois');
-assert.ok(res[0].victory, 'victoire à trois avec Aura');
-assert.strictEqual(res[0].hpLoss, 13, 'Rempart : perte réduite de 30 % (19 → 13)');
-assert.strictEqual(alice.hp, 50 - 13 + 15, 'Rempart profite à Alice + Sève');
-assert.strictEqual(cara.hp, 50 - 13 + 15, 'Rempart profite aussi à l’Ours');
-console.log('Talents de groupe : Sève en défaite ✔, Rempart d’équipe ✔');
+assert.ok(res[0].victory, 'victoire forcée');
+assert.strictEqual(res[0].hpLoss, 13, 'Rempart : usure réduite de 30 % (19 → 13)');
+assert.strictEqual(alice.hp, 50 - 13 + 15, 'Sève : +15 % des PV max (100) après victoire');
+assert.strictEqual(cara.hp, 50 - 13 + 15, 'Rempart + Sève profitent aussi à l’Ours');
+g.rng = Math.random;
+console.log('Combat : mort en défaite ✔, Sève % ✔, Rempart ✔');
+
+// --- Ancres de la courbe de probabilité ---
+assert.ok(Math.abs(winChance(26, 26) - 0.71) < 0.02, 'parité (T0 vs T1) ≈ 70 %');
+assert.strictEqual(winChance(10, 100), CONFIG.COMBAT.MIN_CHANCE, 'plancher à 2 %');
+assert.strictEqual(winChance(300, 100), CONFIG.COMBAT.MAX_CHANCE, 'plafond à 98 %');
+// Blessé, on est plus faible : la même équipe voit ses chances baisser
+const fullHp = { speciesClass: 'LION_PALADIN', weapon: { tier: 1 }, armor: { tier: 1 }, weaponMastery: 2, hp: 100 };
+const wounded = { ...fullHp, hp: 30 };
+assert.ok(combatPower(wounded) < combatPower(fullHp) * 0.7, 'les PV entament la puissance');
+assert.ok(
+  winChance(teamPowerOf([wounded]), MONSTER_FORCE[1]) < winChance(teamPowerOf([fullHp]), MONSTER_FORCE[1]),
+  'blessé → % de victoire plus faible'
+);
+// T6 de donjon : insoloable même en T5 complet
+const t5full = { speciesClass: 'OURS_GUERRIER', weapon: { tier: 5 }, armor: { tier: 5 }, weaponMastery: 5, hp: 175 };
+assert.strictEqual(winChance(teamPowerOf([t5full]), MONSTER_FORCE[6]), CONFIG.COMBAT.MIN_CHANCE, 'T6 insoloable (2 %)');
+assert.ok(winChance(teamPowerOf([t5full, { ...t5full }, { ...t5full }]), MONSTER_FORCE[6]) > 0.9, 'T6 confortable à trois');
+console.log('Courbe de probabilité : parité ~70 %, bornes 2/98 %, PV influents, T6 groupe ✔');
+
+// --- Personnages multiples : création, métamorphose, partages ---
+assert.strictEqual(alice.characters.length, 1, 'un personnage à l’inscription');
+assert.strictEqual(alice.charSlots, 2, 'deux emplacements gratuits');
+
+// Création : refusée hors sanctuaire, acceptée à la Capitale
+alice.pos = { x: boss.x - 1, y: boss.y };
+assert.ok(!g.createCharacter(alice, 'CERF_DRUIDE').ok, 'éveil refusé en pleine nature');
+alice.pos = { x: 0, y: 0 };
+assert.ok(!g.createCharacter(alice, 'LION_PALADIN').ok, 'doublon de classe refusé');
+assert.ok(g.createCharacter(alice, 'CERF_DRUIDE').ok, 'éveil du Cerf Druide à la Capitale');
+assert.strictEqual(alice.characters.length, 2);
+assert.ok(!g.createCharacter(alice, 'CHAT_MAGICIEN').ok, 'troisième forme refusée (slots pleins)');
+
+// Métamorphose : PV en pourcentage, maîtrises et équipement séparés,
+// inventaire et PA partagés
+alice.armor.tier = 2;                                    // Lion : 130 PV max
+alice.hp = 65;                                           // 50 %
+const paBefore = alice.pa;
+const invBefore = JSON.stringify(alice.inventory);
+const lionMastery = alice.weaponMastery;
+assert.ok(g.switchCharacter(alice, 1).ok, 'métamorphose à la Capitale');
+assert.strictEqual(alice.speciesClass, 'CERF_DRUIDE', 'forme active changée');
+assert.strictEqual(alice.hp, 50, 'PV en pourcentage : 50 % de 100 (armure T0)');
+assert.strictEqual(alice.weaponMastery, 1, 'maîtrise propre à la nouvelle forme');
+assert.strictEqual(alice.weapon.tier, 0, 'équipement propre à la nouvelle forme');
+assert.strictEqual(alice.pa, paBefore, 'PA partagés (inchangés)');
+assert.strictEqual(JSON.stringify(alice.inventory), invBefore, 'inventaire partagé (inchangé)');
+assert.strictEqual(alice.characters[0].weaponMastery, lionMastery, 'la forme Lion garde sa maîtrise');
+
+// Hors sanctuaire : métamorphose refusée
+alice.pos = { x: boss.x - 1, y: boss.y };
+assert.ok(!g.switchCharacter(alice, 0).ok, 'métamorphose refusée en pleine nature');
+alice.pos = { x: 0, y: 0 };
+assert.ok(g.switchCharacter(alice, 0).ok, 'retour à la forme Lion');
+assert.strictEqual(alice.weaponMastery, lionMastery, 'maîtrise du Lion restaurée');
+assert.strictEqual(alice.armor.tier, 2, 'équipement du Lion restauré');
+console.log('Multi-personnages : sanctuaires ✔, PV % ✔, partages ✔');
 
 // --- Persistance aller-retour (token, état ET mot de passe) ---
 const snap = JSON.parse(JSON.stringify(g.serialize()));
 const g2 = new Game(snap.seed, snap);
 const rTok = g2.authToken(alice.token);
 assert.ok(rTok.ok && rTok.player.weapon.tier === 1, 'état restauré via token');
+assert.strictEqual(rTok.player.characters.length, 2, 'les deux formes survivent à la persistance');
+assert.strictEqual(rTok.player.characters[1].speciesClass, 'CERF_DRUIDE', 'forme secondaire intacte');
 assert.ok(g2.login({ username: 'Alice', password: 'secret1' }).ok, 'mot de passe conservé après restauration');
 assert.ok(!g2.login({ username: 'Alice', password: 'faux' }).ok, 'mauvais mot de passe refusé après restauration');
 

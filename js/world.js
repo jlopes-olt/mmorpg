@@ -1,8 +1,7 @@
 'use strict';
 
 /* ============================================================
- * world.js -- generation deterministe de la carte (seed)
- * Grille 2D iso, capitale en (0,0), tiers en anneaux concentriques
+ * world.js -- generation deterministe des cartes (monde + donjons)
  * ============================================================ */
 
 function mulberry32(seed) {
@@ -16,7 +15,6 @@ function mulberry32(seed) {
   };
 }
 
-/* Valeur pseudo-aleatoire deterministe par case (x, y, salt) */
 function hash2(x, y, seed, salt) {
   let h = (seed + salt * 0x9E3779B9) | 0;
   h = Math.imul(h ^ Math.imul(x, 374761393), 668265263);
@@ -28,14 +26,28 @@ function hash2(x, y, seed, salt) {
 }
 
 function tileKey(x, y) { return x + ',' + y; }
+function raidKey(mapId, x, y) { return mapId + '|' + tileKey(x, y); }
+
+function attachBounds(tiles, min, max, mapId) {
+  tiles._min = min;
+  tiles._max = max;
+  tiles._mapId = mapId;
+  return tiles;
+}
+
+function boundsOf(tiles) {
+  if (!tiles) return { min: CONFIG.WORLD.MIN, max: CONFIG.WORLD.MAX };
+  return {
+    min: Number.isFinite(tiles._min) ? tiles._min : CONFIG.WORLD.MIN,
+    max: Number.isFinite(tiles._max) ? tiles._max : CONFIG.WORLD.MAX,
+  };
+}
 
 function tierAtDistance(dist) {
   if (dist <= CONFIG.SAFE_RADIUS) return 1;
   return Math.min(5, 1 + Math.floor((dist - CONFIG.SAFE_RADIUS) / 10));
 }
 
-/* 4 grands biomes cardinaux avec une legere irregularite de frontiere :
- * nord = montagne, sud = marecage, est = plaine, ouest = foret */
 function terrainAt(x, y, seed) {
   const dist = Math.hypot(x, y);
   if (dist <= 2) return 'PLAINE';
@@ -43,9 +55,7 @@ function terrainAt(x, y, seed) {
   const jitterX = x + (hash2(x, y, seed, 11) - 0.5) * 6;
   const jitterY = y + (hash2(x, y, seed, 12) - 0.5) * 6;
 
-  if (Math.abs(jitterX) > Math.abs(jitterY)) {
-    return jitterX > 0 ? 'PLAINE' : 'FORET';
-  }
+  if (Math.abs(jitterX) > Math.abs(jitterY)) return jitterX > 0 ? 'PLAINE' : 'FORET';
   return jitterY > 0 ? 'MARECAGE' : 'MONTAGNE';
 }
 
@@ -62,9 +72,9 @@ function resourceTypeAt(x, y, seed, terrain) {
 
 function villageNameFor(terrain, index, seed) {
   const pools = {
-    FORET: ['Bois-Mousse', 'Feuillebrune', 'Claireracine', 'Lanterneverte', 'Écorcevieille', 'Sylveclaire'],
-    PLAINE: ['Champdor', 'Aube-Froment', 'Venteblé', 'Bellemoisson', 'Soleval', 'Pailleterre'],
-    MONTAGNE: ['Rochebrune', 'Haut-Foyer', 'Picombre', 'Grisepierre', 'Cornecrête', 'Montfer'],
+    FORET: ['Bois-Mousse', 'Feuillebrune', 'Claireracine', 'Lanterneverte', 'Ecorcevieille', 'Sylveclaire'],
+    PLAINE: ['Champdor', 'Aube-Froment', 'Venteble', 'Bellemoisson', 'Soleval', 'Pailleterre'],
+    MONTAGNE: ['Rochebrune', 'Haut-Foyer', 'Picombre', 'Grisepierre', 'Cornecrete', 'Montfer'],
     MARECAGE: ['Brumebourbe', 'Tourbefeuille', 'Lancreed', 'Vaseclaire', 'Suintesaule', 'Mousse-Noire'],
   };
   const list = pools[terrain] || pools.PLAINE;
@@ -77,6 +87,29 @@ function biomeBasis(terrain) {
   if (terrain === 'FORET') return { axis: [-1, 0], tangent: [0, 1] };
   if (terrain === 'MONTAGNE') return { axis: [0, -1], tangent: [1, 0] };
   return { axis: [0, 1], tangent: [1, 0] };
+}
+
+function dungeonBossFor(terrain) {
+  return {
+    FORET: { type: 'BOSS_FORET', label: 'Roi Roncier', force: 188 },
+    PLAINE: { type: 'BOSS_PLAINE', label: 'Cerf-Orage', force: 186 },
+    MONTAGNE: { type: 'BOSS_MONTAGNE', label: 'Golem Couronne', force: 196 },
+    MARECAGE: { type: 'BOSS_MARECAGE', label: 'Hydre de Vase', force: 192 },
+  }[terrain] || { type: 'BOSS', label: 'Seigneur du Donjon', force: 190 };
+}
+
+function dungeonResourceFor(terrain) {
+  return {
+    FORET: 'BOIS_ANCIEN',
+    PLAINE: 'FLEUR_ASTRALE',
+    MONTAGNE: 'MINERAI_RUNIQUE',
+    MARECAGE: 'FLEUR_ASTRALE',
+  }[terrain] || 'MINERAI_RUNIQUE';
+}
+
+function dungeonResourcePoolFor(terrain) {
+  if (terrain === 'MARECAGE') return ['BOIS_ANCIEN', 'MINERAI_RUNIQUE', 'FLEUR_ASTRALE'];
+  return [dungeonResourceFor(terrain)];
 }
 
 function tryPlacePoi(tiles, seed, terrain, kind, index, radius, tangentOffset) {
@@ -101,8 +134,10 @@ function tryPlacePoi(tiles, seed, terrain, kind, index, radius, tangentOffset) {
       terrain,
       tier: tierAtDistance(Math.hypot(x, y)),
       id: terrain + '_' + kind + '_' + index,
+      killsRequired: kind === 'dungeon' ? CONFIG.DUNGEON.BOSS_KILLS_REQUIRED : undefined,
     };
     if (kind === 'village') tile.content.name = villageNameFor(terrain, index, seed);
+    if (kind === 'dungeon') tile.content.mapId = 'dungeon:' + tile.content.id;
     return true;
   }
   return false;
@@ -127,8 +162,8 @@ function placeBiomePois(tiles, seed) {
   }
 }
 
-function generateWorld(seed) {
-  const tiles = new Map();
+function generateWorldMap(seed) {
+  const tiles = attachBounds(new Map(), CONFIG.WORLD.MIN, CONFIG.WORLD.MAX, 'world');
   const { MIN, MAX } = CONFIG.WORLD;
 
   for (let y = MIN; y <= MAX; y++) {
@@ -162,34 +197,238 @@ function generateWorld(seed) {
         }
       }
 
-      tiles.set(tileKey(x, y), { x, y, terrain, content });
+      tiles.set(tileKey(x, y), { x, y, terrain, content, blocked: false });
     }
   }
 
   placeBiomePois(tiles, seed);
-  return tiles;
+  return {
+    id: 'world',
+    kind: 'world',
+    terrain: 'PLAINE',
+    min: MIN,
+    max: MAX,
+    tiles,
+  };
 }
 
-function inBounds(x, y) {
-  const { MIN, MAX } = CONFIG.WORLD;
-  return x >= MIN && x <= MAX && y >= MIN && y <= MAX;
+function carveDungeon(set, x1, y1, x2, y2) {
+  let x = x1, y = y1;
+  set.add(tileKey(x, y));
+  while (x !== x2) {
+    x += Math.sign(x2 - x);
+    set.add(tileKey(x, y));
+    if (y + 1 <= CONFIG.DUNGEON.MAX) set.add(tileKey(x, y + 1));
+  }
+  while (y !== y2) {
+    y += Math.sign(y2 - y);
+    set.add(tileKey(x, y));
+    if (x + 1 <= CONFIG.DUNGEON.MAX) set.add(tileKey(x + 1, y));
+  }
+}
+
+function carveRoom(set, cx, cy, rx, ry, min, max) {
+  for (let y = cy - ry; y <= cy + ry; y++) {
+    for (let x = cx - rx; x <= cx + rx; x++) {
+      if (x < min || x > max || y < min || y > max) continue;
+      set.add(tileKey(x, y));
+    }
+  }
+}
+
+function generateDungeonMap(seed, terrain, mapId, worldX, worldY) {
+  const min = CONFIG.DUNGEON.MIN;
+  const max = CONFIG.DUNGEON.MAX;
+  const walkable = new Set();
+  const branches = [
+    { x: 0, y: -6, rx: 3, ry: 2 },
+    { x: -8, y: -5, rx: 4, ry: 3 },
+    { x: 8, y: -8, rx: 4, ry: 3 },
+    { x: -10, y: 4, rx: 3, ry: 3 },
+    { x: 10, y: 6, rx: 3, ry: 3 },
+    { x: 0, y: -14, rx: 5, ry: 3 },
+  ];
+
+  carveRoom(walkable, 0, 0, 3, 3, min, max);
+  carveDungeon(walkable, 0, 0, 0, -6);
+  for (let i = 0; i < branches.length; i++) {
+    const b = branches[i];
+    const dx = Math.round((hash2(i, worldX, seed, 301) - 0.5) * 4);
+    const dy = Math.round((hash2(i, worldY, seed, 302) - 0.5) * 4);
+    const tx = b.x + dx;
+    const ty = b.y + dy;
+    carveDungeon(walkable, 0, -6, tx, ty);
+    carveRoom(
+      walkable,
+      tx,
+      ty,
+      b.rx + Math.floor(hash2(i, worldX, seed, 351) * 2),
+      b.ry + Math.floor(hash2(i, worldY, seed, 352) * 2),
+      min,
+      max
+    );
+  }
+
+  for (let i = 0; i < 7; i++) {
+    const px = Math.round((hash2(i, worldX, seed, 401) - 0.5) * 22);
+    const py = Math.round((hash2(i, worldY, seed, 402) - 0.25) * 22);
+    const tx = px + Math.round((hash2(i, worldY, seed, 403) - 0.5) * 4);
+    carveDungeon(walkable, px, py, tx, py);
+    carveRoom(
+      walkable,
+      px,
+      py,
+      2 + Math.floor(hash2(i, worldX, seed, 411) * 3),
+      2 + Math.floor(hash2(i, worldY, seed, 412) * 3),
+      min,
+      max
+    );
+  }
+
+  carveRoom(walkable, 0, min + 4, 5, 3, min, max);
+
+  const boss = dungeonBossFor(terrain);
+  const specialResource = dungeonResourceFor(terrain);
+  const resourcePool = dungeonResourcePoolFor(terrain);
+  const tiles = attachBounds(new Map(), min, max, mapId);
+  const monsterSpots = [];
+  const resourceSpots = [];
+  let bossSpot = { x: 0, y: min + 2 };
+
+  for (let y = min; y <= max; y++) {
+    for (let x = min; x <= max; x++) {
+      const key = tileKey(x, y);
+      const floor = walkable.has(key);
+      const dist = Math.hypot(x, y);
+      let content = null;
+
+      if (floor) {
+        if (x === 0 && y === 0) {
+          content = { kind: 'portal', label: 'Sortie du donjon', targetMapId: 'world', targetPos: { x: worldX, y: worldY } };
+        } else if (y <= min + 4 && Math.abs(x) <= 2) {
+          bossSpot = { x, y };
+        } else {
+          const r = hash2(x, y, seed, 404);
+          if (r < 0.18) monsterSpots.push({ x, y });
+          else if (r < 0.24) resourceSpots.push({ x, y });
+        }
+      }
+
+      tiles.set(key, {
+        x, y,
+        terrain: floor ? terrain : 'RUINES',
+        content,
+        blocked: !floor,
+      });
+    }
+  }
+
+  const bossTileKey = tileKey(bossSpot.x, bossSpot.y);
+  const bossTile = tiles.get(bossTileKey);
+  const bossTemplate = {
+    kind: 'monster',
+    type: boss.type,
+    label: boss.label,
+    tier: 6,
+    force: boss.force,
+    inactiveUntil: 0,
+    boss: true,
+  };
+  if (bossTile) bossTile.content = null;
+
+  for (let i = 0; i < monsterSpots.length && i < 10; i++) {
+    const spot = monsterSpots[i];
+    const tile = tiles.get(tileKey(spot.x, spot.y));
+    if (!tile || tile.content) continue;
+    tile.content = {
+      kind: 'monster',
+      type: MONSTERS[6].type,
+      label: MONSTERS[6].label,
+      tier: 6,
+      force: MONSTER_FORCE[6],
+      inactiveUntil: 0,
+      dungeonMob: true,
+    };
+  }
+
+  for (let i = 0; i < resourceSpots.length && i < 6; i++) {
+    const spot = resourceSpots[i];
+    const tile = tiles.get(tileKey(spot.x, spot.y));
+    if (!tile || tile.content) continue;
+    const resourceType = terrain === 'MARECAGE' && i < resourcePool.length
+      ? resourcePool[i]
+      : resourcePool[Math.floor(hash2(spot.x, spot.y, seed, 451) * resourcePool.length) % resourcePool.length];
+    tile.content = {
+      kind: 'resource',
+      type: resourceType,
+      tier: 6,
+      inactiveUntil: 0,
+      dungeonResource: true,
+    };
+  }
+
+  return {
+    id: mapId,
+    kind: 'dungeon',
+    terrain,
+    min,
+    max,
+    entry: { x: 0, y: 0 },
+    worldPos: { x: worldX, y: worldY },
+    boss,
+    dungeon: {
+      killsRequired: CONFIG.DUNGEON.BOSS_KILLS_REQUIRED,
+      kills: 0,
+      bossAlive: false,
+      bossTileKey,
+      bossTemplate,
+    },
+    resourceType: terrain === 'MARECAGE' ? resourcePool.slice() : specialResource,
+    tiles,
+  };
+}
+
+function generateGameMaps(seed) {
+  const world = generateWorldMap(seed);
+  const maps = new Map([[world.id, world]]);
+
+  for (const tile of world.tiles.values()) {
+    if (!tile.content || tile.content.kind !== 'dungeon' || !tile.content.mapId) continue;
+    maps.set(
+      tile.content.mapId,
+      generateDungeonMap(seed, tile.terrain, tile.content.mapId, tile.x, tile.y)
+    );
+  }
+  return maps;
+}
+
+function generateWorld(seed) {
+  return generateWorldMap(seed).tiles;
+}
+
+function inBounds(x, y, tiles) {
+  const b = tiles ? boundsOf(tiles) : { min: CONFIG.WORLD.MIN, max: CONFIG.WORLD.MAX };
+  return x >= b.min && x <= b.max && y >= b.min && y <= b.max;
 }
 
 function isWalkable(tiles, x, y) {
-  if (!inBounds(x, y)) return false;
+  if (!inBounds(x, y, tiles)) return false;
   const t = tiles.get(tileKey(x, y));
+  if (!t || t.blocked) return false;
   return !t.content
     || t.content.kind === 'capital'
     || t.content.kind === 'village'
     || t.content.kind === 'dungeon'
+    || t.content.kind === 'portal'
     || t.content.kind === 'resource'
     || t.content.kind === 'monster';
 }
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    mulberry32, hash2, tileKey, tierAtDistance, terrainAt, resourceTypeAt,
-    villageNameFor,
-    generateWorld, inBounds, isWalkable,
+    mulberry32, hash2, tileKey, raidKey, tierAtDistance, terrainAt, resourceTypeAt,
+    villageNameFor, dungeonBossFor, dungeonResourceFor, dungeonResourcePoolFor,
+    generateWorld, generateWorldMap, generateDungeonMap, generateGameMaps,
+    inBounds, isWalkable, boundsOf, attachBounds,
   };
 }
