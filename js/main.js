@@ -237,7 +237,7 @@
     }
 
     if (c && c.kind === 'resource') {
-      const rl = RESOURCES[c.type].label + ' T' + c.tier;
+      const rl = resourceLabel(c.type, c.tier);
       if (!adjacent) {
         confirmWalk(tx, ty, {
           title: 'S’approcher de ' + rl + ' ?',
@@ -268,7 +268,7 @@
         tone: lvlOk ? 'harvest' : 'danger',
         mediaSrc: ui.getHarvestTargetSrc(c),
         mediaClass: 'resource',
-        badge: RESOURCES[c.type].label + ' · T' + c.tier,
+        badge: resourceLabel(c.type, c.tier),
       });
       return;
     }
@@ -387,6 +387,7 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
   server.on('self', (p) => {
     if (moveQueue.length && stepFrom && server.chebyshev(p.pos, stepFrom) > 2) moveQueue = [];
     updateExploredAt(p.pos.x, p.pos.y);
+    document.getElementById('devBtn').classList.toggle('hidden', remote && p.role !== 'admin');
   });
   server.on('map', () => {
     moveQueue = [];

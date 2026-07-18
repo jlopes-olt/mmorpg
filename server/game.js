@@ -197,6 +197,9 @@ class Game {
       characters: [newCharacter(data.speciesClass)],
       activeChar: 0,
       charSlots: CONFIG.FREE_CHAR_SLOTS,
+      visitedVillages: [],
+      // Le tout premier compte créé sur une base vierge devient administrateur.
+      role: this.players.size === 0 ? 'admin' : 'user',
     };
     applyCharacter(p, 0);
     p.hp = maxHp(p);
@@ -377,6 +380,16 @@ class Game {
     if (!isWalkable(tiles, nx, ny)) return { ok: false, error: 'Case bloquée.' };
     p.pa -= CONFIG.COSTS.MOVE;
     p.pos = { x: nx, y: ny };
+
+    // Marcher sur un village le « découvre » : téléporteur débloqué
+    const arrived = tiles.get(tileKey(nx, ny));
+    if (arrived && arrived.content && arrived.content.kind === 'village') {
+      const vk = tileKey(nx, ny);
+      if (!p.visitedVillages.includes(vk)) {
+        p.visitedVillages.push(vk);
+        this.plog(p, '📍 ' + (arrived.content.name || 'Village') + ' découvert — téléporteur débloqué !');
+      }
+    }
     return { ok: true };
   }
 
@@ -408,6 +421,8 @@ class Game {
     const invKey = stackKey(node.type, node.tier);
     p.inventory[invKey] = (p.inventory[invKey] || 0) + qty;
     node.inactiveUntil = this.now + (node.dungeonResource ? CONFIG.RESPAWN_DUNGEON_RESOURCE_MS : CONFIG.RESPAWN_RESOURCE_MS);
+    // Sans ce broadcast, les clients ne voient jamais le nœud passer en repousse
+    this.broadcast('world', { mapId: mapId || p.mapId || 'world', key, inactiveUntil: node.inactiveUntil });
     p.harvestXp += 8 + Math.min(5, node.tier) * 6;
     this.checkLevelUp(p, 'harvest');
     this.pushSelf(p);
@@ -559,6 +574,8 @@ class Game {
       if (monster.boss) monster.inactiveUntil = 0;
       else if (monster.dungeonMob) monster.inactiveUntil = this.now + CONFIG.RESPAWN_DUNGEON_MONSTER_MS;
       else monster.inactiveUntil = this.now + CONFIG.RESPAWN_MONSTER_MS;
+      // Diffuse l'état vaincu du monstre à tous les clients
+      this.broadcast('world', { mapId: raid.mapId || 'world', key: raid.tileKey, inactiveUntil: monster.inactiveUntil });
       this.updateDungeonProgress(raid.mapId, monster, true);
     }
     this.log('⚔ Raid ' + raid.label + ' T' + raid.tier + ' : ' +
@@ -651,6 +668,10 @@ class Game {
     }
     const dest = this.worldMap.tiles.get(tileKey(Number(x), Number(y)));
     if (!dest || !dest.content || (dest.content.kind !== 'village' && dest.content.kind !== 'capital')) return { ok: false, error: 'Destination invalide.' };
+    // Un village doit avoir été découvert à pied avant d'être une destination
+    if (dest.content.kind === 'village' && !p.visitedVillages.includes(tileKey(dest.x, dest.y))) {
+      return { ok: false, error: 'Village inconnu — vous devez d’abord le découvrir à pied.' };
+    }
     p.pos = { x: dest.x, y: dest.y };
     this.pushSelf(p);
     return { ok: true };
@@ -700,9 +721,7 @@ class Game {
         if ((p.gold || 0) < n) return { ok: false, error: 'Pas assez d’or (' + n + ' 🪙 requis).' };
       } else if ((p.inventory[k] || 0) < n) {
         const r = parseStackKey(k);
-        const res = RESOURCES[r.type];
-        const name = (res.tierNames && res.tierNames[r.tier]) || (res.label + ' T' + r.tier);
-        return { ok: false, error: 'Il manque : ' + n + '× ' + name + '.' };
+        return { ok: false, error: 'Il manque : ' + n + '× ' + resourceLabel(r.type, r.tier) + '.' };
       }
     }
     for (const [k, n] of Object.entries(recipe)) {
@@ -741,6 +760,11 @@ class Game {
   }
 
   setAdminTier(p, kind, tier) {
+    if (!p || p.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
+    return this.applyLevelTier(p, kind, tier);
+  }
+
+  applyLevelTier(p, kind, tier) {
     const target = Math.max(1, Math.min(6, Number(tier) || 1));
     if (kind === 'harvest') {
       p.harvestLevel = target;
@@ -758,6 +782,11 @@ class Game {
   }
 
   setAdminGear(p, slot, tier) {
+    if (!p || p.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
+    return this.applyGearTier(p, slot, tier);
+  }
+
+  applyGearTier(p, slot, tier) {
     const target = Math.max(0, Math.min(6, Number(tier) || 0));
     if (slot === 'weapon') {
       p.weapon.tier = target;
@@ -788,6 +817,7 @@ class Game {
   }
 
   dev(p, action) {
+    if (!p || p.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
     if (action && action.reset) {
       this.players.delete(p.id);
       if (p.token) this.tokens.delete(p.token);
@@ -804,6 +834,99 @@ class Game {
       return { ok: true };
     }
     return { ok: false, error: 'Action dev inconnue.' };
+  }
+
+  /* ---------- Administration (rôle admin uniquement) ---------- */
+  adminFindTarget(username) {
+    return this.players.get('p_' + String(username || '').trim().toLowerCase()) || null;
+  }
+
+  adminStats() {
+    const players = [...this.players.values()];
+    const byClass = {};
+    for (const p of players) byClass[p.speciesClass] = (byClass[p.speciesClass] || 0) + 1;
+    return {
+      total: players.length,
+      online: players.filter((p) => p.online).length,
+      admins: players.filter((p) => p.role === 'admin').length,
+      byClass,
+    };
+  }
+
+  adminPlayerList() {
+    return [...this.players.values()].map((p) => ({
+      username: p.username,
+      role: p.role || 'user',
+      online: !!p.online,
+      createdAt: (this.credentials.get(p.id) || {}).createdAt || null,
+      speciesClass: p.speciesClass,
+      classLabel: (CLASSES[p.speciesClass] || {}).label || p.speciesClass,
+      harvestLevel: p.harvestLevel,
+      weaponMastery: p.weaponMastery,
+      weaponTier: p.weapon ? p.weapon.tier : null,
+      armorTier: p.armor ? p.armor.tier : null,
+      gold: p.gold || 0,
+      charSlots: p.charSlots,
+      charCount: (p.characters || []).length,
+    })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  }
+
+  adminSetRole(admin, username, role) {
+    if (!admin || admin.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
+    if (role !== 'user' && role !== 'admin') return { ok: false, error: 'Rôle invalide.' };
+    const target = this.adminFindTarget(username);
+    if (!target) return { ok: false, error: 'Joueur introuvable.' };
+    target.role = role;
+    this.pushSelf(target);
+    return { ok: true };
+  }
+
+  adminGrantSlot(admin, username, count) {
+    if (!admin || admin.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
+    const target = this.adminFindTarget(username);
+    if (!target) return { ok: false, error: 'Joueur introuvable.' };
+    const current = target.charSlots || CONFIG.FREE_CHAR_SLOTS;
+    if (current >= MAX_CHAR_SLOTS) return { ok: false, error: 'Déjà au maximum (' + MAX_CHAR_SLOTS + ' — une par classe).' };
+    const n = Math.max(1, Math.min(10, Math.floor(Number(count)) || 1));
+    target.charSlots = Math.min(MAX_CHAR_SLOTS, current + n);
+    this.pushSelf(target);
+    return { ok: true };
+  }
+
+  adminGrantGold(admin, username, amount) {
+    if (!admin || admin.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
+    const target = this.adminFindTarget(username);
+    if (!target) return { ok: false, error: 'Joueur introuvable.' };
+    const n = Math.floor(Number(amount)) || 0;
+    target.gold = Math.max(0, (target.gold || 0) + n);
+    this.pushSelf(target);
+    return { ok: true };
+  }
+
+  adminGrantItem(admin, username, key, qty) {
+    if (!admin || admin.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
+    const target = this.adminFindTarget(username);
+    if (!target) return { ok: false, error: 'Joueur introuvable.' };
+    const parsed = parseStackKey(String(key));
+    if (!RESOURCES[parsed.type] && !CONSUMABLES[parsed.type]) return { ok: false, error: 'Objet inconnu.' };
+    const n = Math.max(1, Math.min(999, Math.floor(Number(qty)) || 1));
+    target.inventory[key] = (target.inventory[key] || 0) + n;
+    this.pushSelf(target);
+    return { ok: true };
+  }
+
+  adminSetLevel(admin, username, kind, tier) {
+    if (!admin || admin.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
+    const target = this.adminFindTarget(username);
+    if (!target) return { ok: false, error: 'Joueur introuvable.' };
+    return this.applyLevelTier(target, kind, tier);
+  }
+
+  adminSetGear(admin, username, slot, tier) {
+    if (!admin || admin.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
+    const target = this.adminFindTarget(username);
+    if (!target) return { ok: false, error: 'Joueur introuvable.' };
+    return this.applyGearTier(target, slot, tier);
   }
 
   say(p, text) {
@@ -890,11 +1013,26 @@ class Game {
       }
       if (!p.mapId) p.mapId = 'world';
       if (typeof p.charSlots !== 'number') p.charSlots = CONFIG.FREE_CHAR_SLOTS;
+      p.charSlots = Math.min(p.charSlots, MAX_CHAR_SLOTS);
       if (typeof p.gold !== 'number') p.gold = 0;
+      if (!Array.isArray(p.visitedVillages)) p.visitedVillages = [];
+      if (p.role !== 'admin' && p.role !== 'user') p.role = 'user';
       this.players.set(p.id, p);
       if (p.token) this.tokens.set(p.token, p.id);
     }
     for (const [id, cred] of Object.entries(data.credentials || {})) this.credentials.set(id, cred);
+    // Migration d'une base existante sans rôles : le compte le plus ancien
+    // (par date de création) hérite du rôle admin, faute de quoi personne
+    // n'aurait accès à l'administration après coup.
+    if (this.players.size && ![...this.players.values()].some((p) => p.role === 'admin')) {
+      let oldest = null;
+      let oldestAt = Infinity;
+      for (const p of this.players.values()) {
+        const at = (this.credentials.get(p.id) || {}).createdAt;
+        if (typeof at === 'number' && at < oldestAt) { oldest = p; oldestAt = at; }
+      }
+      if (oldest) oldest.role = 'admin';
+    }
     for (const [mapId, state] of Object.entries(data.mapStates || {})) {
       const map = this.mapOf(mapId);
       if (!map || map.kind !== 'dungeon' || !map.dungeon) continue;

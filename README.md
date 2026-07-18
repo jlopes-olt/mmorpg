@@ -1,4 +1,4 @@
-# WildRift RPG — Prototype
+# Feralia Online
 
 MMORPG casual sur grille isométrique, mobile first (portrait, une main).
 Monde persistant, backend temps réel, habillage sprites/tuiles.

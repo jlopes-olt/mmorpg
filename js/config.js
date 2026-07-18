@@ -1,7 +1,7 @@
 'use strict';
 
 /* ============================================================
- * WildRift RPG — Greybox
+ * Feralia Online
  * config.js — constantes, équilibrage, données statiques
  * ============================================================ */
 
@@ -99,6 +99,11 @@ const CLASSES = {
   },
 };
 
+/* Chaque forme doit incarner une classe différente : impossible de dépasser
+ * le nombre de classes existantes, quel que soit le nombre d'emplacements
+ * achetés/offerts. */
+const MAX_CHAR_SLOTS = Object.keys(CLASSES).length;
+
 /* Arme et armure uniques, liées à la classe, évolutives T0→T5 */
 const CLASS_GEAR = {
   LION_PALADIN:         { weapon: 'Épée',    armor: 'Plaques' },
@@ -109,10 +114,21 @@ const CLASS_GEAR = {
   CORBEAU_NECROMANCIEN: { weapon: 'Faux',    armor: 'Étoffe' },
 };
 
+/* Chaque palier porte un nom (aligné sur les assets) — l'affichage passe
+ * par resourceLabel(type, tier) qui garde toujours le tier visible. */
 const RESOURCES = {
-  BOIS:    { label: 'Bois',    short: 'B' },
-  MINERAI: { label: 'Minerai', short: 'M' },
-  PLANTE:  { label: 'Plante',  short: 'P' },
+  BOIS: {
+    label: 'Bois', short: 'B',
+    tierNames: { 1: 'Chêne', 2: 'Sapin', 3: 'Bouleau', 4: 'Acacia', 5: 'Arbre mort' },
+  },
+  MINERAI: {
+    label: 'Minerai', short: 'M',
+    tierNames: { 1: 'Cuivre', 2: 'Fer', 3: 'Argent', 4: 'Minerai d’or', 5: 'Cristal' },
+  },
+  PLANTE: {
+    label: 'Plante', short: 'P',
+    tierNames: { 1: 'Menthe', 2: 'Lavande', 3: 'Camomille', 4: 'Aloe vera', 5: 'Fougère' },
+  },
   // Ingrédients de cuisine — biome Marais (T6 : Tourbe vivante, en donjon)
   INGREDIENT: {
     label: 'Ingrédient', short: 'I',
@@ -324,6 +340,14 @@ function rollGoldLoot(tier) {
   return 3 + tier * 4 + Math.floor(Math.random() * (tier * 2 + 1));
 }
 
+/* Nom d'affichage harmonisé : nom du palier s'il existe, toujours avec le tier
+ * (ex. « Menthe T1 », « Champignon brumeux T1 », « Bois ancien T6 ») */
+function resourceLabel(type, tier) {
+  const res = RESOURCES[type];
+  const name = res ? ((res.tierNames && res.tierNames[tier]) || res.label) : type;
+  return name + ' T' + tier;
+}
+
 function stackKey(type, tier) { return type + '_' + tier; }
 
 function parseStackKey(key) {
@@ -357,13 +381,13 @@ const MONSTER_EMOJI = { 1: '🐺', 2: '🐻', 3: '👻', 4: '🦎', 5: '🐉', 6
 /* Utilisable côté Node (backend) comme côté navigateur */
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    CONFIG, CLASSES, CLASS_GEAR, RESOURCES, MONSTERS, MONSTER_FORCE,
+    CONFIG, CLASSES, CLASS_GEAR, MAX_CHAR_SLOTS, RESOURCES, MONSTERS, MONSTER_FORCE,
     TERRAINS, TIER_COLORS, XP_LEVELS, UPGRADE_RECIPES, SPRITE_CELLS,
     RESOURCE_EMOJI, MONSTER_EMOJI, CHARACTER_FIELDS,
     levelFromXp, playerForce, maxHp, hpLossReduction, stackKey, parseStackKey, resourceFamily,
     newCharacter, syncActiveCharacter, applyCharacter, rollGoldLoot,
     combatPower, teamPowerOf, winChance,
     CONSUMABLES, CONSUMABLE_EFFECTS, CONSUMABLE_RECIPES, BUFF_COMBATS,
-    consumableDesc, buffPowerMult, buffLossReduction, foodDropFor,
+    consumableDesc, buffPowerMult, buffLossReduction, foodDropFor, resourceLabel,
   };
 }

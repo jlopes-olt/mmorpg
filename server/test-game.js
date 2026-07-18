@@ -7,7 +7,7 @@ process.env.SPEED = '1';
 const assert = require('assert');
 const { Game } = require('./game.js');
 const {
-  CONFIG, CLASSES, MONSTER_FORCE, playerForce, maxHp,
+  CONFIG, CLASSES, MAX_CHAR_SLOTS, MONSTER_FORCE, playerForce, maxHp,
   combatPower, teamPowerOf, winChance, BUFF_COMBATS,
 } = require('../js/config.js');
 
@@ -148,15 +148,41 @@ alice.weaponMastery = 1;
 assert.ok(g.upgrade(alice, 'weapon').ok, 'forge T1');
 assert.strictEqual(alice.weapon.tier, 1);
 
-// --- Voyage village ---
+// --- Voyage village : découverte à pied obligatoire ---
+const { isWalkable } = require('../js/world.js');
 let village = null;
 for (const t of g.tiles.values()) {
   if (t.content && t.content.kind === 'village') { village = t; break; }
 }
 assert.ok(village, 'village trouvé');
-alice.pos = { x: village.x, y: village.y };
+
+// Non découvert : téléportation refusée depuis la Capitale
+alice.pos = { x: 0, y: 0 };
+assert.ok(!g.teleportVillage(alice, village.x, village.y).ok, 'village non découvert : téléportation refusée');
+
+// On marche sur la tuile → découvert
+let adj = null;
+for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, 1], [-1, 1], [1, -1]]) {
+  if (isWalkable(g.tiles, village.x + dx, village.y + dy)) { adj = { dx, dy }; break; }
+}
+alice.pos = { x: village.x + adj.dx, y: village.y + adj.dy };
+alice.pa = 10;
+assert.ok(g.move(alice, -adj.dx, -adj.dy).ok, 'entrée dans le village à pied');
+assert.ok(alice.visitedVillages.includes(village.x + ',' + village.y), 'village marqué découvert');
+
+// Découvert : les deux sens de téléportation fonctionnent
 assert.ok(g.teleportVillage(alice, 0, 0).ok, 'téléportation vers la capitale');
 assert.deepStrictEqual(alice.pos, { x: 0, y: 0 }, 'arrivée à la capitale');
+assert.ok(g.teleportVillage(alice, village.x, village.y).ok, 'village découvert : téléportation autorisée');
+alice.pos = { x: 0, y: 0 };
+console.log('Villages : découverte à pied ✔, téléporteur conditionné ✔');
+
+// --- Nommage harmonisé des ressources ---
+const { resourceLabel } = require('../js/config.js');
+assert.strictEqual(resourceLabel('PLANTE', 1), 'Menthe T1');
+assert.strictEqual(resourceLabel('MINERAI', 4), 'Minerai d’or T4');
+assert.strictEqual(resourceLabel('INGREDIENT', 3), 'Racine noueuse T3');
+assert.strictEqual(resourceLabel('BOIS_ANCIEN', 6), 'Bois ancien T6');
 
 // --- Combat probabiliste : mort en défaite, Sève %, Rempart ---
 // Bots éloignés + rng injecté pour des scénarios déterministes
@@ -331,6 +357,64 @@ assert.strictEqual(res[0].food, foodKey, 'trouvaille dans le rapport');
 assert.ok(alice.inventory[foodKey] >= 1, 'ingrédient looté sur le monstre');
 assert.strictEqual(alice.buff.combats, BUFF_COMBATS - 1, 'le buff se consume à chaque combat');
 console.log('Cuisine : Marmite ✔, buffs ✔, potion ✔, drop d’ingrédient ✔');
+
+// --- Rôles : le tout premier compte devient admin, les suivants sont user ---
+assert.strictEqual(alice.role, 'admin', 'premier compte inscrit = admin');
+assert.strictEqual(bob.role, 'user', 'compte suivant = user par défaut');
+
+const rCarl = g.register({ username: 'Carl', password: 'secret3', speciesClass: 'RENARD_VOLEUR' });
+assert.ok(rCarl.ok, 'troisième compte');
+const carl = rCarl.player;
+assert.strictEqual(carl.role, 'user', 'troisième compte = user');
+assert.strictEqual(carl.online, false, 'Carl reste hors ligne pour la suite de ces tests');
+
+// --- Les outils de triche self-service sont désormais réservés au rôle admin ---
+assert.ok(!g.setAdminTier(bob, 'harvest', 5).ok, 'un non-admin ne peut pas s’auto-attribuer un niveau');
+assert.ok(!g.setAdminGear(bob, 'weapon', 3).ok, 'un non-admin ne peut pas s’auto-attribuer un équipement');
+assert.ok(!g.dev(bob, { pa: 50 }).ok, 'un non-admin n’a pas accès au panneau DEV');
+assert.ok(g.setAdminTier(alice, 'harvest', alice.harvestLevel).ok, 'un admin garde l’accès aux outils de triche');
+
+// --- Dashboard admin : gestion de n’importe quel compte, même hors ligne ---
+assert.strictEqual(g.adminFindTarget('cArL'), carl, 'recherche de compte insensible à la casse');
+assert.strictEqual(g.adminFindTarget('personne'), null, 'compte inconnu → null');
+
+assert.ok(!g.adminGrantGold(bob, 'Carl', 100).ok, 'un non-admin ne peut pas administrer un autre compte');
+
+const goldBefore = carl.gold || 0;
+assert.ok(g.adminGrantGold(alice, 'Carl', 250).ok, 'admin : don d’or');
+assert.strictEqual(carl.gold, goldBefore + 250, 'or crédité sur le compte cible');
+
+assert.ok(g.adminGrantItem(alice, 'Carl', 'BOIS_3', 5).ok, 'admin : don de ressource');
+assert.strictEqual(carl.inventory.BOIS_3, 5, 'ressource ajoutée à l’inventaire cible');
+assert.ok(!g.adminGrantItem(alice, 'Carl', 'INCONNU_1', 1).ok, 'objet inconnu refusé');
+
+assert.ok(g.adminSetLevel(alice, 'Carl', 'harvest', 4).ok, 'admin : niveau de récolte fixé');
+assert.strictEqual(carl.harvestLevel, 4, 'niveau de récolte cible mis à jour');
+
+assert.ok(g.adminSetGear(alice, 'Carl', 'weapon', 3).ok, 'admin : tier d’arme fixé');
+assert.strictEqual(carl.weapon.tier, 3, 'tier d’arme cible mis à jour');
+
+const slotsBefore = carl.charSlots;
+assert.ok(g.adminGrantSlot(alice, 'Carl', 1).ok, 'admin : emplacement de personnage offert');
+assert.strictEqual(carl.charSlots, slotsBefore + 1, 'emplacement supplémentaire accordé');
+
+// --- Les emplacements de personnage ne peuvent pas dépasser le nombre de classes ---
+assert.strictEqual(MAX_CHAR_SLOTS, Object.keys(CLASSES).length, 'plafond = une classe par forme');
+assert.ok(g.adminGrantSlot(alice, 'Carl', 999).ok, 'don massif accepté mais plafonné');
+assert.strictEqual(carl.charSlots, MAX_CHAR_SLOTS, 'emplacements plafonnés au nombre de classes');
+assert.ok(!g.adminGrantSlot(alice, 'Carl', 1).ok, 'don refusé une fois le plafond atteint');
+
+assert.ok(g.adminSetRole(alice, 'Carl', 'admin').ok, 'admin : promotion');
+assert.strictEqual(carl.role, 'admin', 'compte cible promu admin');
+assert.ok(g.adminSetRole(alice, 'Carl', 'user').ok, 'admin : rétrogradation');
+assert.strictEqual(carl.role, 'user', 'compte cible rétrogradé');
+assert.ok(!g.adminSetRole(alice, 'Carl', 'superadmin').ok, 'rôle invalide refusé');
+
+const stats = g.adminStats();
+assert.ok(stats.total >= 3 && stats.admins >= 1, 'stats globales cohérentes');
+const carlRow = g.adminPlayerList().find((row) => row.username === 'Carl');
+assert.ok(carlRow && carlRow.gold === carl.gold && carlRow.role === 'user', 'liste des comptes à jour');
+console.log('Administration : rôles ✔, triche gatée ✔, dashboard ✔');
 
 // --- Persistance aller-retour (token, état ET mot de passe) ---
 const snap = JSON.parse(JSON.stringify(g.serialize()));

@@ -1,7 +1,7 @@
 'use strict';
 
 /* ============================================================
- * index.js — serveur WildRift RPG.
+ * index.js — serveur Feralia Online.
  *
  * - Sert le client statique (racine du repo)
  * - Socket.io : inscription/connexion (mot de passe) + reprise de
@@ -196,6 +196,22 @@ io.on('connection', (socket) => {
   socket.on('consume', act((d) => game.consume(player, String(d.key))));
   socket.on('admin:tier', act((d) => game.setAdminTier(player, String(d.kind), Number(d.tier))));
   socket.on('admin:gear', act((d) => game.setAdminGear(player, String(d.slot), Number(d.tier))));
+  socket.on('admin:stats', (payload, ack) => {
+    if (typeof ack !== 'function') ack = () => {};
+    if (!player || player.role !== 'admin') return ack({ ok: false, error: 'Accès réservé aux administrateurs.' });
+    ack({ ok: true, stats: game.adminStats() });
+  });
+  socket.on('admin:players', (payload, ack) => {
+    if (typeof ack !== 'function') ack = () => {};
+    if (!player || player.role !== 'admin') return ack({ ok: false, error: 'Accès réservé aux administrateurs.' });
+    ack({ ok: true, list: game.adminPlayerList() });
+  });
+  socket.on('admin:setRole', act((d) => game.adminSetRole(player, String(d.username), String(d.role))));
+  socket.on('admin:grantSlot', act((d) => game.adminGrantSlot(player, String(d.username), Number(d.count))));
+  socket.on('admin:grantGold', act((d) => game.adminGrantGold(player, String(d.username), Number(d.amount))));
+  socket.on('admin:grantItem', act((d) => game.adminGrantItem(player, String(d.username), String(d.key), Number(d.qty))));
+  socket.on('admin:setLevel', act((d) => game.adminSetLevel(player, String(d.username), String(d.kind), Number(d.tier))));
+  socket.on('admin:setGear', act((d) => game.adminSetGear(player, String(d.username), String(d.slot), Number(d.tier))));
   socket.on('dev', act((d) => {
     const r = game.dev(player, d);
     if (r.ok && r.reset) {
@@ -249,5 +265,5 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
 }
 
 httpServer.listen(PORT, () => {
-  console.log('WildRift RPG : http://localhost:' + PORT + '  (SPEED x' + game.speed + ', DB ' + DB_FILE + ')');
+  console.log('Feralia Online : http://localhost:' + PORT + '  (SPEED x' + game.speed + ', DB ' + DB_FILE + ')');
 });

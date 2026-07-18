@@ -139,6 +139,7 @@ class ServerSim {
       characters: [newCharacter(speciesClass)],
       activeChar: 0,
       charSlots: CONFIG.FREE_CHAR_SLOTS,
+      visitedVillages: [],
     };
     applyCharacter(p, 0);
     p.hp = maxHp(p);
@@ -184,9 +185,7 @@ class ServerSim {
         if ((me.gold || 0) < n) return { ok: false, error: 'Pas assez d’or (' + n + ' 🪙 requis).' };
       } else if ((me.inventory[k] || 0) < n) {
         const r = parseStackKey(k);
-        const res = RESOURCES[r.type];
-        const name = (res.tierNames && res.tierNames[r.tier]) || (res.label + ' T' + r.tier);
-        return { ok: false, error: 'Il manque : ' + n + '× ' + name + '.' };
+        return { ok: false, error: 'Il manque : ' + n + '× ' + resourceLabel(r.type, r.tier) + '.' };
       }
     }
     for (const [k, n] of Object.entries(recipe)) {
@@ -314,6 +313,16 @@ class ServerSim {
     if (!isWalkable(tiles, nx, ny)) return { ok: false, error: 'Case bloquée.' };
     me.pa -= CONFIG.COSTS.MOVE;
     me.pos = { x: nx, y: ny };
+
+    // Marcher sur un village le « découvre » : téléporteur débloqué
+    const arrived = tiles.get(tileKey(nx, ny));
+    if (arrived && arrived.content && arrived.content.kind === 'village') {
+      const vk = tileKey(nx, ny);
+      if (!me.visitedVillages.includes(vk)) {
+        me.visitedVillages.push(vk);
+        this.log('📍 ' + (arrived.content.name || 'Village') + ' découvert — téléporteur débloqué !');
+      }
+    }
     this.syncCurrentMap();
     return { ok: true };
   }
@@ -351,7 +360,7 @@ class ServerSim {
 
     const xp = 8 + Math.min(5, node.tier) * 6;
     me.harvestXp += xp;
-    this.log('+' + qty + ' ' + RESOURCES[node.type].label + ' T' + node.tier + ' (+' + xp + ' XP récolte)');
+    this.log('+' + qty + ' ' + resourceLabel(node.type, node.tier) + ' (+' + xp + ' XP récolte)');
     this.checkLevelUp(me, 'harvest');
     this.emit('self', me);
   }
@@ -640,6 +649,10 @@ class ServerSim {
     }
     const dest = this.worldMap.tiles.get(tileKey(x, y));
     if (!dest || !dest.content || (dest.content.kind !== 'village' && dest.content.kind !== 'capital')) return { ok: false, error: 'Destination invalide.' };
+    // Un village doit avoir été découvert à pied avant d'être une destination
+    if (dest.content.kind === 'village' && !me.visitedVillages.includes(tileKey(dest.x, dest.y))) {
+      return { ok: false, error: 'Village inconnu — vous devez d’abord le découvrir à pied.' };
+    }
     me.pos = { x: dest.x, y: dest.y };
     this.syncCurrentMap();
     this.emit('self', me);
@@ -730,6 +743,7 @@ class ServerSim {
     if (!p.mapId) p.mapId = 'world';
     if (typeof p.charSlots !== 'number') p.charSlots = CONFIG.FREE_CHAR_SLOTS;
     if (typeof p.gold !== 'number') p.gold = 0;
+    if (!Array.isArray(p.visitedVillages)) p.visitedVillages = [];
     const away = Math.max(0, Date.now() - (data.savedAt || Date.now()));
     p.pa = Math.min(CONFIG.PA.MAX, p.pa + Math.floor(away / CONFIG.PA.REGEN_MS));
     p.hp = Math.min(maxHp(p), p.hp + Math.floor(away / CONFIG.HP.REGEN_MS));

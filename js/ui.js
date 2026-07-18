@@ -20,6 +20,8 @@ class UI {
     this.feed = [];
     this.openSheet = null;
     this.inventorySort = 'type';
+    this.adminOpen = false;   // état du <details> admin, survit aux re-rendus
+    this.adminExpandedUser = null;   // ligne dépliée dans le dashboard admin, survit aux re-rendus
     this.onAdminReset = null;
     this.combatSwordSrc = 'assets/combat_sword.png';
     this.modalAssetSrc = {
@@ -127,8 +129,10 @@ class UI {
       meta: 'Hub central',
     }];
 
+    const visited = new Set((this.server.me && this.server.me.visitedVillages) || []);
     for (const tile of this.server.tiles.values()) {
       if (!tile.content || tile.content.kind !== 'village') continue;
+      if (!visited.has(tileKey(tile.x, tile.y))) continue;   // à découvrir à pied
       if (currentTile && tile.x === currentTile.x && tile.y === currentTile.y) continue;
       out.push({
         label: tile.content.name || ('Village ' + this.terrainLabel(tile.terrain)),
@@ -182,7 +186,7 @@ class UI {
     closeRow.className = 'popup-actions';
     const marmiteBtn = document.createElement('button');
     marmiteBtn.className = 'btn primary';
-    marmiteBtn.textContent = '🍲 La Marmite';
+    marmiteBtn.textContent = '🍲 Marmite';
     marmiteBtn.addEventListener('click', () => { this.closePopup(); this.showSheet('marmite'); });
     closeRow.appendChild(marmiteBtn);
     const closeBtn = document.createElement('button');
@@ -646,9 +650,7 @@ showDungeonPopup(tile, onEnter) {
       if (r.gold) lines.push('<p><span class="battle-label">Or</span> <b class="gold-c">+' + r.gold + ' 🪙</b></p>');
       if (r.food) {
         const pf = parseStackKey(r.food);
-        const resF = RESOURCES[pf.type];
-        const nmF = (resF.tierNames && resF.tierNames[pf.tier]) || (resF.label + ' T' + pf.tier);
-        lines.push('<p><span class="battle-label">Trouvaille</span> ' + (RESOURCE_EMOJI[pf.type] || '🍄') + ' 1× ' + nmF + '</p>');
+        lines.push('<p><span class="battle-label">Trouvaille</span> ' + (RESOURCE_EMOJI[pf.type] || '🍄') + ' 1× ' + resourceLabel(pf.type, pf.tier) + '</p>');
       }
       lines.push('<p><span class="battle-label">Maîtrise</span> +' + r.xp + ' XP d’arme</p>');
     } else {
@@ -731,7 +733,7 @@ showDungeonPopup(tile, onEnter) {
   /* ---------- Bottom sheets ---------- */
   showSheet(name) {
     this.openSheet = name;
-    const titles = { inventory: 'Inventaire', shop: 'Boutique', profile: 'Profil', map: 'Carte du monde', social: 'Social', capital: 'Capitale — PNJ Artisans', marmite: 'La Marmite — Cuisine' };
+    const titles = { inventory: 'Inventaire', shop: 'Boutique', profile: 'Profil', map: 'Carte du monde', social: 'Social', capital: 'Capitale — PNJ Artisans', marmite: 'La Marmite — Cuisine', admin: 'Administration' };
     $('sheetTitle').textContent = titles[name];
     const body = $('sheetBody');
     body.innerHTML = '';
@@ -804,7 +806,7 @@ showDungeonPopup(tile, onEnter) {
       }
 
       const res = RESOURCES[p.type];
-      const displayName = (res.tierNames && res.tierNames[p.tier]) || res.label;
+      const displayName = resourceLabel(p.type, p.tier);
       const iconSrc = this.getResourceTargetSrc(p.type, p.tier);
       return '<div class="inv-card">' +
         '<div class="inv-card-art-wrap">' +
@@ -871,84 +873,110 @@ showDungeonPopup(tile, onEnter) {
   build_profile(body) {
     const me = this.server.me;
     const cls = CLASSES[me.speciesClass];
+    const power = Math.round(combatPower(me));
+    // En solo (sandbox locale), les outils de triche restent toujours accessibles ;
+    // en multijoueur, ils sont réservés au rôle admin.
+    const showCheats = !this.server.remote || me.role === 'admin';
+    const isAdmin = this.server.remote && me.role === 'admin';
     body.innerHTML =
-      '<div class="profile-head">' +
-        this.spriteAvatar(me.speciesClass) +
-        '<div><b class="profile-name">' + esc(me.username) + '</b><br><span class="profile-class">' + cls.label + '</span> <span class="role-chip">' + cls.role + '</span></div>' +
+      // En-tête façon fiche d'aventurier : portrait cerclé d'or, nom, devise
+      '<div class="profile-hero">' +
+        this.spriteAvatar(me.speciesClass, 'hero') +
+        '<div class="hero-name">' + esc(me.username) + '</div>' +
+        '<div class="hero-class">' + cls.label + ' <span class="role-chip">' + cls.role + '</span></div>' +
+        '<p class="hero-bonus">« ' + cls.bonus + ' »</p>' +
       '</div>' +
-      '<p class="bonus">' + cls.bonus + '</p>' +
-      '<div class="statgrid">' +
-        '<div><span class="dim">Force individuelle</span><b>' + playerForce(me) + '</b></div>' +
-        '<div><span class="dim">PV max</span><b>' + maxHp(me) + '</b></div>' +
+
+      '<div class="stat-line">' +
+        '<span>⚔ Puissance <b>' + power + '</b></span>' +
+        '<span>♥ PV max <b>' + maxHp(me) + '</b></span>' +
+        '<span>🪙 Or <b>' + (me.gold || 0).toLocaleString('fr-FR') + '</b></span>' +
       '</div>' +
+
       this.xpBar('Niveau de récolte', me.harvestLevel, me.harvestXp) +
       this.xpBar('Maîtrise d’arme', me.weaponMastery, me.weaponXp) +
-      '<div class="gear">' +
-        '<div class="gear-card"><span class="dim">Arme</span><b>' + me.weapon.type + '</b><span class="tier t' + me.weapon.tier + '">T' + me.weapon.tier + '</span></div>' +
-        '<div class="gear-card"><span class="dim">Armure</span><b>' + me.armor.type + '</b><span class="tier t' + me.armor.tier + '">T' + me.armor.tier + '</span></div>' +
-      '</div>' +
-      '<p class="dim small">Arme et armure sont uniques et évolutives — améliorez-les chez le Forgeron de la Capitale (0,0).</p>' +
+
+      '<div class="section-divider">✦</div>' +
+
+      '<div class="profile-sec-title">Équipement</div>' +
+      '<div class="gear-line"><span class="gear-ico">⚔️</span><span class="gear-name">' + me.weapon.type + '</span><span class="tier t' + me.weapon.tier + '">T' + me.weapon.tier + '</span></div>' +
+      '<div class="gear-line"><span class="gear-ico">🛡️</span><span class="gear-name">Armure de ' + me.armor.type + '</span><span class="tier t' + me.armor.tier + '">T' + me.armor.tier + '</span></div>' +
+      '<p class="dim small profile-hint">Unique et évolutif — chez le Forgeron de la Capitale.</p>' +
+
+      '<div class="section-divider">✦</div>' +
       this.buildCharactersSection(me) +
-      '<div class="admin-card">' +
-        '<div class="upg-head"><b>Admin</b><span class="dim">Gestion personnage</span></div>' +
-        '<p class="dim small">Efface ce personnage et rouvre l’écran de création.</p>' +
-        '<div class="admin-grid">' +
-          '<button class="btn" data-admin-tier="harvest:1">Récolte T1</button>' +
-          '<button class="btn" data-admin-tier="harvest:2">Récolte T2</button>' +
-          '<button class="btn" data-admin-tier="harvest:3">Récolte T3</button>' +
-          '<button class="btn" data-admin-tier="harvest:4">Récolte T4</button>' +
-          '<button class="btn" data-admin-tier="harvest:5">Récolte T5</button>' +
-          '<button class="btn" data-admin-tier="harvest:6">Récolte T6</button>' +
-          '<button class="btn" data-admin-tier="weapon:1">Maîtrise T1</button>' +
-          '<button class="btn" data-admin-tier="weapon:2">Maîtrise T2</button>' +
-          '<button class="btn" data-admin-tier="weapon:3">Maîtrise T3</button>' +
-          '<button class="btn" data-admin-tier="weapon:4">Maîtrise T4</button>' +
-          '<button class="btn" data-admin-tier="weapon:5">Maîtrise T5</button>' +
-          '<button class="btn" data-admin-tier="weapon:6">Maîtrise T6</button>' +
-        '</div>' +
-        '<div class="admin-grid">' +
-          '<button class="btn" data-admin-gear="weapon:0">Arme T0</button>' +
-          '<button class="btn" data-admin-gear="armor:0">Armure T0</button>' +
-          '<button class="btn" data-admin-gear="weapon:1">Arme T1</button>' +
-          '<button class="btn" data-admin-gear="armor:1">Armure T1</button>' +
-          '<button class="btn" data-admin-gear="weapon:2">Arme T2</button>' +
-          '<button class="btn" data-admin-gear="armor:2">Armure T2</button>' +
-          '<button class="btn" data-admin-gear="weapon:3">Arme T3</button>' +
-          '<button class="btn" data-admin-gear="armor:3">Armure T3</button>' +
-          '<button class="btn" data-admin-gear="weapon:4">Arme T4</button>' +
-          '<button class="btn" data-admin-gear="armor:4">Armure T4</button>' +
-          '<button class="btn" data-admin-gear="weapon:5">Arme T5</button>' +
-          '<button class="btn" data-admin-gear="armor:5">Armure T5</button>' +
-          '<button class="btn" data-admin-gear="weapon:6">Arme T6</button>' +
-          '<button class="btn" data-admin-gear="armor:6">Armure T6</button>' +
-        '</div>' +
-        '<button id="adminSpawnBossBtn" class="btn primary wide">Faire apparaître le boss</button>' +
-        '<button id="profileResetBtn" class="btn danger wide">Réinitialiser le personnage</button>' +
-      '</div>' +
-      (this.server.remote ? '<button id="logoutBtn" class="btn wide">🚪 Se déconnecter</button>' : '');
-    body.querySelectorAll('[data-admin-tier]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const [kind, tier] = btn.dataset.adminTier.split(':');
-        const r = await Promise.resolve(this.server.setAdminTier(kind, Number(tier)));
-        this.toast(r.ok ? ((kind === 'harvest' ? 'Récolte' : 'Maîtrise arme') + ' fixée à T' + tier) : r.error);
+
+      '<div class="section-divider">✦</div>' +
+      (isAdmin ? '<button id="openAdminBtn" class="btn wide admin-btn">🛠 Administration</button>' : '') +
+      (showCheats ?
+        '<details class="profile-admin"' + (this.adminOpen ? ' open' : '') + '>' +
+          '<summary>🛠 Outils de test (admin)</summary>' +
+          '<div class="admin-grid">' +
+            '<button class="btn" data-admin-tier="harvest:1">Récolte T1</button>' +
+            '<button class="btn" data-admin-tier="harvest:2">Récolte T2</button>' +
+            '<button class="btn" data-admin-tier="harvest:3">Récolte T3</button>' +
+            '<button class="btn" data-admin-tier="harvest:4">Récolte T4</button>' +
+            '<button class="btn" data-admin-tier="harvest:5">Récolte T5</button>' +
+            '<button class="btn" data-admin-tier="harvest:6">Récolte T6</button>' +
+            '<button class="btn" data-admin-tier="weapon:1">Maîtrise T1</button>' +
+            '<button class="btn" data-admin-tier="weapon:2">Maîtrise T2</button>' +
+            '<button class="btn" data-admin-tier="weapon:3">Maîtrise T3</button>' +
+            '<button class="btn" data-admin-tier="weapon:4">Maîtrise T4</button>' +
+            '<button class="btn" data-admin-tier="weapon:5">Maîtrise T5</button>' +
+            '<button class="btn" data-admin-tier="weapon:6">Maîtrise T6</button>' +
+          '</div>' +
+          '<div class="admin-grid">' +
+            '<button class="btn" data-admin-gear="weapon:0">Arme T0</button>' +
+            '<button class="btn" data-admin-gear="armor:0">Armure T0</button>' +
+            '<button class="btn" data-admin-gear="weapon:1">Arme T1</button>' +
+            '<button class="btn" data-admin-gear="armor:1">Armure T1</button>' +
+            '<button class="btn" data-admin-gear="weapon:2">Arme T2</button>' +
+            '<button class="btn" data-admin-gear="armor:2">Armure T2</button>' +
+            '<button class="btn" data-admin-gear="weapon:3">Arme T3</button>' +
+            '<button class="btn" data-admin-gear="armor:3">Armure T3</button>' +
+            '<button class="btn" data-admin-gear="weapon:4">Arme T4</button>' +
+            '<button class="btn" data-admin-gear="armor:4">Armure T4</button>' +
+            '<button class="btn" data-admin-gear="weapon:5">Arme T5</button>' +
+            '<button class="btn" data-admin-gear="armor:5">Armure T5</button>' +
+            '<button class="btn" data-admin-gear="weapon:6">Arme T6</button>' +
+            '<button class="btn" data-admin-gear="armor:6">Armure T6</button>' +
+          '</div>' +
+          '<button id="adminSpawnBossBtn" class="btn primary wide">Faire apparaître le boss</button>' +
+          '<button id="profileResetBtn" class="btn danger wide">Réinitialiser le personnage</button>' +
+        '</details>'
+        : '') +
+      (this.server.remote ? '<button id="logoutBtn" class="btn wide logout-btn">🚪 Se déconnecter</button>' : '');
+    if (isAdmin) {
+      $('openAdminBtn').addEventListener('click', () => this.showSheet('admin'));
+    }
+    if (showCheats) {
+      body.querySelectorAll('[data-admin-tier]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const [kind, tier] = btn.dataset.adminTier.split(':');
+          const r = await Promise.resolve(this.server.setAdminTier(kind, Number(tier)));
+          this.toast(r.ok ? ((kind === 'harvest' ? 'Récolte' : 'Maîtrise arme') + ' fixée à T' + tier) : r.error);
+        });
       });
-    });
-    body.querySelectorAll('[data-admin-gear]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const [slot, tier] = btn.dataset.adminGear.split(':');
-        const r = await Promise.resolve(this.server.setAdminGear(slot, Number(tier)));
-        this.toast(r.ok ? ((slot === 'weapon' ? 'Arme' : 'Armure') + ' fixée à T' + tier) : r.error);
+      body.querySelectorAll('[data-admin-gear]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const [slot, tier] = btn.dataset.adminGear.split(':');
+          const r = await Promise.resolve(this.server.setAdminGear(slot, Number(tier)));
+          this.toast(r.ok ? ((slot === 'weapon' ? 'Arme' : 'Armure') + ' fixée à T' + tier) : r.error);
+        });
       });
-    });
-    $('adminSpawnBossBtn').addEventListener('click', async () => {
-      const r = await Promise.resolve(this.server.remote
-        ? this.server.dev({ spawnBoss: true })
-        : this.server.adminSpawnBoss());
-      this.toast(r.ok ? 'Boss invoqué.' : r.error);
-    });
-    $('profileResetBtn').addEventListener('click', () => {
-      if (this.onAdminReset) this.onAdminReset();
-    });
+      $('adminSpawnBossBtn').addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.remote
+          ? this.server.dev({ spawnBoss: true })
+          : this.server.adminSpawnBoss());
+        this.toast(r.ok ? 'Boss invoqué.' : r.error);
+      });
+      $('profileResetBtn').addEventListener('click', () => {
+        if (this.onAdminReset) this.onAdminReset();
+      });
+      body.querySelector('.profile-admin').addEventListener('toggle', (e) => {
+        this.adminOpen = e.target.open;
+      });
+    }
     if (this.server.remote) {
       $('logoutBtn').addEventListener('click', () => {
         if (this.onLogout) this.onLogout();
@@ -963,6 +991,139 @@ showDungeonPopup(tile, onEnter) {
     body.querySelectorAll('.char-create').forEach((btn) => {
       btn.addEventListener('click', () => this.showCharacterCreatePopup());
     });
+  }
+
+  /* ---------- Administration (rôle admin, multijoueur uniquement) ---------- */
+  build_admin(body) {
+    const me = this.server.me;
+    if (!this.server.remote || !me || me.role !== 'admin') {
+      body.innerHTML = '<p class="empty">Accès réservé aux administrateurs.</p>';
+      return;
+    }
+    body.innerHTML = '<p class="dim">Chargement…</p>';
+    Promise.all([
+      Promise.resolve(this.server.adminStats()),
+      Promise.resolve(this.server.adminPlayers()),
+    ]).then(([statsRes, playersRes]) => {
+      if (this.openSheet !== 'admin') return;   // fermé entre-temps
+      if (!statsRes.ok || !playersRes.ok) {
+        body.innerHTML = '<p class="empty">' + esc(statsRes.error || playersRes.error || 'Erreur serveur.') + '</p>';
+        return;
+      }
+      this.renderAdminPanel(body, statsRes.stats, playersRes.list);
+    });
+  }
+
+  renderAdminPanel(body, stats, list) {
+    const classEntries = Object.entries(stats.byClass || {})
+      .map(([k, n]) => ((CLASSES[k] && CLASSES[k].label) || k) + ' ×' + n)
+      .join(' · ');
+    const statsHtml =
+      '<div class="admin-stats-bar">' +
+        '<span><b>' + stats.total + '</b> comptes</span>' +
+        '<span><b>' + stats.online + '</b> en ligne</span>' +
+        '<span><b>' + stats.admins + '</b> admin' + (stats.admins > 1 ? 's' : '') + '</span>' +
+      '</div>' +
+      (classEntries ? '<p class="dim small admin-class-breakdown">' + esc(classEntries) + '</p>' : '');
+
+    body.innerHTML =
+      statsHtml +
+      '<div class="section-divider">✦</div>' +
+      '<div class="admin-player-list">' + list.map((p) => this.adminPlayerRow(p)).join('') + '</div>';
+
+    body.querySelectorAll('.admin-player').forEach((det) => {
+      det.addEventListener('toggle', (e) => {
+        this.adminExpandedUser = e.target.open ? e.target.dataset.username : null;
+      });
+    });
+    body.querySelectorAll('[data-admin-role-toggle]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.adminSetRole(btn.dataset.adminRoleToggle, btn.dataset.nextRole));
+        this.toast(r.ok ? 'Rôle mis à jour.' : r.error);
+        if (r.ok) this.showSheet('admin');
+      });
+    });
+    body.querySelectorAll('[data-admin-slot]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.adminGrantSlot(btn.dataset.adminSlot, 1));
+        this.toast(r.ok ? '+1 emplacement de personnage.' : r.error);
+        if (r.ok) this.showSheet('admin');
+      });
+    });
+    body.querySelectorAll('.admin-grant-form').forEach((form) => {
+      const username = form.dataset.username;
+      const whatSel = form.querySelector('[data-role="what"]');
+      const tierSel = form.querySelector('[data-role="tier"]');
+      const qtyInput = form.querySelector('[data-role="qty"]');
+      form.querySelector('[data-role="submit"]').addEventListener('click', async () => {
+        const what = whatSel.value;
+        const tier = Number(tierSel.value);
+        const qty = Math.max(1, Number(qtyInput.value) || 1);
+        let r;
+        if (what === 'gold') r = await Promise.resolve(this.server.adminGrantGold(username, qty));
+        else if (what === 'level:harvest') r = await Promise.resolve(this.server.adminSetLevel(username, 'harvest', tier));
+        else if (what === 'level:weapon') r = await Promise.resolve(this.server.adminSetLevel(username, 'weapon', tier));
+        else if (what === 'gear:weapon') r = await Promise.resolve(this.server.adminSetGear(username, 'weapon', tier));
+        else if (what === 'gear:armor') r = await Promise.resolve(this.server.adminSetGear(username, 'armor', tier));
+        else if (what.indexOf('item:') === 0) r = await Promise.resolve(this.server.adminGrantItem(username, stackKey(what.slice(5), tier), qty));
+        this.toast((r && r.ok) ? 'Attribution effectuée.' : ((r && r.error) || 'Erreur serveur.'));
+        if (r && r.ok) this.showSheet('admin');
+      });
+    });
+  }
+
+  adminPlayerRow(p) {
+    const isOpen = this.adminExpandedUser === p.username;
+    const dateStr = p.createdAt ? new Date(p.createdAt).toLocaleDateString('fr-FR') : '?';
+    return (
+      '<details class="admin-player"' + (isOpen ? ' open' : '') + ' data-username="' + esc(p.username) + '">' +
+        '<summary>' +
+          '<span class="admin-dot ' + (p.online ? 'on' : 'off') + '"></span>' +
+          '<span class="admin-player-name">' + esc(p.username) + '</span>' +
+          (p.role === 'admin' ? '<span class="role-chip">Admin</span>' : '') +
+          '<span class="dim small admin-player-meta">' + esc(p.classLabel || '') + ' · Récolte ' + p.harvestLevel + ' · Arme ' + p.weaponMastery + ' · 🪙 ' + (p.gold || 0) + '</span>' +
+        '</summary>' +
+        '<div class="admin-player-body">' +
+          '<p class="dim small">Inscrit le ' + dateStr + ' · ' + p.charCount + ' personnage(s) / ' + p.charSlots + ' emplacement(s) (max ' + MAX_CHAR_SLOTS + ') · arme T' + p.weaponTier + ' · armure T' + p.armorTier + '</p>' +
+          '<div class="admin-row-actions">' +
+            '<button class="btn" data-admin-role-toggle="' + esc(p.username) + '" data-next-role="' + (p.role === 'admin' ? 'user' : 'admin') + '">' +
+              (p.role === 'admin' ? 'Rétrograder utilisateur' : 'Promouvoir admin') +
+            '</button>' +
+            '<button class="btn" data-admin-slot="' + esc(p.username) + '"' + (p.charSlots >= MAX_CHAR_SLOTS ? ' disabled' : '') + '>+1 emplacement perso</button>' +
+          '</div>' +
+          this.adminGrantForm(p.username) +
+        '</div>' +
+      '</details>'
+    );
+  }
+
+  adminGrantForm(username) {
+    const resourceOptions = Object.keys(RESOURCES)
+      .map((t) => '<option value="item:' + t + '">' + RESOURCES[t].label + '</option>').join('');
+    const consumableOptions = Object.keys(CONSUMABLES)
+      .map((t) => '<option value="item:' + t + '">' + CONSUMABLES[t].label + '</option>').join('');
+    const tierOptions = [0, 1, 2, 3, 4, 5, 6]
+      .map((t) => '<option value="' + t + '"' + (t === 1 ? ' selected' : '') + '>T' + t + '</option>').join('');
+    return (
+      '<div class="admin-grant-form" data-username="' + esc(username) + '">' +
+        '<select class="admin-select admin-select-what" data-role="what">' +
+          '<optgroup label="Compte">' +
+            '<option value="gold">🪙 Or</option>' +
+          '</optgroup>' +
+          '<optgroup label="Progression">' +
+            '<option value="level:harvest">⛏ Niveau de récolte</option>' +
+            '<option value="level:weapon">⚔ Maîtrise d’arme</option>' +
+            '<option value="gear:weapon">🗡 Tier d’arme</option>' +
+            '<option value="gear:armor">🛡 Tier d’armure</option>' +
+          '</optgroup>' +
+          '<optgroup label="Ressources">' + resourceOptions + '</optgroup>' +
+          '<optgroup label="Consommables">' + consumableOptions + '</optgroup>' +
+        '</select>' +
+        '<select class="admin-select admin-select-tier" data-role="tier">' + tierOptions + '</select>' +
+        '<input class="admin-select admin-qty" data-role="qty" type="number" min="1" max="999" value="1">' +
+        '<button class="btn primary" data-role="submit">Donner</button>' +
+      '</div>'
+    );
   }
 
   /* ---------- La Marmite : cuisine des consommables ---------- */
@@ -985,10 +1146,8 @@ showDungeonPopup(tile, onEnter) {
         return '<li class="' + (ok ? 'ok-c' : 'hp-c') + '">' + n + ' 🪙 <span class="dim">(' + (me.gold || 0) + ')</span></li>';
       }
       const r = parseStackKey(k);
-      const res = RESOURCES[r.type];
-      const name = (res.tierNames && res.tierNames[r.tier]) || (res.label + ' T' + r.tier);
       const have = me.inventory[k] || 0;
-      return '<li class="' + (have >= n ? 'ok-c' : 'hp-c') + '">' + n + '× ' + name + ' <span class="dim">(' + have + '/' + n + ')</span></li>';
+      return '<li class="' + (have >= n ? 'ok-c' : 'hp-c') + '">' + n + '× ' + resourceLabel(r.type, r.tier) + ' <span class="dim">(' + have + '/' + n + ')</span></li>';
     }).join('');
   }
 
@@ -1065,17 +1224,19 @@ showDungeonPopup(tile, onEnter) {
     }
     for (let i = me.characters.length; i < me.charSlots; i++) {
       cards.push(
-        '<button class="char-card empty char-create">➕ Éveiller une nouvelle forme' +
+        '<button class="char-card empty char-create"><span><span class="char-plus">+</span> Éveiller une nouvelle forme</span>' +
         '<small>Gratuit — à la Capitale ou dans un village</small></button>'
       );
     }
-    cards.push(
-      '<div class="char-card locked">🔒 Emplacement supplémentaire' +
-      '<small>Bientôt disponible en boutique</small></div>'
-    );
+    if (me.charSlots < MAX_CHAR_SLOTS) {
+      cards.push(
+        '<div class="char-card locked">🔒 Emplacement supplémentaire' +
+        '<small>Bientôt disponible en boutique</small></div>'
+      );
+    }
     return '<div class="chars-section">' +
-      '<div class="upg-head"><b>Mes personnages</b><span class="dim">' +
-        me.characters.length + ' / ' + me.charSlots + ' emplacements</span></div>' +
+      '<div class="profile-sec-title">Mes personnages <span class="sec-count">' +
+        me.characters.length + ' / ' + me.charSlots + '</span></div>' +
       '<p class="dim small">PA, PV et inventaire sont partagés ; chaque forme garde ses maîtrises et son équipement. ' +
       'La métamorphose se fait à la Capitale ou dans un village.</p>' +
       '<div class="char-list">' + cards.join('') + '</div>' +
@@ -1214,8 +1375,8 @@ showDungeonPopup(tile, onEnter) {
       const have = me.inventory[k] || 0;
       const ok = have >= n;
       if (!ok) allOk = false;
-      return '<li class="' + (ok ? 'ok-c' : 'hp-c') + '">' + n + '× ' + RESOURCES[p.type].label +
-        ' T' + p.tier + ' <span class="dim">(' + have + '/' + n + ')</span></li>';
+      return '<li class="' + (ok ? 'ok-c' : 'hp-c') + '">' + n + '× ' + resourceLabel(p.type, p.tier) +
+        ' <span class="dim">(' + have + '/' + n + ')</span></li>';
     });
     const masteryOk = me.weaponMastery >= target;
     if (!masteryOk) allOk = false;
@@ -1276,7 +1437,7 @@ showDungeonPopup(tile, onEnter) {
 
     overlay.innerHTML =
       '<div class="creation-card">' +
-        '<h1>WildRift <span class="dim">RPG</span></h1>' +
+        '<h1>Feralia <span class="dim">Online</span></h1>' +
         '<div class="auth-tabs">' +
           '<button id="tabLogin" class="auth-tab active" type="button">Se connecter</button>' +
           '<button id="tabRegister" class="auth-tab" type="button">Créer un compte</button>' +
@@ -1367,7 +1528,7 @@ showDungeonPopup(tile, onEnter) {
     ).join('');
     overlay.innerHTML =
       '<div class="creation-card">' +
-        '<h1>WildRift <span class="dim">RPG</span></h1>' +
+        '<h1>Feralia <span class="dim">Online</span></h1>' +
         '<p class="dim">Choisissez votre combo espèce / classe — il est définitif.</p>' +
         '<input id="nameInput" type="text" maxlength="16" placeholder="Nom d’aventurier…" autocomplete="off">' +
         '<div class="class-grid">' + cards + '</div>' +

@@ -171,5 +171,13 @@ class RemoteServer {
   setAdminTier(kind, tier) { return this.req('admin:tier', { kind, tier }); }
   setAdminGear(slot, tier) { return this.req('admin:gear', { slot, tier }); }
   dev(action) { return this.req('dev', action); }
+  adminStats() { return this.req('admin:stats', {}); }
+  adminPlayers() { return this.req('admin:players', {}); }
+  adminSetRole(username, role) { return this.req('admin:setRole', { username, role }); }
+  adminGrantSlot(username, count) { return this.req('admin:grantSlot', { username, count }); }
+  adminGrantGold(username, amount) { return this.req('admin:grantGold', { username, amount }); }
+  adminGrantItem(username, key, qty) { return this.req('admin:grantItem', { username, key, qty }); }
+  adminSetLevel(username, kind, tier) { return this.req('admin:setLevel', { username, kind, tier }); }
+  adminSetGear(username, slot, tier) { return this.req('admin:setGear', { username, slot, tier }); }
   say(text) { this.socket.emit('chat', { text }); }
 }

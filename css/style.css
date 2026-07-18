@@ -1,5 +1,5 @@
 /* ============================================================
- * WildRift RPG — Greybox
+ * Feralia Online
  * Thème unique sombre "carte tactique" (choix assumé : écran de jeu).
  * Portrait, une main, cibles tactiles ≥ 48px.
  * ============================================================ */
@@ -213,11 +213,194 @@ html, body {
 }
 .gold-c { color: #b8860b; font-variant-numeric: tabular-nums; }
 
+/* ---------- Profil : fiche d'aventurier (sections plates, ornements) ---------- */
+.profile-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 0 4px;
+  text-align: center;
+}
+.avatar.sprite.hero {
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  border: 3px solid rgba(200, 154, 58, 0.8);
+  box-shadow:
+    0 0 0 3px rgba(122, 86, 30, 0.22),
+    0 10px 22px rgba(70, 45, 15, 0.22);
+  background-color: rgba(255, 244, 214, 0.55);
+}
+.hero-name {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 24px;
+  font-weight: 700;
+  color: #33240f;
+  letter-spacing: 0.02em;
+}
+.hero-class { color: #7a6244; font-weight: 700; font-size: 13.5px; }
+.hero-bonus {
+  font-style: italic;
+  color: #7a6244;
+  font-size: 12.5px;
+  line-height: 1.5;
+  max-width: 36ch;
+  text-wrap: balance;
+}
+
+/* Séparateur ornemental : filets + losange doré */
+.section-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0 12px;
+  color: rgba(200, 154, 58, 0.85);
+  font-size: 11px;
+}
+.section-divider::before,
+.section-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(122, 86, 30, 0.4));
+}
+.section-divider::after {
+  background: linear-gradient(90deg, rgba(122, 86, 30, 0.4), transparent);
+}
+
+/* Stats en ligne, sans boîtes */
+.stat-line {
+  display: flex;
+  justify-content: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin: 10px 0 14px;
+  color: #7a6244;
+  font-size: 13px;
+}
+.stat-line b {
+  color: #33240f;
+  font-size: 16px;
+  margin-left: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Titres de section (serif, encre) */
+.profile-sec-title {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 15px;
+  font-weight: 700;
+  color: #33240f;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+.profile-sec-title .sec-count { color: #7a6244; font-size: 12px; font-family: system-ui, sans-serif; }
+
+/* Équipement : lignes légères, pas de cartes */
+.gear-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 2px;
+  color: #33240f;
+  font-weight: 700;
+}
+.gear-line .gear-ico { font-size: 19px; }
+.gear-line .gear-name { flex: 1; }
+.profile-hint { color: #7a6244; }
+
+/* Outils de test repliés : discrets tant qu'on n'en a pas besoin */
+.profile-admin summary {
+  cursor: pointer;
+  color: #7a6244;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 4px 0;
+}
+.profile-admin[open] summary { margin-bottom: 8px; }
+
+.logout-btn { margin-top: 14px; }
+.admin-btn { margin-top: 4px; }
+
+/* ---------- Dashboard Administration ---------- */
+.admin-stats-bar {
+  display: flex;
+  justify-content: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin: 4px 0 6px;
+  color: #7a6244;
+  font-size: 13px;
+}
+.admin-stats-bar b { color: #33240f; font-size: 16px; margin-right: 3px; font-variant-numeric: tabular-nums; }
+.admin-class-breakdown { text-align: center; margin-bottom: 4px; }
+
+.admin-player-list { display: flex; flex-direction: column; gap: 8px; }
+.admin-player {
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: rgba(122, 86, 30, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(122, 86, 30, 0.12);
+}
+.admin-player[open] { background: rgba(232, 178, 63, 0.1); }
+.admin-player summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 0;
+  cursor: pointer;
+  color: #33240f;
+  font-weight: 700;
+  list-style: none;
+}
+.admin-player summary::-webkit-details-marker { display: none; }
+.admin-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #9a8464;
+  flex: none;
+}
+.admin-dot.on { background: var(--ok, #4caf6f); box-shadow: 0 0 0 2px rgba(76, 175, 111, 0.2); }
+.admin-player-name { flex: none; }
+.admin-player-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+}
+.admin-player-body { padding: 0 0 12px; }
+.admin-row-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.admin-row-actions .btn { flex: 1; min-height: 38px; padding: 8px 10px; font-size: 12.5px; }
+
+.admin-grant-form {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(122, 86, 30, 0.25);
+}
+.admin-select {
+  min-height: 38px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(171, 129, 70, 0.34);
+  background: rgba(249, 240, 224, 0.9);
+  color: #4a3520;
+  font-size: 12.5px;
+}
+.admin-select-what { flex: 1 1 150px; }
+.admin-select-tier { flex: 0 0 62px; }
+.admin-qty { flex: 0 0 64px; text-align: center; }
+.admin-grant-form .btn { flex: 0 0 auto; min-height: 38px; padding: 8px 14px; font-size: 12.5px; }
+
 /* ---------- Personnages multiples (formes) ---------- */
-.chars-section { margin-top: 14px; }
-/* Titre et textes de la section : encre sombre lisible sur le parchemin */
-.chars-section .upg-head b { color: #33240f; }
-.chars-section .upg-head .dim { color: #7a6244; }
+.chars-section { margin-top: 0; }
 .chars-section > .dim { color: #7a6244; }
 .char-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .char-card {
@@ -225,24 +408,37 @@ html, body {
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.06);
-  border: 1px solid rgba(120, 90, 40, 0.25);
+  border-radius: 12px;
+  background: rgba(122, 86, 30, 0.07);
+  border: none;
+  box-shadow: inset 0 0 0 1px rgba(122, 86, 30, 0.12);
   color: #4a3520;
   text-align: left;
   font: inherit;
 }
 .char-card b { color: #33240f; }
 .char-card.active {
-  border-color: var(--gold);
-  background: rgba(232, 178, 63, 0.12);
+  background: rgba(232, 178, 63, 0.16);
+  box-shadow:
+    inset 0 0 0 2px rgba(200, 154, 58, 0.75),
+    0 4px 12px rgba(200, 154, 58, 0.18);
 }
 .char-card.empty, .char-card.locked {
   flex-direction: column;
   justify-content: center;
   gap: 3px;
-  border-style: dashed;
+  box-shadow: none;
+  border: 1px dashed rgba(122, 86, 30, 0.35);
   font-weight: 700;
+  color: #7a6244;
+}
+.char-card.empty small, .char-card.locked small { color: #9a8464; }
+.char-plus {
+  color: #c89a3a;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 19px;
+  font-weight: 700;
+  vertical-align: -1px;
 }
 .char-card.empty { cursor: pointer; }
 .char-card.empty small, .char-card.locked small { font-weight: 400; opacity: 0.7; }
@@ -1065,11 +1261,11 @@ html, body {
 }
 .xp-fill {
   height: 100%;
-  background: linear-gradient(90deg, #7cb5e8, #5b92cf);
+  background: linear-gradient(90deg, #c89a3a, #e9c363);
   border-radius: 999px;
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.28),
-    0 0 10px rgba(91, 146, 207, 0.18);
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 0 10px rgba(200, 154, 58, 0.25);
 }
 .gear { display: flex; gap: 8px; margin-top: 10px; }
 .gear-card {
@@ -1332,15 +1528,16 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 8px 22px 12px;
+  padding: 8px 12px 12px;
   border-radius: 18px;
   border: none;
   background: transparent;
   background-color: transparent;
   color: #f6e4bf;
   font-family: Georgia, "Times New Roman", serif;
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 700;
+  white-space: nowrap;   /* le texte ne doit jamais déborder de la planche */
   letter-spacing: 0.04em;
   text-shadow: 0 1px 0 rgba(0,0,0,0.45);
   box-shadow: none;
