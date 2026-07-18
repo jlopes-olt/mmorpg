@@ -169,6 +169,62 @@ class ServerSim {
     return { ok: true, index: me.characters.length - 1 };
   }
 
+  /* ---------- Cuisine : la Marmite (Capitale + villages) ---------- */
+  cook(item, tier) {
+    const me = this.me;
+    tier = Math.floor(Number(tier));
+    if (!CONSUMABLES[item]) return { ok: false, error: 'Recette inconnue.' };
+    if (!(tier >= 1 && tier <= 6)) return { ok: false, error: 'Tier invalide.' };
+    if (me.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
+    if (!this.atSanctuary(me)) return { ok: false, error: 'La Marmite se trouve à la Capitale et dans les villages.' };
+
+    const recipe = CONSUMABLE_RECIPES[tier];
+    for (const [k, n] of Object.entries(recipe)) {
+      if (k === 'gold') {
+        if ((me.gold || 0) < n) return { ok: false, error: 'Pas assez d’or (' + n + ' 🪙 requis).' };
+      } else if ((me.inventory[k] || 0) < n) {
+        const r = parseStackKey(k);
+        const res = RESOURCES[r.type];
+        const name = (res.tierNames && res.tierNames[r.tier]) || (res.label + ' T' + r.tier);
+        return { ok: false, error: 'Il manque : ' + n + '× ' + name + '.' };
+      }
+    }
+    for (const [k, n] of Object.entries(recipe)) {
+      if (k === 'gold') me.gold -= n;
+      else {
+        me.inventory[k] -= n;
+        if (me.inventory[k] <= 0) delete me.inventory[k];
+      }
+    }
+    const key = stackKey(item, tier);
+    me.inventory[key] = (me.inventory[key] || 0) + 1;
+    this.log(CONSUMABLES[item].icon + ' ' + CONSUMABLES[item].label + ' T' + tier + ' cuisiné !');
+    this.emit('self', me);
+    return { ok: true };
+  }
+
+  consume(key) {
+    const me = this.me;
+    const parsed = parseStackKey(String(key));
+    const item = CONSUMABLES[parsed.type];
+    if (!item) return { ok: false, error: 'Objet inconnu.' };
+    if ((me.inventory[key] || 0) < 1) return { ok: false, error: 'Vous n’en avez plus.' };
+
+    me.inventory[key] -= 1;
+    if (me.inventory[key] <= 0) delete me.inventory[key];
+
+    if (item.kind === 'instant') {
+      const heal = Math.round(maxHp(me) * CONSUMABLE_EFFECTS[parsed.type][parsed.tier]);
+      me.hp = Math.min(maxHp(me), me.hp + heal);
+      this.toast(item.icon + ' +' + heal + ' PV');
+    } else {
+      me.buff = { type: parsed.type, tier: parsed.tier, combats: BUFF_COMBATS };
+      this.toast(item.icon + ' ' + item.label + ' T' + parsed.tier + ' actif (' + BUFF_COMBATS + ' combats)');
+    }
+    this.emit('self', me);
+    return { ok: true };
+  }
+
   switchCharacter(index) {
     const me = this.me;
     index = Math.floor(Number(index));
@@ -382,7 +438,7 @@ class ServerSim {
     const victory = this.rng() < chance;
     const druid = victory && members.some((p) => p.speciesClass === 'CERF_DRUIDE');
     const rampart = members.some((p) => p.speciesClass === 'OURS_GUERRIER');
-    let myHpLoss = 0, myXp = 0, myGold = 0;
+    let myHpLoss = 0, myXp = 0, myGold = 0, myFood = null;
 
     for (const p of members) {
       p.status = 'IDLE';
@@ -400,27 +456,43 @@ class ServerSim {
         continue;
       }
 
-      // Victoire : usure (réduite par l'armure et le Rempart), soignée par la Sève
+      // Victoire : usure (réduite par l'armure, le Rempart et le Bouillon),
+      // soignée par la Sève
       let loss = 4 + monster.tier * 3;
       loss *= hpLossReduction(p);
       if (rampart) loss *= 0.7;
+      loss *= buffLossReduction(p);
       loss = Math.max(1, Math.round(loss));
       p.hp = Math.max(1, p.hp - loss);
       if (druid) p.hp = Math.min(maxHp(p), p.hp + Math.round(maxHp(p) * CONFIG.COMBAT.DRUID_HEAL_PCT));
       if (p.id === this.meId) myHpLoss = loss;
 
       if (victory && !p.bot) {
-        // Les monstres ne lâchent que de l'or (+ XP de maîtrise) — les
-        // ressources viennent exclusivement de la récolte.
+        // Les monstres lâchent de l'or (+ XP) et, parfois, un ingrédient
+        // de cuisine de leur tier.
         const xp = 15 + Math.min(5, monster.tier) * 15;
         // Chapardeur (Renard Voleur) : +50 % d'or pour lui
         const lootMult = p.speciesClass === 'RENARD_VOLEUR' ? 1.5 : 1;
         p.weaponXp += xp;
         const gold = Math.ceil(rollGoldLoot(monster.tier) * lootMult);
         p.gold = (p.gold || 0) + gold;
+        if (this.rng() < CONFIG.FOOD_DROP_CHANCE) {
+          myFood = foodDropFor(monster.tier);
+          p.inventory[myFood] = (p.inventory[myFood] || 0) + 1;
+        }
         myXp = xp;
         myGold = gold;
         this.checkLevelUp(p, 'weapon');
+      }
+    }
+
+    // Les buffs de cuisine se consument à chaque combat, victoire ou défaite
+    const meP = this.me;
+    if (meP && raid.participants.includes(meP.id) && meP.buff) {
+      meP.buff.combats -= 1;
+      if (meP.buff.combats <= 0) {
+        this.log('Les effets de votre ' + CONSUMABLES[meP.buff.type].label + ' se dissipent.');
+        delete meP.buff;
       }
     }
 
@@ -440,6 +512,7 @@ class ServerSim {
       monsterForce: raid.monsterForce,
       participants: members.map((p) => p.username),
       gold: myGold,
+      food: myFood,
       hpLoss: myHpLoss,
       xp: myXp,
       druid,

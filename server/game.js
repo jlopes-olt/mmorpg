@@ -514,28 +514,45 @@ class Game {
         continue;
       }
 
-      // Victoire : usure (réduite par l'armure et le Rempart), soignée par la Sève
+      // Victoire : usure (réduite par l'armure, le Rempart et le Bouillon),
+      // soignée par la Sève
       let loss = 4 + monster.tier * 3;
       loss *= hpLossReduction(p);
       if (rampart) loss *= 0.7;
+      loss *= buffLossReduction(p);
       loss = Math.max(1, Math.round(loss));
       p.hp = Math.max(1, p.hp - loss);
       if (!p.bot) lossById.set(p.id, loss);
       if (druid) p.hp = Math.min(maxHp(p), p.hp + Math.round(maxHp(p) * CONFIG.COMBAT.DRUID_HEAL_PCT));
 
       if (victory && !p.bot) {
-        // Les monstres ne lâchent que de l'or (+ XP de maîtrise) — les
-        // ressources viennent exclusivement de la récolte.
+        // Les monstres lâchent de l'or (+ XP) et, parfois, un ingrédient
+        // de cuisine de leur tier — les autres ressources viennent de la récolte.
         const xp = 15 + Math.min(5, monster.tier) * 15;
         p.weaponXp += xp;
         // Chapardeur (Renard Voleur) : +50 % d'or pour lui
         const lootMult = p.speciesClass === 'RENARD_VOLEUR' ? 1.5 : 1;
         const gold = Math.ceil(rollGoldLoot(monster.tier) * lootMult);
         p.gold = (p.gold || 0) + gold;
-        rewards.set(p.id, { gold, xp });
+        let food = null;
+        if (this.rng() < CONFIG.FOOD_DROP_CHANCE) {
+          food = foodDropFor(monster.tier);
+          p.inventory[food] = (p.inventory[food] || 0) + 1;
+        }
+        rewards.set(p.id, { gold, xp, food });
         this.checkLevelUp(p, 'weapon');
       }
       if (!p.bot) this.pushSelf(p);
+    }
+
+    // Les buffs de cuisine se consument à chaque combat, victoire ou défaite
+    for (const p of humans) {
+      if (!p.buff) continue;
+      p.buff.combats -= 1;
+      if (p.buff.combats <= 0) {
+        this.plog(p, 'Les effets de votre ' + CONSUMABLES[p.buff.type].label + ' se dissipent.');
+        delete p.buff;
+      }
     }
 
     if (victory) {
@@ -560,6 +577,7 @@ class Game {
         monsterForce: raid.monsterForce,
         participants: members.map((m) => m.username),
         gold: rw ? rw.gold : 0,
+        food: rw ? rw.food : null,
         hpLoss: lossById.get(p.id) || 0,
         xp: rw ? rw.xp : 0,
         druid,
@@ -665,6 +683,60 @@ class Game {
     if (p.mapId !== 'world' || p.pos.x !== 0 || p.pos.y !== 0) return { ok: false, error: 'Vous devez être à la Capitale.' };
     p.hp = maxHp(p);
     this.pushSelf(p);
+    return { ok: true };
+  }
+
+  /* ---------- Cuisine : la Marmite (Capitale + villages) ---------- */
+  cook(p, item, tier) {
+    tier = Math.floor(Number(tier));
+    if (!CONSUMABLES[item]) return { ok: false, error: 'Recette inconnue.' };
+    if (!(tier >= 1 && tier <= 6)) return { ok: false, error: 'Tier invalide.' };
+    if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
+    if (!this.atSanctuaryPlayer(p)) return { ok: false, error: 'La Marmite se trouve à la Capitale et dans les villages.' };
+
+    const recipe = CONSUMABLE_RECIPES[tier];
+    for (const [k, n] of Object.entries(recipe)) {
+      if (k === 'gold') {
+        if ((p.gold || 0) < n) return { ok: false, error: 'Pas assez d’or (' + n + ' 🪙 requis).' };
+      } else if ((p.inventory[k] || 0) < n) {
+        const r = parseStackKey(k);
+        const res = RESOURCES[r.type];
+        const name = (res.tierNames && res.tierNames[r.tier]) || (res.label + ' T' + r.tier);
+        return { ok: false, error: 'Il manque : ' + n + '× ' + name + '.' };
+      }
+    }
+    for (const [k, n] of Object.entries(recipe)) {
+      if (k === 'gold') p.gold -= n;
+      else {
+        p.inventory[k] -= n;
+        if (p.inventory[k] <= 0) delete p.inventory[k];
+      }
+    }
+    const key = stackKey(item, tier);
+    p.inventory[key] = (p.inventory[key] || 0) + 1;
+    this.plog(p, CONSUMABLES[item].icon + ' ' + CONSUMABLES[item].label + ' T' + tier + ' cuisiné !');
+    return { ok: true };
+  }
+
+  consume(p, key) {
+    const parsed = parseStackKey(String(key));
+    const item = CONSUMABLES[parsed.type];
+    if (!item) return { ok: false, error: 'Objet inconnu.' };
+    if ((p.inventory[key] || 0) < 1) return { ok: false, error: 'Vous n’en avez plus.' };
+
+    p.inventory[key] -= 1;
+    if (p.inventory[key] <= 0) delete p.inventory[key];
+
+    if (item.kind === 'instant') {
+      const heal = Math.round(maxHp(p) * CONSUMABLE_EFFECTS[parsed.type][parsed.tier]);
+      p.hp = Math.min(maxHp(p), p.hp + heal);
+      this.toast(p, item.icon + ' +' + heal + ' PV');
+    } else {
+      p.buff = { type: parsed.type, tier: parsed.tier, combats: BUFF_COMBATS };
+      this.toast(p, item.icon + ' ' + item.label + ' T' + parsed.tier + ' actif (' + BUFF_COMBATS + ' combats)');
+      // Le % de victoire du lobby en cours doit refléter le buff
+      if (p.raidKey) this.raidsChanged();
+    }
     return { ok: true };
   }
 

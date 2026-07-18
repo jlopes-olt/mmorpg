@@ -135,6 +135,37 @@ html, body {
 
 .hidden { display: none !important; }
 
+/* ---------- Cuisine : Marmite, consommables, badge de buff ---------- */
+.cook-item .upg-head b { color: #33240f; }
+.cook-tiers { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.cook-btn { flex: 1; min-width: 44px; min-height: 40px; padding: 6px 4px; font-weight: 800; }
+.inv-card-emoji { font-size: 34px; line-height: 1.2; display: block; }
+.inv-consumable { cursor: pointer; font: inherit; text-align: inherit; }
+.inv-card-use {
+  margin-top: 4px;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #7a5410;
+}
+#buffBadge {
+  position: absolute;
+  left: 12px;
+  bottom: 152px;
+  z-index: 22;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(70, 48, 26, 0.94), rgba(42, 28, 18, 0.92));
+  border: 1px solid rgba(214, 178, 102, 0.5);
+  color: #efdbb0;
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
 /* ---------- % de victoire (popups + bannière de lobby) ---------- */
 .chance-good { color: #3e9a4e; }
 .chance-mid { color: #c9871a; }
@@ -886,6 +917,10 @@ html, body {
   height: 72px;
   object-fit: contain;
   filter: drop-shadow(0 8px 12px rgba(0,0,0,0.16));
+}
+.inv-card-emoji {
+  font-size: 42px;
+  line-height: 1;
 }
 .inv-card-tier {
   position: absolute;
@@ -1646,6 +1681,11 @@ html, body {
   height: 94px;
   bottom: 22px;
 }
+.harvest-fx-target.ingredient {
+  width: 92px;
+  height: 92px;
+  bottom: 22px;
+}
 .harvest-fx-tool {
   position: absolute;
   left: 50%;
@@ -1671,6 +1711,12 @@ html, body {
   transform: translate(6px, -56px) rotate(18deg) scale(0.94);
   animation: harvestSickle var(--harvest-cycle, 640ms) ease-in-out infinite;
 }
+.harvest-fx-tool.tool-ingredient {
+  width: 118px;
+  transform-origin: 78% 84%;
+  transform: translate(16px, -48px) rotate(20deg) scale(0.94);
+  animation: harvestKnife var(--harvest-cycle, 640ms) ease-in-out infinite;
+}
 .harvest-fx-impact {
   position: absolute;
   left: 50%;
@@ -1685,6 +1731,34 @@ html, body {
 }
 .harvest-fx-impact.impact-wood {
   animation: harvestImpactWood var(--harvest-cycle, 640ms) ease-in-out infinite;
+}
+.harvest-fx-impact.impact-ingredient {
+  width: 34px;
+  height: 34px;
+  bottom: 58px;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  animation: harvestImpactIngredient var(--harvest-cycle, 640ms) ease-in-out infinite;
+}
+.harvest-fx-impact.impact-ingredient::before,
+.harvest-fx-impact.impact-ingredient::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 20px;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255,247,207,0), rgba(255,247,207,0.96), rgba(255,247,207,0));
+  transform-origin: center;
+  box-shadow: 0 0 12px rgba(182, 237, 210, 0.52);
+}
+.harvest-fx-impact.impact-ingredient::before {
+  transform: translate(-50%, -50%) rotate(34deg);
+}
+.harvest-fx-impact.impact-ingredient::after {
+  transform: translate(-50%, -50%) rotate(-34deg);
 }
 .harvest-fx-title {
   position: relative;
@@ -1776,6 +1850,13 @@ html, body {
   60% { transform: translate(-6px, -22px) rotate(-12deg) scale(0.98); }
 }
 
+@keyframes harvestKnife {
+  0%, 100% { transform: translate(16px, -48px) rotate(20deg) scale(0.94); }
+  18% { transform: translate(18px, -54px) rotate(34deg) scale(0.96); }
+  48% { transform: translate(-18px, -10px) rotate(-46deg) scale(1); }
+  60% { transform: translate(-8px, -18px) rotate(-22deg) scale(0.98); }
+}
+
 @keyframes harvestImpact {
   0%, 34%, 100% {
     opacity: 0;
@@ -1815,6 +1896,24 @@ html, body {
     transform: translateX(-50%) scale(2.35);
     background: rgba(255, 243, 190, 0);
     box-shadow: 0 0 0 rgba(255, 213, 120, 0);
+  }
+}
+
+@keyframes harvestImpactIngredient {
+  0%, 40%, 100% {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.4);
+    filter: drop-shadow(0 0 0 rgba(196, 255, 220, 0));
+  }
+  48% {
+    opacity: 1;
+    transform: translateX(-50%) scale(1.15);
+    filter: drop-shadow(0 0 14px rgba(196, 255, 220, 0.85));
+  }
+  62% {
+    opacity: 0.18;
+    transform: translateX(-50%) scale(1.42);
+    filter: drop-shadow(0 0 6px rgba(196, 255, 220, 0.28));
   }
 }
 
@@ -1983,4 +2082,12 @@ html, body {
 
 @media (prefers-reduced-motion: reduce) {
   .bar-fill, .toast { transition: none; }
+}
+.cook-item-icon {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  vertical-align: -7px;
+  margin-right: 6px;
+  filter: drop-shadow(0 4px 8px rgba(0,0,0,0.14));
 }

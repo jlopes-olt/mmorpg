@@ -54,6 +54,9 @@ const CONFIG = {
     DEATH_HP_PCT: 0.25,     // PV au réveil à la Capitale après une mort
     DRUID_HEAL_PCT: 0.15,   // Sève : % des PV max rendus après une victoire
   },
+
+  // Chance qu'un monstre vaincu lâche un ingrédient de cuisine de son tier
+  FOOD_DROP_CHANCE: 0.3,
 };
 
 /* Combos espèce/classe fixes — un talent de GROUPE unique par classe.
@@ -110,11 +113,72 @@ const RESOURCES = {
   BOIS:    { label: 'Bois',    short: 'B' },
   MINERAI: { label: 'Minerai', short: 'M' },
   PLANTE:  { label: 'Plante',  short: 'P' },
+  // Ingrédients de cuisine — biome Marais (T6 : Tourbe vivante, en donjon)
+  INGREDIENT: {
+    label: 'Ingrédient', short: 'I',
+    tierNames: {
+      1: 'Champignon brumeux',
+      2: 'Baie de vase',
+      3: 'Racine noueuse',
+      4: 'Œuf de basilic',
+      5: 'Miel des ombres',
+    },
+  },
   BOIS_ANCIEN:     { label: 'Bois ancien', short: 'BA', base: 'BOIS' },
   FLEUR_ASTRALE:   { label: 'Fleur astrale', short: 'FA', base: 'PLANTE' },
   MINERAI_RUNIQUE: { label: 'Minerai runique', short: 'MR', base: 'MINERAI' },
   TOURBE_VIVANTE:  { label: 'Tourbe vivante', short: 'TV', base: 'PLANTE' },
 };
+
+/* ---------- Cuisine : consommables & buffs ---------- */
+
+const CONSUMABLES = {
+  RAGOUT:      { label: 'Ragoût du chasseur', icon: '🍲', kind: 'buff',    role: 'Offensif' },
+  BOUILLON:    { label: 'Bouillon d’écailles', icon: '🛡️', kind: 'buff',    role: 'Défensif' },
+  POTION_SEVE: { label: 'Potion de sève',      icon: '❤️', kind: 'instant', role: 'Soin' },
+};
+
+/* Effets par tier : RAGOUT = +puissance, BOUILLON = −usure de PV,
+ * POTION_SEVE = % des PV max rendus instantanément. */
+const CONSUMABLE_EFFECTS = {
+  RAGOUT:      { 1: 0.05, 2: 0.10, 3: 0.15, 4: 0.20, 5: 0.25, 6: 0.30 },
+  BOUILLON:    { 1: 0.10, 2: 0.15, 3: 0.20, 4: 0.25, 5: 0.30, 6: 0.35 },
+  POTION_SEVE: { 1: 0.20, 2: 0.30, 3: 0.40, 4: 0.50, 5: 0.65, 6: 0.80 },
+};
+
+/* Un buff nourriture actif à la fois, compté en combats (pas en temps) */
+const BUFF_COMBATS = 3;
+
+/* Recettes : ingrédient du Marais + plante (+ or). Le T6 exige la
+ * Tourbe vivante du donjon des marais. */
+const CONSUMABLE_RECIPES = {
+  1: { INGREDIENT_1: 2, PLANTE_1: 2, gold: 5 },
+  2: { INGREDIENT_2: 2, PLANTE_2: 2, gold: 10 },
+  3: { INGREDIENT_3: 2, PLANTE_3: 2, gold: 15 },
+  4: { INGREDIENT_4: 2, PLANTE_4: 2, gold: 20 },
+  5: { INGREDIENT_5: 2, PLANTE_5: 2, gold: 25 },
+  6: { TOURBE_VIVANTE_6: 2, PLANTE_5: 3, gold: 40 },
+};
+
+function consumableDesc(type, tier) {
+  const pct = Math.round(CONSUMABLE_EFFECTS[type][tier] * 100);
+  if (type === 'RAGOUT') return '+' + pct + ' % de puissance pendant ' + BUFF_COMBATS + ' combats';
+  if (type === 'BOUILLON') return '−' + pct + ' % d’usure de PV pendant ' + BUFF_COMBATS + ' combats';
+  return 'Rend ' + pct + ' % des PV max immédiatement';
+}
+
+function buffPowerMult(p) {
+  return p.buff && p.buff.type === 'RAGOUT' ? 1 + CONSUMABLE_EFFECTS.RAGOUT[p.buff.tier] : 1;
+}
+
+function buffLossReduction(p) {
+  return p.buff && p.buff.type === 'BOUILLON' ? 1 - CONSUMABLE_EFFECTS.BOUILLON[p.buff.tier] : 1;
+}
+
+/* Ingrédient lâché par un monstre de ce tier (30 % de chances) */
+function foodDropFor(tier) {
+  return tier >= 6 ? 'TOURBE_VIVANTE_6' : 'INGREDIENT_' + tier;
+}
 
 /* Type de monstre par tier (greybox : mapping direct, lisible) */
 const MONSTERS = {
@@ -229,7 +293,7 @@ function applyCharacter(p, index) {
 function combatPower(p) {
   const woundFactor = CONFIG.COMBAT.WOUND_FLOOR +
     (1 - CONFIG.COMBAT.WOUND_FLOOR) * Math.max(0, Math.min(1, p.hp / maxHp(p)));
-  return (playerForce(p) + p.armor.tier * 8) * woundFactor;
+  return (playerForce(p) + p.armor.tier * 8) * woundFactor * buffPowerMult(p);
 }
 
 /* Puissance d'équipe : somme des puissances + talents de groupe
@@ -285,7 +349,7 @@ const SPRITE_CELLS = {
 };
 
 const RESOURCE_EMOJI = {
-  BOIS: '🌳', MINERAI: '🪨', PLANTE: '🌿',
+  BOIS: '🌳', MINERAI: '🪨', PLANTE: '🌿', INGREDIENT: '🍄',
   BOIS_ANCIEN: '🌳', FLEUR_ASTRALE: '🌿', MINERAI_RUNIQUE: '🪨', TOURBE_VIVANTE: '🌿',
 };
 const MONSTER_EMOJI = { 1: '🐺', 2: '🐻', 3: '👻', 4: '🦎', 5: '🐉', 6: '💀' };
@@ -299,5 +363,7 @@ if (typeof module !== 'undefined' && module.exports) {
     levelFromXp, playerForce, maxHp, hpLossReduction, stackKey, parseStackKey, resourceFamily,
     newCharacter, syncActiveCharacter, applyCharacter, rollGoldLoot,
     combatPower, teamPowerOf, winChance,
+    CONSUMABLES, CONSUMABLE_EFFECTS, CONSUMABLE_RECIPES, BUFF_COMBATS,
+    consumableDesc, buffPowerMult, buffLossReduction, foodDropFor,
   };
 }

@@ -166,6 +166,8 @@ class RemoteServer {
   teleportVillage(x, y) { return this.req('village:teleport', { x, y }); }
   createCharacter(speciesClass) { return this.req('char:create', { speciesClass }); }
   switchCharacter(index) { return this.req('char:switch', { index }); }
+  cook(item, tier) { return this.req('cook', { item, tier }); }
+  consume(key) { return this.req('consume', { key }); }
   setAdminTier(kind, tier) { return this.req('admin:tier', { kind, tier }); }
   setAdminGear(slot, tier) { return this.req('admin:gear', { slot, tier }); }
   dev(action) { return this.req('dev', action); }

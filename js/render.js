@@ -79,6 +79,14 @@ const WORLD_ICON_FILES = {
       4: 'assets/plante_04_aloe_vera.png',
       5: 'assets/plante_05_fougere.png',
     },
+    // Assets à générer — repli emoji 🍄 tant qu'ils n'existent pas
+    INGREDIENT: {
+      1: 'assets/ingredient_01_champignon.png',
+      2: 'assets/ingredient_02_baie.png',
+      3: 'assets/ingredient_03_racine.png',
+      4: 'assets/ingredient_04_oeuf.png',
+      5: 'assets/ingredient_05_miel.png',
+    },
     FLEUR_ASTRALE: {
       6: 'assets/fleur_astrale_t6.png',
     },

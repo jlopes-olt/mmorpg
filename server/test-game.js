@@ -8,7 +8,7 @@ const assert = require('assert');
 const { Game } = require('./game.js');
 const {
   CONFIG, CLASSES, MONSTER_FORCE, playerForce, maxHp,
-  combatPower, teamPowerOf, winChance,
+  combatPower, teamPowerOf, winChance, BUFF_COMBATS,
 } = require('../js/config.js');
 
 const g = new Game(CONFIG.WORLD.SEED, null);
@@ -281,6 +281,56 @@ assert.ok(g.switchCharacter(alice, 0).ok, 'retour à la forme Lion');
 assert.strictEqual(alice.weaponMastery, lionMastery, 'maîtrise du Lion restaurée');
 assert.strictEqual(alice.armor.tier, 2, 'équipement du Lion restauré');
 console.log('Multi-personnages : sanctuaires ✔, PV % ✔, partages ✔');
+
+// --- Cuisine : Marmite (sanctuaire), buffs, potion, drop d'ingrédient ---
+alice.gold = 100;
+alice.inventory.INGREDIENT_1 = 2;
+alice.inventory.PLANTE_1 = 2;
+
+alice.pos = { x: boss.x - 1, y: boss.y };
+assert.ok(!g.cook(alice, 'RAGOUT', 1).ok, 'Marmite refusée hors sanctuaire');
+alice.pos = { x: 0, y: 0 };
+const goldBeforeCook = alice.gold;
+assert.ok(g.cook(alice, 'RAGOUT', 1).ok, 'Ragoût T1 cuisiné à la Capitale');
+assert.strictEqual(alice.inventory.RAGOUT_1, 1, 'consommable en inventaire');
+assert.ok(!alice.inventory.INGREDIENT_1, 'ingrédients consommés');
+assert.strictEqual(alice.gold, goldBeforeCook - 5, 'or de la recette débité');
+
+alice.hp = maxHp(alice);
+const powerBefore = combatPower(alice);
+assert.ok(g.consume(alice, 'RAGOUT_1').ok, 'Ragoût bu');
+assert.ok(alice.buff && alice.buff.type === 'RAGOUT' && alice.buff.combats === BUFF_COMBATS, 'buff actif 3 combats');
+assert.ok(combatPower(alice) > powerBefore, 'puissance dopée par le Ragoût (+5 %)');
+assert.ok(!alice.inventory.RAGOUT_1, 'consommable consommé');
+
+alice.inventory.POTION_SEVE_1 = 1;
+alice.hp = 40;
+assert.ok(g.consume(alice, 'POTION_SEVE_1').ok, 'potion bue');
+assert.strictEqual(alice.hp, 40 + Math.round(maxHp(alice) * 0.20), 'Potion de sève : +20 % des PV max');
+assert.ok(alice.buff && alice.buff.type === 'RAGOUT', 'la potion ne remplace pas le buff');
+
+// Combat : le buff se consume, et le monstre lâche un ingrédient (rng forcé)
+let mob = null;
+for (const t of g.tiles.values()) {
+  if (t.content && t.content.kind === 'monster' && t.content.tier <= 2 &&
+      t.content.inactiveUntil <= g.now &&
+      Math.max(Math.abs(t.x + 45), Math.abs(t.y + 45)) > 12) { mob = t; break; }
+}
+alice.pos = { x: mob.x - 1, y: mob.y };
+alice.pa = 50;
+alice.hp = maxHp(alice);
+sent.length = 0;
+g.rng = () => 0;   // victoire ET drop garantis
+assert.ok(g.createRaid(alice, mob.x, mob.y).ok, 'raid cuisine');
+assert.ok(g.startRaidNow(alice, mob.x + ',' + mob.y).ok);
+g.tick(300);
+g.rng = Math.random;
+const foodKey = 'INGREDIENT_' + mob.content.tier;
+res = sent.filter((m) => m.ev === 'result').map((m) => m.data);
+assert.strictEqual(res[0].food, foodKey, 'trouvaille dans le rapport');
+assert.ok(alice.inventory[foodKey] >= 1, 'ingrédient looté sur le monstre');
+assert.strictEqual(alice.buff.combats, BUFF_COMBATS - 1, 'le buff se consume à chaque combat');
+console.log('Cuisine : Marmite ✔, buffs ✔, potion ✔, drop d’ingrédient ✔');
 
 // --- Persistance aller-retour (token, état ET mot de passe) ---
 const snap = JSON.parse(JSON.stringify(g.serialize()));

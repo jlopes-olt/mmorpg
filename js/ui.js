@@ -38,6 +38,12 @@ class UI {
       MINERAI: 'assets/harvest_pickaxe.png',
       BOIS: 'assets/harvest_axe.png',
       PLANTE: 'assets/harvest_sickle.png',
+      INGREDIENT: 'assets/harvest_knife.png',
+    };
+    this.consumableIconSrc = {
+      RAGOUT: 'assets/item_ragout_du_chasseur.png',
+      BOUILLON: 'assets/item_bouillon_decailles.png',
+      POTION_SEVE: 'assets/item_potion_de_seve.png',
     };
     this.harvestFxTimer = null;
 
@@ -82,6 +88,7 @@ class UI {
       if (this.openSheet === 'shop') this.showSheet('shop');
       if (this.openSheet === 'profile') this.showSheet('profile');
       if (this.openSheet === 'capital') this.showSheet('capital');
+      if (this.openSheet === 'marmite') this.showSheet('marmite');
     });
   }
 
@@ -173,6 +180,11 @@ class UI {
 
     const closeRow = document.createElement('div');
     closeRow.className = 'popup-actions';
+    const marmiteBtn = document.createElement('button');
+    marmiteBtn.className = 'btn primary';
+    marmiteBtn.textContent = '🍲 La Marmite';
+    marmiteBtn.addEventListener('click', () => { this.closePopup(); this.showSheet('marmite'); });
+    closeRow.appendChild(marmiteBtn);
     const closeBtn = document.createElement('button');
     closeBtn.className = 'btn';
     closeBtn.textContent = 'Fermer';
@@ -262,6 +274,16 @@ showDungeonPopup(tile, onEnter) {
     // d'un donjon est aussi en (0,0))
     const onCapital = (me.mapId || 'world') === 'world' && me.pos.x === 0 && me.pos.y === 0;
     $('ctxAction').classList.toggle('hidden', !onCapital);
+
+    // Badge du buff de nourriture actif
+    const buffBadge = $('buffBadge');
+    if (me.buff && CONSUMABLES[me.buff.type]) {
+      buffBadge.classList.remove('hidden');
+      buffBadge.textContent = CONSUMABLES[me.buff.type].icon + ' ' +
+        CONSUMABLES[me.buff.type].label + ' T' + me.buff.tier + ' · ' + me.buff.combats + ' ⚔';
+    } else {
+      buffBadge.classList.add('hidden');
+    }
 
     // Bannière de lobby : compte à rebours + % de victoire en direct
     const banner = $('lobbyBanner');
@@ -544,7 +566,12 @@ showDungeonPopup(tile, onEnter) {
       MINERAI: 'mineral',
       BOIS: 'wood',
       PLANTE: 'plant',
+      INGREDIENT: 'ingredient',
     }[family] || 'generic';
+  }
+
+  getConsumableTargetSrc(type) {
+    return this.consumableIconSrc[type] || '';
   }
 
   getSpriteSrc(sprite) {
@@ -617,6 +644,12 @@ showDungeonPopup(tile, onEnter) {
       lines.push('<p><span class="battle-label">PV perdus</span> <b class="hp-c">−' + r.hpLoss + '</b>' +
         (r.druid ? ' <span class="ok-c">(Sève : +15 % des PV max)</span>' : '') + '</p>');
       if (r.gold) lines.push('<p><span class="battle-label">Or</span> <b class="gold-c">+' + r.gold + ' 🪙</b></p>');
+      if (r.food) {
+        const pf = parseStackKey(r.food);
+        const resF = RESOURCES[pf.type];
+        const nmF = (resF.tierNames && resF.tierNames[pf.tier]) || (resF.label + ' T' + pf.tier);
+        lines.push('<p><span class="battle-label">Trouvaille</span> ' + (RESOURCE_EMOJI[pf.type] || '🍄') + ' 1× ' + nmF + '</p>');
+      }
       lines.push('<p><span class="battle-label">Maîtrise</span> +' + r.xp + ' XP d’arme</p>');
     } else {
       lines.push('<p class="hp-c"><b>☠ Vous êtes mort.</b> Rapatriement à la Capitale — reposez-vous à la fontaine avant de repartir.</p>');
@@ -698,7 +731,7 @@ showDungeonPopup(tile, onEnter) {
   /* ---------- Bottom sheets ---------- */
   showSheet(name) {
     this.openSheet = name;
-    const titles = { inventory: 'Inventaire', shop: 'Boutique', profile: 'Profil', map: 'Carte du monde', social: 'Social', capital: 'Capitale — PNJ Artisans' };
+    const titles = { inventory: 'Inventaire', shop: 'Boutique', profile: 'Profil', map: 'Carte du monde', social: 'Social', capital: 'Capitale — PNJ Artisans', marmite: 'La Marmite — Cuisine' };
     $('sheetTitle').textContent = titles[name];
     const body = $('sheetBody');
     body.innerHTML = '';
@@ -727,7 +760,16 @@ showDungeonPopup(tile, onEnter) {
       body.innerHTML = goldHtml + '<p class="empty">Inventaire vide. Récoltez des ressources sur la carte (2 PA).</p>';
       return;
     }
-    const typeOrder = { BOIS: 0, MINERAI: 1, PLANTE: 2 };
+    const typeOrder = {
+      BOIS: 0,
+      MINERAI: 1,
+      PLANTE: 2,
+      INGREDIENT: 3,
+      RAGOUT: 4,
+      BOUILLON: 5,
+      POTION_SEVE: 6,
+      TOURBE_VIVANTE: 7,
+    };
     const sortedKeys = keys.sort((a, b) => {
       const pa = parseStackKey(a);
       const pb = parseStackKey(b);
@@ -742,14 +784,36 @@ showDungeonPopup(tile, onEnter) {
     });
     const rows = sortedKeys.map((k) => {
       const p = parseStackKey(k);
+
+      // Consommables : carte cliquable → utiliser
+      const cons = CONSUMABLES[p.type];
+      if (cons) {
+        const consSrc = this.getConsumableTargetSrc(p.type);
+        return '<button class="inv-card inv-consumable" data-consume="' + k + '">' +
+          '<div class="inv-card-art-wrap">' +
+            (consSrc
+              ? '<img class="inv-card-art" src="' + consSrc + '" alt="">'
+              : '<span class="inv-card-emoji">' + cons.icon + '</span>') +
+            '<span class="tier t' + p.tier + ' inv-card-tier">T' + p.tier + '</span>' +
+          '</div>' +
+          '<div class="inv-card-name">' + cons.label + '</div>' +
+          '<div class="inv-card-meta">' + consumableDesc(p.type, p.tier) + '</div>' +
+          '<div class="inv-card-qty">×' + inv[k] + '</div>' +
+          '<div class="inv-card-use">Utiliser</div>' +
+        '</button>';
+      }
+
+      const res = RESOURCES[p.type];
+      const displayName = (res.tierNames && res.tierNames[p.tier]) || res.label;
       const iconSrc = this.getResourceTargetSrc(p.type, p.tier);
       return '<div class="inv-card">' +
         '<div class="inv-card-art-wrap">' +
-          (iconSrc ? '<img class="inv-card-art" src="' + iconSrc + '" alt="">' : '') +
+          (iconSrc ? '<img class="inv-card-art" src="' + iconSrc + '" alt="">' :
+            '<span class="inv-card-emoji">' + (RESOURCE_EMOJI[p.type] || '❔') + '</span>') +
           '<span class="tier t' + p.tier + ' inv-card-tier">T' + p.tier + '</span>' +
         '</div>' +
-        '<div class="inv-card-name">' + RESOURCES[p.type].label + '</div>' +
-        '<div class="inv-card-meta">' + (this.inventorySort === 'tier' ? RESOURCES[p.type].label + ' · ' : '') + 'Tier ' + p.tier + '</div>' +
+        '<div class="inv-card-name">' + displayName + '</div>' +
+        '<div class="inv-card-meta">' + (this.inventorySort === 'tier' ? res.label + ' · ' : '') + 'Tier ' + p.tier + '</div>' +
         '<div class="inv-card-qty">×' + inv[k] + '</div>' +
       '</div>';
     });
@@ -767,6 +831,23 @@ showDungeonPopup(tile, onEnter) {
       btn.addEventListener('click', () => {
         this.inventorySort = btn.dataset.inventorySort;
         this.showSheet('inventory');
+      });
+    });
+    body.querySelectorAll('[data-consume]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const k = btn.dataset.consume;
+        const p = parseStackKey(k);
+        const cons = CONSUMABLES[p.type];
+        this.confirm(
+          cons.icon + ' Utiliser ' + cons.label + ' T' + p.tier + ' ?',
+          '<p>' + consumableDesc(p.type, p.tier) + '.</p>' +
+          (cons.kind === 'buff' ? '<p class="dim">Remplace le buff de nourriture en cours, le cas échéant.</p>' : ''),
+          'Utiliser',
+          async () => {
+            const r = await Promise.resolve(this.server.consume(k));
+            if (!r.ok) this.toast(r.error);
+          }
+        );
       });
     });
   }
@@ -881,6 +962,81 @@ showDungeonPopup(tile, onEnter) {
     });
     body.querySelectorAll('.char-create').forEach((btn) => {
       btn.addEventListener('click', () => this.showCharacterCreatePopup());
+    });
+  }
+
+  /* ---------- La Marmite : cuisine des consommables ---------- */
+
+  canCook(me, tier) {
+    const recipe = CONSUMABLE_RECIPES[tier];
+    if (!recipe) return false;
+    for (const [k, n] of Object.entries(recipe)) {
+      if (k === 'gold') { if ((me.gold || 0) < n) return false; }
+      else if ((me.inventory[k] || 0) < n) return false;
+    }
+    return true;
+  }
+
+  recipeLines(me, tier) {
+    const recipe = CONSUMABLE_RECIPES[tier];
+    return Object.entries(recipe).map(([k, n]) => {
+      if (k === 'gold') {
+        const ok = (me.gold || 0) >= n;
+        return '<li class="' + (ok ? 'ok-c' : 'hp-c') + '">' + n + ' 🪙 <span class="dim">(' + (me.gold || 0) + ')</span></li>';
+      }
+      const r = parseStackKey(k);
+      const res = RESOURCES[r.type];
+      const name = (res.tierNames && res.tierNames[r.tier]) || (res.label + ' T' + r.tier);
+      const have = me.inventory[k] || 0;
+      return '<li class="' + (have >= n ? 'ok-c' : 'hp-c') + '">' + n + '× ' + name + ' <span class="dim">(' + have + '/' + n + ')</span></li>';
+    }).join('');
+  }
+
+  build_marmite(body) {
+    const me = this.server.me;
+    let html =
+      '<p class="dim">Les ingrédients viennent du Marais (et parfois des monstres vaincus) ; ' +
+      'les plantes, de la récolte. Un seul buff de nourriture actif à la fois — les potions sont instantanées.</p>' +
+      (me.buff
+        ? '<p class="ok-c">' + CONSUMABLES[me.buff.type].icon + ' Actif : ' + CONSUMABLES[me.buff.type].label +
+          ' T' + me.buff.tier + ' (' + me.buff.combats + ' combats restants)</p>'
+        : '');
+    for (const [type, item] of Object.entries(CONSUMABLES)) {
+      const itemSrc = this.getConsumableTargetSrc(type);
+      let tiersHtml = '';
+      for (let t = 1; t <= 6; t++) {
+        tiersHtml += '<button class="btn cook-btn" data-cook="' + type + ':' + t + '"' +
+          (this.canCook(me, t) ? '' : ' disabled') + '>T' + t + '</button>';
+      }
+      html +=
+        '<div class="upg cook-item">' +
+          '<div class="upg-head"><b>' +
+            (itemSrc ? '<img class="cook-item-icon" src="' + itemSrc + '" alt=""> ' : item.icon + ' ') +
+            item.label +
+          '</b><span class="role-chip">' + item.role + '</span></div>' +
+          '<p class="dim small">' + consumableDesc(type, 1) + ' … ' + consumableDesc(type, 6) + '</p>' +
+          '<div class="cook-tiers">' + tiersHtml + '</div>' +
+        '</div>';
+    }
+    html += '<p class="dim small">Recette Tn : 2× Ingrédient Tn + 2× Plante Tn + or. ' +
+      'Le T6 exige la Tourbe vivante du donjon des marais.</p>';
+    body.innerHTML = html;
+
+    body.querySelectorAll('[data-cook]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const [type, tierStr] = btn.dataset.cook.split(':');
+        const tier = Number(tierStr);
+        const item = CONSUMABLES[type];
+        this.confirm(
+          item.icon + ' Cuisiner ' + item.label + ' T' + tier + ' ?',
+          '<p>' + consumableDesc(type, tier) + '.</p><ul class="upg-needs">' + this.recipeLines(me, tier) + '</ul>',
+          'Cuisiner',
+          async () => {
+            const r = await Promise.resolve(this.server.cook(type, tier));
+            if (!r.ok) this.toast(r.error);
+          }
+        );
+      });
     });
   }
 
@@ -1024,6 +1180,7 @@ showDungeonPopup(tile, onEnter) {
       '<p class="dim">Zone neutre absolue. Les PNJ Artisans (T1 à T5) y tiennent boutique.</p>' +
       '<button id="restBtn" class="btn wide">⛲ Se reposer à la fontaine — PV restaurés (gratuit)</button>' +
       '<button id="travelBtn" class="btn wide">🌀 Réseau de téléporteurs</button>' +
+      '<button id="marmiteBtn" class="btn wide">🍲 La Marmite — cuisine & buffs</button>' +
       this.upgradeCard('weapon') +
       this.upgradeCard('armor');
     $('restBtn').addEventListener('click', async () => {
@@ -1031,6 +1188,7 @@ showDungeonPopup(tile, onEnter) {
       if (!r.ok) this.toast(r.error);
     });
     $('travelBtn').addEventListener('click', () => this.showFastTravelPopupFromCapital());
+    $('marmiteBtn').addEventListener('click', () => this.showSheet('marmite'));
     body.querySelectorAll('[data-upgrade]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const r = await Promise.resolve(this.server.upgrade(btn.dataset.upgrade));

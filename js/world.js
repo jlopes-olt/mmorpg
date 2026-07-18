@@ -63,10 +63,7 @@ function resourceTypeAt(x, y, seed, terrain) {
   if (terrain === 'FORET') return 'BOIS';
   if (terrain === 'MONTAGNE') return 'MINERAI';
   if (terrain === 'PLAINE') return 'PLANTE';
-  if (terrain === 'MARECAGE') {
-    const all = ['BOIS', 'MINERAI', 'PLANTE'];
-    return all[Math.floor(hash2(x, y, seed, 2) * all.length) % all.length];
-  }
+  if (terrain === 'MARECAGE') return 'INGREDIENT';   // cuisine (buffs)
   return 'MINERAI';
 }
 
