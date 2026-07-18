@@ -13,18 +13,28 @@ const sent = [];
 g.send = (id, ev, data) => sent.push({ id, ev, data });
 g.broadcast = () => {};
 
-// --- Comptes ---
-let r = g.auth({ username: 'Alice', speciesClass: 'LION_PALADIN' });
-assert.ok(r.ok && r.created, 'création de compte');
+// --- Comptes : inscription / connexion / token ---
+let r = g.register({ username: 'Alice', password: 'secret1', speciesClass: 'LION_PALADIN' });
+assert.ok(r.ok && r.created, 'inscription');
 const alice = r.player;
 alice.online = true;
 
-const r2 = g.auth({ token: alice.token });
-assert.strictEqual(r2.player, alice, 'reprise par token');
+assert.ok(!g.register({ username: 'Al', password: 'secret1', speciesClass: 'LION_PALADIN' }).ok, 'nom trop court refusé');
+assert.ok(!g.register({ username: 'Zoe', password: '123', speciesClass: 'LION_PALADIN' }).ok, 'mot de passe trop court refusé');
+assert.ok(!g.register({ username: 'alice', password: 'autre', speciesClass: 'CHAT_MAGICIEN' }).ok, 'nom déjà pris (insensible à la casse)');
 
-assert.ok(!g.auth({ username: 'alice', speciesClass: 'CHAT_MAGICIEN' }).ok, 'nom déjà pris (insensible à la casse)');
+const r2 = g.authToken(alice.token);
+assert.strictEqual(r2.player, alice, 'reprise de session par token');
+assert.ok(!g.authToken('mauvais-token').ok, 'token invalide refusé');
 
-r = g.auth({ username: 'Bob', speciesClass: 'CERF_DRUIDE' });
+assert.ok(!g.login({ username: 'Alice', password: 'mauvais' }).ok, 'mauvais mot de passe refusé');
+const oldToken = alice.token;
+const rLogin = g.login({ username: 'ALICE', password: 'secret1' });
+assert.ok(rLogin.ok, 'connexion (insensible à la casse)');
+assert.notStrictEqual(alice.token, oldToken, 'token de session régénéré à la connexion');
+assert.ok(!g.authToken(oldToken).ok, 'ancien token invalidé');
+
+r = g.register({ username: 'Bob', password: 'secret2', speciesClass: 'CERF_DRUIDE' });
 assert.ok(r.ok, 'second compte');
 const bob = r.player;
 bob.online = true;
@@ -130,16 +140,68 @@ alice.pos = { x: village.x, y: village.y };
 assert.ok(g.teleportVillage(alice, 0, 0).ok, 'téléportation vers la capitale');
 assert.deepStrictEqual(alice.pos, { x: 0, y: 0 }, 'arrivée à la capitale');
 
-// --- Persistance aller-retour ---
+// --- Talents de groupe : Sève (soin même en défaite) & Rempart ---
+// Bots éloignés pour un combat 100 % déterministe
+for (const b of g.bots.values()) { b.pos = { x: -45, y: -45 }; b.home = b.pos; }
+let boss = null;
+for (const t of g.tiles.values()) {
+  if (t.content && t.content.kind === 'monster' && t.content.tier === 5 &&
+      Math.max(Math.abs(t.x + 45), Math.abs(t.y + 45)) > 12) { boss = t; break; }
+}
+
+// 1) Défaite Alice (Lion) + Bob (Cerf Druide) contre un T5 : Sève soigne quand même
+alice.pos = { x: boss.x - 1, y: boss.y };
+bob.pos = { x: boss.x + 1, y: boss.y };
+alice.pa = 50; bob.pa = 50;
+alice.hp = 100; bob.hp = 100;
+sent.length = 0;
+assert.ok(g.createRaid(alice, boss.x, boss.y).ok, 'lobby T5 créé');
+assert.ok(g.joinRaid(bob, boss.x + ',' + boss.y).ok, 'Bob rejoint le T5');
+assert.ok(g.startRaidNow(alice, boss.x + ',' + boss.y).ok);
+g.tick(300);
+let res = sent.filter((m) => m.ev === 'result').map((m) => m.data);
+assert.strictEqual(res.length, 2, 'résultats envoyés');
+assert.ok(!res[0].victory, 'défaite attendue contre le T5');
+assert.strictEqual(res[0].hpLoss, 52, 'perte pleine sans Rempart (22 + 5×6)');
+assert.strictEqual(alice.hp, 100 - 52 + 15, 'Sève soigne aussi en défaite');
+assert.strictEqual(bob.hp, 100 - 52 + 15, 'Sève soigne toute l’équipe');
+
+// 2) Ajout de Cara (Ours Guerrier) : victoire, et Rempart réduit la perte de tous
+let rr = g.register({ username: 'Cara', password: 'secret3', speciesClass: 'OURS_GUERRIER' });
+assert.ok(rr.ok, 'troisième compte');
+const cara = rr.player;
+cara.online = true;
+cara.pos = { x: boss.x, y: boss.y + 1 };
+cara.pa = 50;
+alice.pa = 50; bob.pa = 50;
+alice.hp = 50; bob.hp = 50; cara.hp = 50;
+sent.length = 0;
+assert.ok(g.createRaid(alice, boss.x, boss.y).ok, 'second lobby T5');
+assert.ok(g.joinRaid(bob, boss.x + ',' + boss.y).ok);
+assert.ok(g.joinRaid(cara, boss.x + ',' + boss.y).ok);
+assert.ok(g.startRaidNow(alice, boss.x + ',' + boss.y).ok);
+g.tick(300);
+res = sent.filter((m) => m.ev === 'result').map((m) => m.data);
+assert.strictEqual(res.length, 3, 'résultats envoyés aux trois');
+assert.ok(res[0].victory, 'victoire à trois avec Aura');
+assert.strictEqual(res[0].hpLoss, 13, 'Rempart : perte réduite de 30 % (19 → 13)');
+assert.strictEqual(alice.hp, 50 - 13 + 15, 'Rempart profite à Alice + Sève');
+assert.strictEqual(cara.hp, 50 - 13 + 15, 'Rempart profite aussi à l’Ours');
+console.log('Talents de groupe : Sève en défaite ✔, Rempart d’équipe ✔');
+
+// --- Persistance aller-retour (token, état ET mot de passe) ---
 const snap = JSON.parse(JSON.stringify(g.serialize()));
 const g2 = new Game(snap.seed, snap);
-const r3 = g2.auth({ token: alice.token });
-assert.ok(r3.ok && r3.player.weapon.tier === 1, 'état restauré via token');
+const rTok = g2.authToken(alice.token);
+assert.ok(rTok.ok && rTok.player.weapon.tier === 1, 'état restauré via token');
+assert.ok(g2.login({ username: 'Alice', password: 'secret1' }).ok, 'mot de passe conservé après restauration');
+assert.ok(!g2.login({ username: 'Alice', password: 'faux' }).ok, 'mauvais mot de passe refusé après restauration');
 
 // --- Reset DEV ---
-const r4 = g2.dev(r3.player, { reset: true });
+const r4 = g2.dev(rTok.player, { reset: true });
 assert.ok(r4.ok && r4.reset, 'reset de compte');
-assert.ok(!g2.auth({ token: alice.token }).ok, 'token invalidé');
+assert.ok(!g2.authToken(rTok.player.token).ok, 'token invalidé');
+assert.ok(!g2.login({ username: 'Alice', password: 'secret1' }).ok, 'connexion impossible après reset');
 
 console.log('\ntest-game : tous les tests passent ✔');
 

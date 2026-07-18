@@ -33,13 +33,15 @@ class Game {
     this.now = 0;
     this.speed = Math.max(1, Number(process.env.SPEED) || 1);
     this.tiles = generateWorld(seed);
-    this.players = new Map();   // accountId -> joueur humain (persistant)
-    this.bots = new Map();      // botId -> bot
-    this.tokens = new Map();    // token -> accountId
-    this.raids = new Map();     // tileKey -> raid
+    this.players = new Map();      // accountId -> joueur humain (persistant)
+    this.credentials = new Map();  // accountId -> {passHash, passSalt, createdAt} (jamais envoyé au client)
+    this.bots = new Map();         // botId -> bot
+    this.tokens = new Map();       // token -> accountId
+    this.raids = new Map();        // tileKey -> raid
     this.pendingReplies = [];
     this.send = () => {};       // (accountId, ev, data) — branché par index.js
     this.broadcast = () => {};  // (ev, data)
+    this.onDirty = () => {};    // (player) — persistance immédiate, branchée par index.js
     if (persisted) this.load(persisted);
     this.spawnBots();
   }
@@ -48,7 +50,7 @@ class Game {
   log(text) { this.broadcast('chat', { from: null, text, type: 'event' }); }
   plog(p, text) { this.send(p.id, 'chat', { from: null, text, type: 'event' }); }
   toast(p, text) { this.send(p.id, 'toast', { text }); }
-  pushSelf(p) { this.send(p.id, 'self', p); }
+  pushSelf(p) { this.send(p.id, 'self', p); this.onDirty(p); }
   raidsChanged() { this.broadcast('raids', this.raidsPayload()); }
   worldPatch(key, inactiveUntil) { this.broadcast('world', { key, inactiveUntil }); }
 
@@ -58,51 +60,106 @@ class Game {
     return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
   }
 
-  /* ---------- Comptes ---------- */
-  auth(data) {
-    // Reprise de session par token
-    if (data.token && this.tokens.has(data.token)) {
-      const p = this.players.get(this.tokens.get(data.token));
-      if (p) {
-        const away = Math.max(0, Date.now() - (p.lastSeen || Date.now()));
-        p.pa = Math.min(CONFIG.PA.MAX, p.pa + Math.floor(away / CONFIG.PA.REGEN_MS));
-        p.hp = Math.min(maxHp(p), p.hp + Math.floor(away / CONFIG.HP.REGEN_MS));
-        p.lastSeen = Date.now();
-        return { ok: true, player: p };
+  /* ---------- Comptes : inscription / connexion / session ---------- */
+
+  hashPassword(password, salt) {
+    return crypto.scryptSync(String(password), salt, 64).toString('hex');
+  }
+
+  /* Recharge hors-ligne + nouvelle session */
+  resumePlayer(p) {
+    const away = Math.max(0, Date.now() - (p.lastSeen || Date.now()));
+    p.pa = Math.min(CONFIG.PA.MAX, p.pa + Math.floor(away / CONFIG.PA.REGEN_MS));
+    p.hp = Math.min(maxHp(p), p.hp + Math.floor(away / CONFIG.HP.REGEN_MS));
+    p.lastSeen = Date.now();
+  }
+
+  /* Reprise de session par token (reconnexion automatique) */
+  authToken(token) {
+    if (!token || !this.tokens.has(token)) return { ok: false };
+    const p = this.players.get(this.tokens.get(token));
+    if (!p) return { ok: false };
+    this.resumePlayer(p);
+    return { ok: true, player: p };
+  }
+
+  /* Inscription : nom + mot de passe + classe */
+  register(data) {
+    const username = String(data.username || '').trim().slice(0, 16);
+    const password = String(data.password || '');
+    if (username.length < 3) return { ok: false, error: 'Nom trop court (3 caractères minimum).' };
+    if (!/^[\p{L}\p{N} _-]+$/u.test(username)) return { ok: false, error: 'Nom invalide (lettres, chiffres, espaces, - et _).' };
+    if (password.length < 4) return { ok: false, error: 'Mot de passe trop court (4 caractères minimum).' };
+    if (!CLASSES[data.speciesClass]) return { ok: false, error: 'Classe invalide.' };
+
+    const id = 'p_' + username.toLowerCase();
+    if (this.players.has(id)) {
+      return { ok: false, error: 'Le nom « ' + username + ' » est déjà pris.' };
+    }
+
+    const passSalt = crypto.randomBytes(16).toString('hex');
+    this.credentials.set(id, {
+      passHash: this.hashPassword(password, passSalt),
+      passSalt,
+      createdAt: Date.now(),
+    });
+
+    const gear = CLASS_GEAR[data.speciesClass];
+    const p = {
+      id, username, speciesClass: data.speciesClass, bot: false,
+      token: crypto.randomBytes(16).toString('hex'),
+      online: false, lastSeen: Date.now(),
+      pos: { x: 0, y: 0 },
+      pa: CONFIG.PA.START, paMs: 0,
+      hp: 100, hpMs: 0,
+      harvestXp: 0, harvestLevel: 1,
+      weaponXp: 0, weaponMastery: 1,
+      weapon: { tier: 0, type: gear.weapon },
+      armor: { tier: 0, type: gear.armor },
+      inventory: {},
+      status: 'IDLE',
+      harvestKey: null, harvestEndsAt: 0,
+      raidKey: null,
+    };
+    p.hp = maxHp(p);
+    this.players.set(id, p);
+    this.tokens.set(p.token, id);
+    this.onDirty(p);
+    this.log('🐾 ' + username + ' entre dans les Terres Sauvages !');
+    return { ok: true, created: true, player: p };
+  }
+
+  /* Connexion : nom + mot de passe → nouveau token de session */
+  login(data) {
+    const username = String(data.username || '').trim();
+    const password = String(data.password || '');
+    const id = 'p_' + username.toLowerCase();
+    const p = this.players.get(id);
+    if (!p) return { ok: false, error: 'Compte inconnu.' };
+
+    let cred = this.credentials.get(id);
+    if (!cred || !cred.passHash) {
+      // Compte d'avant les mots de passe : la première connexion le définit
+      if (password.length < 4) return { ok: false, error: 'Mot de passe trop court (4 caractères minimum).' };
+      const passSalt = crypto.randomBytes(16).toString('hex');
+      cred = { passHash: this.hashPassword(password, passSalt), passSalt, createdAt: Date.now() };
+      this.credentials.set(id, cred);
+      this.plog(p, 'Mot de passe défini pour ce compte.');
+    } else {
+      const tryHash = Buffer.from(this.hashPassword(password, cred.passSalt), 'hex');
+      const goodHash = Buffer.from(cred.passHash, 'hex');
+      if (tryHash.length !== goodHash.length || !crypto.timingSafeEqual(tryHash, goodHash)) {
+        return { ok: false, error: 'Mot de passe incorrect.' };
       }
     }
-    // Création de compte
-    if (data.username && data.speciesClass && CLASSES[data.speciesClass]) {
-      const username = String(data.username).trim().slice(0, 16);
-      if (!username) return { ok: false, needsCreation: true, error: 'Nom invalide.' };
-      const id = 'p_' + username.toLowerCase();
-      if (this.players.has(id)) {
-        return { ok: false, needsCreation: true, error: 'Le nom « ' + username + ' » est déjà pris.' };
-      }
-      const gear = CLASS_GEAR[data.speciesClass];
-      const p = {
-        id, username, speciesClass: data.speciesClass, bot: false,
-        token: crypto.randomBytes(16).toString('hex'),
-        online: false, lastSeen: Date.now(),
-        pos: { x: 0, y: 0 },
-        pa: CONFIG.PA.START, paMs: 0,
-        hp: 100, hpMs: 0,
-        harvestXp: 0, harvestLevel: 1,
-        weaponXp: 0, weaponMastery: 1,
-        weapon: { tier: 0, type: gear.weapon },
-        armor: { tier: 0, type: gear.armor },
-        inventory: {},
-        status: 'IDLE',
-        harvestKey: null, harvestEndsAt: 0,
-        raidKey: null,
-      };
-      p.hp = maxHp(p);
-      this.players.set(id, p);
-      this.tokens.set(p.token, id);
-      this.log('🐾 ' + username + ' entre dans les Terres Sauvages !');
-      return { ok: true, created: true, player: p };
-    }
-    return { ok: false, needsCreation: true };
+
+    // Rotation du token : invalide les anciennes sessions
+    if (p.token) this.tokens.delete(p.token);
+    p.token = crypto.randomBytes(16).toString('hex');
+    this.tokens.set(p.token, p.id);
+    this.resumePlayer(p);
+    this.onDirty(p);
+    return { ok: true, player: p };
   }
 
   initPayload(p) {
@@ -353,7 +410,10 @@ class Game {
     const members = raid.participants.map((id) => this.memberById(id)).filter(Boolean);
     const force = this.teamForce(raid);
     const victory = force > raid.monsterForce;
-    const druid = victory && members.some((p) => p.speciesClass === 'CERF_DRUIDE');
+    // Talents d'équipe (non cumulables) : Sève soigne victoire OU défaite,
+    // Rempart réduit la perte de PV de tout le groupe.
+    const druid = members.some((p) => p.speciesClass === 'CERF_DRUIDE');
+    const rampart = members.some((p) => p.speciesClass === 'OURS_GUERRIER');
     const names = members.map((p) => p.username);
 
     for (const p of members) {
@@ -362,7 +422,7 @@ class Game {
 
       let loss = victory ? 4 + raid.tier * 3 : 22 + raid.tier * 6;
       loss *= hpLossReduction(p);
-      if (p.speciesClass === 'OURS_GUERRIER') loss *= 0.5;
+      if (rampart) loss *= 0.7;
       loss = Math.max(1, Math.round(loss));
       p.hp -= loss;
       if (druid) p.hp = Math.min(maxHp(p), p.hp + 15);
@@ -531,6 +591,7 @@ class Game {
     if (action.reset) {
       if (p.raidKey) return { ok: false, error: 'Impossible pendant un raid.' };
       this.players.delete(p.id);
+      this.credentials.delete(p.id);
       this.tokens.delete(p.token);
       this.log(p.username + ' a quitté définitivement les Terres Sauvages.');
       return { ok: true, reset: true };
@@ -594,11 +655,14 @@ class Game {
 
   /* ---------- Persistance ---------- */
   serialize() {
+    const credentials = {};
+    for (const [id, cred] of this.credentials) credentials[id] = cred;
     return {
       seed: this.seed,
       now: this.now,
       speed: this.speed,
       players: [...this.players.values()],
+      credentials,
       worldDiffs: this.worldDiffs(),
       savedAt: Date.now(),
     };
@@ -614,6 +678,9 @@ class Game {
       p.raidKey = null;
       this.players.set(p.id, p);
       if (p.token) this.tokens.set(p.token, p.id);
+    }
+    for (const [id, cred] of Object.entries(data.credentials || {})) {
+      this.credentials.set(id, cred);
     }
     for (const [key, until] of data.worldDiffs || []) {
       const tile = this.tiles.get(key);

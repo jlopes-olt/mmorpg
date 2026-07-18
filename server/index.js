@@ -4,8 +4,11 @@
  * index.js — serveur WildRift RPG.
  *
  * - Sert le client statique (racine du repo)
- * - Socket.io : auth par token, actions avec ack, broadcasts
- * - Persistance : server/data/state.json (30 s + arrêt propre)
+ * - Socket.io : inscription/connexion (mot de passe) + reprise de
+ *   session par token, actions avec ack, broadcasts
+ * - Persistance : SQLite (server/data/wildrift.db) — chaque compte
+ *   est écrit immédiatement après un événement important, plus un
+ *   filet de sécurité périodique pour l'horloge et les respawns.
  *
  * Lancement :  npm start          (port 3000)
  *              PORT=8080 SPEED=10 npm start   (tests accélérés)
@@ -17,32 +20,90 @@ const http = require('http');
 const express = require('express');
 const { Server } = require('socket.io');
 const { Game } = require('./game.js');
+const { Store } = require('./store.js');
 const { CONFIG } = require('../js/config.js');
 
 const ROOT = path.join(__dirname, '..');
-const STATE_FILE = process.env.STATE_FILE || path.join(__dirname, 'data', 'state.json');
+const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'data', 'wildrift.db');
+const LEGACY_STATE_FILE = process.env.STATE_FILE || path.join(__dirname, 'data', 'state.json');
 const PORT = Number(process.env.PORT) || 3000;
 const TICK_MS = 250;
 
-/* ---------- État persistant ---------- */
-let persisted = null;
-try {
-  persisted = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-  console.log('État restauré :', persisted.players.length, 'compte(s), horloge', Math.round(persisted.now / 1000) + ' s');
-} catch (e) {
-  console.log('Aucun état sauvegardé — nouveau monde (seed ' + CONFIG.WORLD.SEED + ')');
+/* ---------- Persistance SQLite ---------- */
+const store = new Store(DB_FILE);
+
+let seed = store.getMeta('seed', null);
+let initialState = null;
+
+if (store.countAccounts() === 0 && seed === null && fs.existsSync(LEGACY_STATE_FILE)) {
+  // Migration unique depuis l'ancien state.json
+  try {
+    initialState = JSON.parse(fs.readFileSync(LEGACY_STATE_FILE, 'utf8'));
+    seed = initialState.seed;
+    console.log('Migration de state.json → SQLite (' + (initialState.players || []).length + ' compte(s))');
+  } catch (e) {
+    console.error('state.json illisible, ignoré :', e.message);
+  }
+} else if (seed !== null) {
+  initialState = {
+    now: store.getMeta('now', 0),
+    players: [],
+    credentials: {},
+    worldDiffs: store.loadDiffs(),
+  };
+  for (const { player, credentials } of store.loadAccounts()) {
+    initialState.players.push(player);
+    initialState.credentials[player.id] = credentials;
+  }
+  console.log('État restauré : ' + initialState.players.length + ' compte(s), horloge ' +
+    Math.round(initialState.now / 1000) + ' s');
 }
 
-const game = new Game((persisted && persisted.seed) || CONFIG.WORLD.SEED, persisted);
+if (seed === null) {
+  seed = CONFIG.WORLD.SEED;
+  console.log('Nouveau monde (seed ' + seed + ')');
+}
 
-function saveState() {
+const game = new Game(seed, initialState);
+
+function saveAccountOf(p) {
   try {
-    fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
-    fs.writeFileSync(STATE_FILE, JSON.stringify(game.serialize()));
+    store.saveAccount(p, game.credentials.get(p.id));
   } catch (e) {
-    console.error('Sauvegarde impossible :', e.message);
+    console.error('Sauvegarde compte impossible :', e.message);
   }
 }
+
+function saveWorld() {
+  try {
+    store.transaction(() => {
+      store.setMeta('seed', game.seed);
+      store.setMeta('now', game.now);
+      store.setMeta('savedAt', Date.now());
+    });
+    store.saveDiffs(game.worldDiffs());
+  } catch (e) {
+    console.error('Sauvegarde monde impossible :', e.message);
+  }
+}
+
+function saveAll() {
+  saveWorld();
+  for (const p of game.players.values()) saveAccountOf(p);
+}
+
+// Événements internes (fin de récolte, résolution de raid…) → écriture immédiate
+game.onDirty = (p) => saveAccountOf(p);
+
+// Migration : on fige tout de suite l'état importé, puis on archive le JSON
+if (store.countAccounts() === 0 && initialState && initialState.savedAt) {
+  saveAll();
+  try {
+    fs.renameSync(LEGACY_STATE_FILE, LEGACY_STATE_FILE + '.imported');
+    console.log('Migration terminée — state.json archivé en state.json.imported');
+  } catch (e) { /* déjà archivé ou inaccessible */ }
+}
+saveWorld();   // fige seed + horloge dès le démarrage
 
 /* ---------- HTTP + Socket.io ---------- */
 const app = express();
@@ -63,27 +124,40 @@ game.broadcast = (ev, data) => io.emit(ev, data);
 io.on('connection', (socket) => {
   let player = null;
 
-  socket.on('auth', (data) => {
-    const res = game.auth(data || {});
-    if (!res.ok) {
-      socket.emit('creation', res.error ? { error: res.error } : {});
-      return;
-    }
-    player = res.player;
-
+  const finishAuth = (p, created) => {
+    player = p;
     // Une seule session par compte : on débranche l'ancienne
     const old = sockets.get(player.id);
     if (old && old !== socket) old.disconnect(true);
     sockets.set(player.id, socket);
     player.online = true;
     player.lastSeen = Date.now();
-
+    saveAccountOf(player);
     socket.emit('init', game.initPayload(player));
-    if (!res.created) game.log(player.username + ' est de retour en jeu.');
+    if (!created) game.log(player.username + ' est de retour en jeu.');
+  };
+
+  // Reprise de session automatique (token stocké côté navigateur)
+  socket.on('auth', (data) => {
+    const res = game.authToken(data && data.token);
+    if (res.ok) finishAuth(res.player, false);
+    else socket.emit('creation', {});   // → écran inscription / connexion
+  });
+
+  socket.on('register', (data) => {
+    const res = game.register(data || {});
+    if (res.ok) finishAuth(res.player, true);
+    else socket.emit('creation', { error: res.error });
+  });
+
+  socket.on('login', (data) => {
+    const res = game.login(data || {});
+    if (res.ok) finishAuth(res.player, false);
+    else socket.emit('creation', { error: res.error });
   });
 
   // Toutes les actions : validation authentifié + ack {ok, error?}
-  // + push de l'état perso après une action réussie.
+  // + push de l'état perso et écriture SQLite après une action réussie.
   const act = (fn) => (payload, ack) => {
     if (typeof ack !== 'function') ack = () => {};
     if (!player || !game.players.has(player.id)) {
@@ -97,7 +171,10 @@ io.on('connection', (socket) => {
       console.error('Erreur action :', e);
       r = { ok: false, error: 'Erreur serveur.' };
     }
-    if (r && r.ok) socket.emit('self', player);
+    if (r && r.ok) {
+      socket.emit('self', player);
+      saveAccountOf(player);
+    }
     ack(r);
   };
 
@@ -114,6 +191,7 @@ io.on('connection', (socket) => {
   socket.on('dev', act((d) => {
     const r = game.dev(player, d);
     if (r.ok && r.reset) {
+      store.deleteAccount(player.id);
       sockets.delete(player.id);
       setTimeout(() => socket.disconnect(true), 100);
     }
@@ -128,6 +206,7 @@ io.on('connection', (socket) => {
     if (sockets.get(player.id) === socket) sockets.delete(player.id);
     player.online = false;
     player.lastSeen = Date.now();
+    if (game.players.has(player.id)) saveAccountOf(player);
   });
 });
 
@@ -142,16 +221,24 @@ setInterval(() => {
     if (p) sock.emit('self', p);
   }
 }, 2000);
-setInterval(saveState, 30000);
+// Filet de sécurité : horloge, respawns et joueurs connectés
+setInterval(() => {
+  saveWorld();
+  for (const id of sockets.keys()) {
+    const p = game.players.get(id);
+    if (p) saveAccountOf(p);
+  }
+}, 30000);
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
     console.log('\nArrêt — sauvegarde de l’état…');
-    saveState();
+    saveAll();
+    store.close();
     process.exit(0);
   });
 }
 
 httpServer.listen(PORT, () => {
-  console.log('WildRift RPG : http://localhost:' + PORT + '  (SPEED x' + game.speed + ')');
+  console.log('WildRift RPG : http://localhost:' + PORT + '  (SPEED x' + game.speed + ', DB ' + DB_FILE + ')');
 });
