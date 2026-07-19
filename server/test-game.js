@@ -5,7 +5,7 @@
 process.env.SPEED = '1';
 
 const assert = require('assert');
-const { Game } = require('./game.js');
+const { Game, CHAT_LOG_MAX } = require('./game.js');
 const {
   CONFIG, CLASSES, MAX_CHAR_SLOTS, MONSTER_FORCE, playerForce, maxHp,
   combatPower, teamPowerOf, winChance, BUFF_COMBATS,
@@ -74,13 +74,14 @@ for (let tier = 1; tier <= 5; tier++) {
       weapon: { tier: tier - 1 },
       armor: { tier: tier - 1 },
       weaponMastery: tier,
-      hp: 100 + (tier - 1) * 15,
     };
+    parity.hp = maxHp(parity);   // plein PV, quel que soit le socle de la classe
     const pParity = winChance(teamPowerOf([parity]), MONSTER_FORCE[tier]);
     assert.ok(pParity >= 0.5 && pParity <= 0.92,
       speciesClass + ' à parité vs T' + tier + ' : ' + Math.round(pParity * 100) + ' % (attendu 50-92)');
 
-    const geared = { ...parity, weapon: { tier }, armor: { tier }, hp: 100 + tier * 15 };
+    const geared = { ...parity, weapon: { tier }, armor: { tier } };
+    geared.hp = maxHp(geared);
     const pGeared = winChance(teamPowerOf([geared]), MONSTER_FORCE[tier]);
     assert.ok(pGeared >= 0.9,
       speciesClass + ' suréquipé vs T' + tier + ' : ' + Math.round(pGeared * 100) + ' % (attendu ≥ 90)');
@@ -235,8 +236,10 @@ res = sent.filter((m) => m.ev === 'result').map((m) => m.data);
 assert.strictEqual(res.length, 3, 'résultats envoyés aux trois');
 assert.ok(res[0].victory, 'victoire forcée');
 assert.strictEqual(res[0].hpLoss, 13, 'Rempart : usure réduite de 30 % (19 → 13)');
-assert.strictEqual(alice.hp, 50 - 13 + 15, 'Sève : +15 % des PV max (100) après victoire');
-assert.strictEqual(cara.hp, 50 - 13 + 15, 'Rempart + Sève profitent aussi à l’Ours');
+const aliceHeal = Math.round(maxHp(alice) * CONFIG.COMBAT.DRUID_HEAL_PCT);
+const caraHeal = Math.round(maxHp(cara) * CONFIG.COMBAT.DRUID_HEAL_PCT);
+assert.strictEqual(alice.hp, 50 - 13 + aliceHeal, 'Sève : +15 % des PV max après victoire');
+assert.strictEqual(cara.hp, 50 - 13 + caraHeal, 'Rempart + Sève profitent aussi à l’Ours');
 g.rng = Math.random;
 console.log('Combat : mort en défaite ✔, Sève % ✔, Rempart ✔');
 
@@ -254,8 +257,8 @@ assert.ok(
 );
 // Donjons T6 : squelette ≈ 3 joueurs T5, boss ≈ 5 joueurs T5 —
 // et l'équipement T6 allège d'une personne.
-const t5p = (cls) => ({ speciesClass: cls || 'RENARD_VOLEUR', weapon: { tier: 5 }, armor: { tier: 5 }, weaponMastery: 5, hp: 175 });
-const t6p = (cls) => ({ speciesClass: cls || 'RENARD_VOLEUR', weapon: { tier: 6 }, armor: { tier: 6 }, weaponMastery: 5, hp: 190 });
+const t5p = (cls) => { const p = { speciesClass: cls || 'RENARD_VOLEUR', weapon: { tier: 5 }, armor: { tier: 5 }, weaponMastery: 5 }; p.hp = maxHp(p); return p; };
+const t6p = (cls) => { const p = { speciesClass: cls || 'RENARD_VOLEUR', weapon: { tier: 6 }, armor: { tier: 6 }, weaponMastery: 5 }; p.hp = maxHp(p); return p; };
 const team = (n, mk) => Array.from({ length: n }, () => mk());
 const BOSS_FORCE = 680;
 
@@ -285,14 +288,16 @@ assert.ok(!g.createCharacter(alice, 'CHAT_MAGICIEN').ok, 'troisième forme refus
 
 // Métamorphose : PV en pourcentage, maîtrises et équipement séparés,
 // inventaire et PA partagés
-alice.armor.tier = 2;                                    // Lion : 130 PV max
-alice.hp = 65;                                           // 50 %
+alice.armor.tier = 2;
+alice.hp = 70;                                           // PV arbitraires avant métamorphose
+const lionPct = alice.hp / maxHp(alice);                 // % des PV max du Lion à cet instant
 const paBefore = alice.pa;
 const invBefore = JSON.stringify(alice.inventory);
 const lionMastery = alice.weaponMastery;
 assert.ok(g.switchCharacter(alice, 1).ok, 'métamorphose à la Capitale');
 assert.strictEqual(alice.speciesClass, 'CERF_DRUIDE', 'forme active changée');
-assert.strictEqual(alice.hp, 50, 'PV en pourcentage : 50 % de 100 (armure T0)');
+assert.strictEqual(alice.hp, Math.max(1, Math.round(lionPct * maxHp(alice))),
+  'PV recalculés au même pourcentage dans le nouveau socle (Cerf Druide, armure T0)');
 assert.strictEqual(alice.weaponMastery, 1, 'maîtrise propre à la nouvelle forme');
 assert.strictEqual(alice.weapon.tier, 0, 'équipement propre à la nouvelle forme');
 assert.strictEqual(alice.pa, paBefore, 'PA partagés (inchangés)');
@@ -416,9 +421,160 @@ const carlRow = g.adminPlayerList().find((row) => row.username === 'Carl');
 assert.ok(carlRow && carlRow.gold === carl.gold && carlRow.role === 'user', 'liste des comptes à jour');
 console.log('Administration : rôles ✔, triche gatée ✔, dashboard ✔');
 
+// --- Duels amicaux : aucune perte de PV ni d'or, seul le palmarès évolue ---
+bob.pos = { x: 5, y: 5 }; bob.mapId = 'world'; bob.status = 'IDLE';
+carl.pos = { x: 50, y: 50 }; carl.mapId = 'world'; carl.status = 'IDLE';   // trop loin
+assert.ok(!g.requestDuel(bob, carl.id).ok, 'duel refusé hors de portée');
+
+carl.pos = { x: 6, y: 5 };   // adjacent à Bob
+assert.ok(!g.requestDuel(bob, bob.id).ok, 'impossible de se défier soi-même');
+assert.ok(!g.requestDuel(bob, 'bot0').ok, 'impossible de défier un bot');
+
+sent.length = 0;
+assert.ok(g.requestDuel(bob, carl.id).ok, 'défi envoyé');
+const duelInvites = sent.filter((m) => m.ev === 'duelInvite');
+assert.strictEqual(duelInvites.length, 1, 'invitation reçue');
+assert.strictEqual(duelInvites[0].id, carl.id, 'invitation adressée à Carl');
+
+// Refus : pas de résolution, aucun résultat envoyé
+sent.length = 0;
+assert.ok(g.respondDuelInvite(carl, bob.id, false).ok, 'refus du duel');
+assert.strictEqual(sent.filter((m) => m.ev === 'duelResult').length, 0, 'aucun duel résolu après refus');
+
+// Acceptation : résolution immédiate, amicale (aucun enjeu)
+const bobGoldBefore = bob.gold, carlGoldBefore = carl.gold;
+const bobHpBefore = bob.hp, carlHpBefore = carl.hp;
+const bobWinsBefore = bob.duels.wins, carlLossesBefore = carl.duels.losses;
+sent.length = 0;
+assert.ok(g.requestDuel(bob, carl.id).ok, 'second défi envoyé');
+g.rng = () => 0;   // Bob l'emporte à coup sûr
+assert.ok(g.respondDuelInvite(carl, bob.id, true).ok, 'duel accepté');
+g.rng = Math.random;
+
+const duelResults = sent.filter((m) => m.ev === 'duelResult');
+assert.strictEqual(duelResults.length, 2, 'résultat envoyé aux deux duellistes');
+const bobResult = duelResults.find((m) => m.id === bob.id).data;
+const carlResult = duelResults.find((m) => m.id === carl.id).data;
+assert.ok(bobResult.won && !carlResult.won, 'Bob remporte le duel forcé');
+assert.strictEqual(bobResult.opponent, 'Carl', 'adversaire de Bob correctement identifié');
+assert.strictEqual(carlResult.opponent, 'Bob', 'adversaire de Carl correctement identifié');
+assert.strictEqual(bob.duels.wins, bobWinsBefore + 1, 'victoire comptabilisée');
+assert.strictEqual(carl.duels.losses, carlLossesBefore + 1, 'défaite comptabilisée');
+assert.strictEqual(bob.gold, bobGoldBefore, 'duel amical : aucun or gagné/perdu');
+assert.strictEqual(carl.gold, carlGoldBefore, 'duel amical : aucun or gagné/perdu');
+assert.strictEqual(bob.hp, bobHpBefore, 'duel amical : aucun PV perdu (vainqueur)');
+assert.strictEqual(carl.hp, carlHpBefore, 'duel amical : aucun PV perdu (perdant)');
+console.log('Duels : portée ✔, invitation/refus ✔, résolution amicale ✔ (palmarès, sans perte)');
+
+// --- Guildes ---
+assert.ok(g.createGuild(bob, 'Aigles').ok, 'création de guilde');
+assert.ok(bob.guildId, 'le fondateur rejoint sa guilde');
+assert.ok(!g.createGuild(bob, 'Corbeaux').ok, 'impossible de fonder une seconde guilde');
+assert.ok(!g.createGuild(carl, 'ai').ok, 'nom de guilde trop court refusé');
+assert.ok(!g.createGuild(carl, 'aigles').ok, 'nom de guilde déjà pris refusé (insensible à la casse)');
+
+assert.ok(g.inviteToGuild(bob, 'Carl').ok, 'invitation envoyée par le chef');
+assert.ok(carl.guildInvite && carl.guildInvite.guildName === 'Aigles', 'invitation reçue par Carl');
+assert.ok(g.respondGuildInvite(carl, true).ok, 'invitation acceptée');
+assert.strictEqual(carl.guildId, bob.guildId, 'Carl a rejoint la guilde de Bob');
+assert.ok(!carl.guildInvite, 'invitation consommée après réponse');
+
+assert.ok(!g.inviteToGuild(carl, 'Alice').ok, 'un simple membre ne peut pas inviter');
+
+let info = g.guildInfo(bob);
+assert.ok(info.ok && info.guild.members.length === 2, 'roster à jour (2 membres)');
+assert.ok(info.guild.members.find((m) => m.username === 'Bob').isLeader, 'Bob repéré comme chef');
+
+assert.ok(g.leaveGuild(carl).ok, 'Carl quitte la guilde');
+assert.strictEqual(carl.guildId, null, 'Carl n’a plus de guilde');
+assert.strictEqual(g.guilds.get(bob.guildId).members.length, 1, 'roster réduit à Bob seul');
+
+assert.ok(g.inviteToGuild(bob, 'Carl').ok && g.respondGuildInvite(carl, true).ok, 'Carl rejoint à nouveau');
+assert.ok(g.kickFromGuild(bob, 'Carl').ok, 'le chef exclut Carl');
+assert.strictEqual(carl.guildId, null, 'Carl exclu de la guilde');
+assert.ok(!g.kickFromGuild(bob, 'Carl').ok, 'exclure un non-membre échoue');
+
+assert.ok(g.inviteToGuild(bob, 'Carl').ok && g.respondGuildInvite(carl, true).ok, 'Carl rejoint une troisième fois');
+const guildId = bob.guildId;
+assert.ok(g.leaveGuild(bob).ok, 'le chef quitte la guilde');
+assert.strictEqual(g.guilds.get(guildId).leaderId, carl.id, 'le rôle de chef est transféré au dernier membre restant');
+assert.ok(g.leaveGuild(carl).ok, 'dernier membre quitte à son tour');
+assert.ok(!g.guilds.has(guildId), 'guilde dissoute une fois vide');
+console.log('Guildes : création/invitation/rôles ✔, exclusion ✔, transfert de chef ✔, dissolution ✔');
+
+// --- Amis ---
+assert.ok(g.sendFriendRequest(alice, 'Bob').ok, 'demande d’ami envoyée');
+assert.ok(bob.friendRequests.some((r) => r.fromId === alice.id), 'Bob reçoit la demande');
+assert.ok(!g.sendFriendRequest(alice, 'Alice').ok, 'impossible de s’ajouter soi-même');
+assert.ok(!g.sendFriendRequest(alice, 'Personne').ok, 'joueur inconnu refusé');
+
+assert.ok(g.respondFriendRequest(bob, alice.id, true).ok, 'demande acceptée');
+assert.ok(alice.friends.includes(bob.id) && bob.friends.includes(alice.id), 'amitié symétrique');
+assert.ok(!g.sendFriendRequest(alice, 'Bob').ok, 'déjà amis : nouvelle demande refusée');
+
+assert.ok(g.sendFriendRequest(carl, 'Alice').ok, 'Carl envoie une demande à Alice');
+const reciprocal = g.sendFriendRequest(alice, 'Carl');
+assert.ok(reciprocal.ok && reciprocal.addedDirectly, 'demande réciproque acceptée directement');
+assert.ok(alice.friends.includes(carl.id) && carl.friends.includes(alice.id), 'Alice et Carl amis sans étape supplémentaire');
+assert.strictEqual(alice.friendRequests.length, 0, 'la demande en attente est consommée par la réciprocité');
+
+assert.ok(g.removeFriend(alice, 'Bob').ok, 'retrait d’ami');
+assert.ok(!alice.friends.includes(bob.id) && !bob.friends.includes(alice.id), 'amitié rompue des deux côtés');
+console.log('Amis : demandes ✔, symétrie ✔, réciprocité automatique ✔, retrait ✔');
+
+// --- Canaux de discussion ---
+assert.ok(!g.say(alice, 'yo', 'guild').ok, 'canal guilde refusé hors guilde');
+
+assert.ok(g.createGuild(carl, 'Faucons').ok, 'nouvelle guilde pour tester le canal');
+assert.ok(g.inviteToGuild(carl, 'Bob').ok && g.respondGuildInvite(bob, true).ok, 'Bob rejoint les Faucons');
+bob.online = true; carl.online = true;
+sent.length = 0;
+assert.ok(g.say(carl, 'Assaut à 20h', 'guild').ok, 'message de guilde envoyé');
+const guildMsgs = sent.filter((m) => m.ev === 'chat' && m.data.channel === 'guild');
+assert.ok(guildMsgs.some((m) => m.id === bob.id), 'Bob (membre en ligne) reçoit le message de guilde');
+assert.ok(!guildMsgs.some((m) => m.id === alice.id), 'Alice (hors guilde) ne reçoit rien');
+
+sent.length = 0;
+assert.ok(!g.say(alice, 'x', 'whisper', 'Bob').ok, 'MP refusé entre non-amis');
+assert.ok(!g.say(alice, 'x', 'whisper', 'Alice').ok, 'MP à soi-même refusé');
+
+carl.online = true;
+assert.ok(g.say(alice, 'Psst', 'whisper', 'Carl').ok, 'MP envoyé entre amis');
+const whisperMsgs = sent.filter((m) => m.ev === 'chat' && m.data.channel === 'whisper');
+assert.ok(whisperMsgs.some((m) => m.id === alice.id) && whisperMsgs.some((m) => m.id === carl.id), 'MP livré aux deux amis');
+
+carl.online = false;
+sent.length = 0;
+const offlineWhisper = g.say(alice, 'Toujours là ?', 'whisper', 'Carl');
+assert.ok(offlineWhisper.ok && offlineWhisper.offline, 'MP vers un ami hors ligne signalé comme non livré');
+assert.ok(sent.some((m) => m.id === alice.id) && !sent.some((m) => m.id === carl.id), 'seul l’expéditeur reçoit l’écho si le destinataire est hors ligne');
+console.log('Canaux : guilde restreinte aux membres ✔, MP réservés aux amis ✔, statut hors ligne signalé ✔');
+
+// --- Historique de discussion : coordination asynchrone après déconnexion ---
+// À ce stade : 1 message de guilde (Faucons : Bob + Carl) et 2 MP (Alice <-> Carl) enregistrés.
+const bobHistory = g.chatHistoryFor(bob);
+assert.strictEqual(bobHistory.length, 1, 'Bob (membre des Faucons, sans MP) ne revoit que le message de guilde');
+assert.strictEqual(bobHistory[0].channel, 'guild', 'entrée bien de type guilde');
+
+const aliceHistory = g.chatHistoryFor(alice);
+assert.strictEqual(aliceHistory.length, 2, 'Alice (hors guilde) ne revoit que ses deux MP avec Carl');
+assert.ok(aliceHistory.every((m) => m.channel === 'whisper'), 'aucun message de guilde étranger visible par Alice');
+
+const carlHistory = g.chatHistoryFor(carl);
+assert.strictEqual(carlHistory.length, 3, 'Carl (membre + participant des deux MP) revoit tout ce qui le concerne');
+
+assert.deepStrictEqual(g.initPayload(bob).chatHistory, bobHistory, 'initPayload reprend chatHistoryFor à la (re)connexion');
+
+const busyBefore = g.chatLog.length;
+for (let i = 0; i < CHAT_LOG_MAX + 10; i++) g.say(bob, 'spam ' + i, 'general');
+assert.ok(g.chatLog.length <= CHAT_LOG_MAX, 'l’historique reste borné (plafond ' + CHAT_LOG_MAX + ')');
+assert.ok(g.chatLog.length > busyBefore, 'les nouveaux messages remplacent bien les plus anciens');
+console.log('Historique : filtrage par destinataire ✔, plafond respecté ✔');
+
 // --- Persistance aller-retour (token, état ET mot de passe) ---
 const snap = JSON.parse(JSON.stringify(g.serialize()));
 const g2 = new Game(snap.seed, snap);
+assert.strictEqual(g2.chatLog.length, g.chatLog.length, 'historique de discussion restauré après redémarrage');
 const rTok = g2.authToken(alice.token);
 assert.ok(rTok.ok && rTok.player.weapon.tier === 1, 'état restauré via token');
 assert.strictEqual(rTok.player.characters.length, 2, 'les deux formes survivent à la persistance');

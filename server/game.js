@@ -10,6 +10,8 @@ const crypto = require('crypto');
 Object.assign(globalThis, require('../js/config.js'));
 Object.assign(globalThis, require('../js/world.js'));
 
+const MAX_GUILD_MEMBERS = 20;
+const CHAT_LOG_MAX = 300;
 const BOT_NAMES = ['Kaelith', 'Brumm', 'Sylvane', 'Orzo', 'Nyra', 'Fenwick', 'Malko', 'Isha', 'Torvald', 'Lupa'];
 const BOT_CHAT = [
   'quelqu’un pour le Basilic au nord ?',
@@ -35,10 +37,17 @@ class Game {
     this.bots = new Map();
     this.tokens = new Map();
     this.raids = new Map();
+    this.tradeInvites = new Map();
+    this.trades = new Map();
+    this.duelInvites = new Map();
+    this.guilds = new Map();
+    this.chatLog = [];   // historique borné : reprend vie à la reconnexion (coordination async)
     this.pendingReplies = [];
     this.send = () => {};
     this.broadcast = () => {};
     this.onDirty = () => {};
+    this.onGuildsDirty = () => {};
+    this.onChatDirty = () => {};
     this.rng = Math.random;   // injectable pour des tests déterministes
     if (persisted) this.load(persisted);
     this.spawnBots();
@@ -54,6 +63,17 @@ class Game {
       return this.raidId((p && p.mapId) || 'world', x, y);
     }
     return key;
+  }
+
+  skinStateOf(p) {
+    if (!p) return;
+    if (!Array.isArray(p.ownedSkins)) p.ownedSkins = [];
+    if (typeof p[PREMIUM_CURRENCY.key] !== 'number') p[PREMIUM_CURRENCY.key] = 0;
+    if (typeof p.skinId === 'undefined') p.skinId = null;
+    if (!Array.isArray(p.characters) || !p.characters.length) return;
+    for (const c of p.characters) {
+      if (typeof c.skinId === 'undefined') c.skinId = null;
+    }
   }
   memberById(id) { return this.players.get(id) || this.bots.get(id); }
   chebyshev(a, b) { return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)); }
@@ -191,9 +211,17 @@ class Game {
       hp: 100, hpMs: 0,
       inventory: {},
       gold: 0,
+      [PREMIUM_CURRENCY.key]: 0,
+      ownedSkins: [],
       status: 'IDLE',
       harvestKey: null, harvestEndsAt: 0,
       raidKey: null,
+      tradeId: null,
+      duels: { wins: 0, losses: 0 },
+      guildId: null,
+      guildInvite: null,
+      friends: [],
+      friendRequests: [],
       characters: [newCharacter(data.speciesClass)],
       activeChar: 0,
       charSlots: CONFIG.FREE_CHAR_SLOTS,
@@ -201,6 +229,7 @@ class Game {
       // Le tout premier compte créé sur une base vierge devient administrateur.
       role: this.players.size === 0 ? 'admin' : 'user',
     };
+    this.skinStateOf(p);
     applyCharacter(p, 0);
     p.hp = maxHp(p);
     this.players.set(id, p);
@@ -253,18 +282,554 @@ class Game {
       bounds: boundsOf(this.tilesOf(p)),
       players: this.publicPlayers(),
       raids: this.raidsPayload(),
+      trade: p.tradeId ? this.tradePayloadFor(p, this.trades.get(p.tradeId)) : null,
+      chatHistory: this.chatHistoryFor(p),
     };
+  }
+
+  publicPlayer(p) {
+    return {
+      id: p.id,
+      username: p.username,
+      speciesClass: p.speciesClass,
+      classLabel: (CLASSES[p.speciesClass] && CLASSES[p.speciesClass].label) || p.speciesClass,
+      role: (CLASSES[p.speciesClass] && CLASSES[p.speciesClass].role) || '',
+      pos: p.pos,
+      status: p.status,
+      bot: !!p.bot,
+      mapId: p.mapId || 'world',
+      weaponTier: p.weapon ? p.weapon.tier : 0,
+      armorTier: p.armor ? p.armor.tier : 0,
+      weaponType: p.weapon ? p.weapon.type : '',
+      armorType: p.armor ? p.armor.type : '',
+      skinId: p.skinId || null,
+    };
+  }
+
+  buySkin(p, skinId) {
+    const item = skinFor(String(skinId || ''));
+    if (!item) return { ok: false, error: 'Skin inconnu.' };
+    if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
+    if (p.speciesClass !== item.speciesClass) return { ok: false, error: 'Ce skin est réservé à une autre classe.' };
+    this.skinStateOf(p);
+    if (p.ownedSkins.includes(item.id)) return { ok: false, error: 'Skin déjà possédé.' };
+    const walletKey = item.currency === PREMIUM_CURRENCY.key ? PREMIUM_CURRENCY.key : 'gold';
+    const balance = Number(p[walletKey] || 0);
+    if (balance < item.price) {
+      return { ok: false, error: walletKey === 'gold' ? 'Pas assez d’or.' : ('Pas assez de ' + PREMIUM_CURRENCY.label.toLowerCase() + '.') };
+    }
+    p[walletKey] = balance - item.price;
+    p.ownedSkins.push(item.id);
+    this.pushSelf(p);
+    return { ok: true };
+  }
+
+  equipSkin(p, skinId) {
+    this.skinStateOf(p);
+    const desired = skinId ? String(skinId) : null;
+    if (!desired) {
+      p.skinId = null;
+      syncActiveCharacter(p);
+      this.pushSelf(p);
+      return { ok: true };
+    }
+    const item = skinFor(desired);
+    if (!item) return { ok: false, error: 'Skin inconnu.' };
+    if (item.speciesClass !== p.speciesClass) return { ok: false, error: 'Ce skin ne correspond pas à votre forme active.' };
+    if (!p.ownedSkins.includes(item.id)) return { ok: false, error: 'Vous ne possédez pas ce skin.' };
+    p.skinId = item.id;
+    syncActiveCharacter(p);
+    this.pushSelf(p);
+    return { ok: true };
   }
 
   publicPlayers() {
     const out = [];
     for (const p of this.players.values()) {
-      if (p.online) out.push({ id: p.id, username: p.username, speciesClass: p.speciesClass, pos: p.pos, status: p.status, bot: false, mapId: p.mapId || 'world' });
+      if (p.online) out.push(this.publicPlayer(p));
     }
     for (const b of this.bots.values()) {
-      out.push({ id: b.id, username: b.username, speciesClass: b.speciesClass, pos: b.pos, status: b.status, bot: true, mapId: b.mapId || 'world' });
+      out.push(this.publicPlayer(b));
     }
     return out;
+  }
+
+  isTradeableStack(key) {
+    const parsed = parseStackKey(String(key || ''));
+    return !!RESOURCES[parsed.type] || !!CONSUMABLES[parsed.type];
+  }
+
+  playerNear(a, b, maxDist) {
+    return !!(a && b && (a.mapId || 'world') === (b.mapId || 'world') && this.chebyshev(a.pos, b.pos) <= (maxDist || 1));
+  }
+
+  tradePayloadFor(viewer, trade) {
+    if (!trade || !viewer) return null;
+    const meOffer = trade.offers[viewer.id] || { gold: 0, items: {}, accepted: false };
+    const otherId = trade.players.find((id) => id !== viewer.id);
+    const other = this.players.get(otherId);
+    const otherOffer = trade.offers[otherId] || { gold: 0, items: {}, accepted: false };
+    return {
+      id: trade.id,
+      withPlayer: other ? this.publicPlayer(other) : null,
+      offers: {
+        self: { gold: meOffer.gold, items: { ...meOffer.items }, accepted: !!meOffer.accepted },
+        other: { gold: otherOffer.gold, items: { ...otherOffer.items }, accepted: !!otherOffer.accepted },
+      },
+    };
+  }
+
+  pushTrade(trade) {
+    if (!trade) return;
+    for (const id of trade.players) {
+      const p = this.players.get(id);
+      if (p && p.online) this.send(id, 'trade', this.tradePayloadFor(p, trade));
+    }
+  }
+
+  closeTrade(trade, reason) {
+    if (!trade) return;
+    this.trades.delete(trade.id);
+    for (const id of trade.players) {
+      const p = this.players.get(id);
+      if (!p) continue;
+      if (p.tradeId === trade.id) {
+        p.tradeId = null;
+        if (p.status === 'TRADING') p.status = 'IDLE';
+        this.pushSelf(p);
+      }
+      this.send(id, 'trade', null);
+      if (reason) this.toast(p, reason);
+    }
+  }
+
+  startTrade(a, b) {
+    const trade = {
+      id: 'trade_' + Date.now() + '_' + Math.floor(this.rng() * 100000),
+      players: [a.id, b.id],
+      offers: {
+        [a.id]: { gold: 0, items: {}, accepted: false },
+        [b.id]: { gold: 0, items: {}, accepted: false },
+      },
+    };
+    a.tradeId = trade.id;
+    b.tradeId = trade.id;
+    a.status = 'TRADING';
+    b.status = 'TRADING';
+    this.trades.set(trade.id, trade);
+    this.pushSelf(a);
+    this.pushSelf(b);
+    this.pushTrade(trade);
+    return trade;
+  }
+
+  normalizeTradeOffer(p, raw) {
+    const offer = { gold: 0, items: {}, accepted: false };
+    if (!p || !raw) return offer;
+    offer.gold = Math.max(0, Math.min(p.gold || 0, Math.floor(Number(raw.gold) || 0)));
+    for (const [key, qtyRaw] of Object.entries(raw.items || {})) {
+      if (!this.isTradeableStack(key)) continue;
+      const own = p.inventory[key] || 0;
+      if (!own) continue;
+      const qty = Math.max(0, Math.min(own, Math.floor(Number(qtyRaw) || 0)));
+      if (qty > 0) offer.items[key] = qty;
+    }
+    return offer;
+  }
+
+  sameTradeOffer(a, b) {
+    const goldA = Number((a && a.gold) || 0);
+    const goldB = Number((b && b.gold) || 0);
+    if (goldA !== goldB) return false;
+    const itemsA = (a && a.items) || {};
+    const itemsB = (b && b.items) || {};
+    const keysA = Object.keys(itemsA).filter((k) => Number(itemsA[k]) > 0).sort();
+    const keysB = Object.keys(itemsB).filter((k) => Number(itemsB[k]) > 0).sort();
+    if (keysA.length !== keysB.length) return false;
+    for (let i = 0; i < keysA.length; i++) {
+      const key = keysA[i];
+      if (key !== keysB[i]) return false;
+      if (Number(itemsA[key]) !== Number(itemsB[key])) return false;
+    }
+    return true;
+  }
+
+  requestTrade(p, targetId) {
+    const target = this.players.get(String(targetId));
+    if (!target || target.bot) return { ok: false, error: 'Joueur introuvable.' };
+    if (target.id === p.id) return { ok: false, error: 'Impossible d’échanger avec vous-même.' };
+    if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
+    if (target.status !== 'IDLE') return { ok: false, error: 'Ce joueur est occupé.' };
+    if (!this.playerNear(p, target, 1)) return { ok: false, error: 'Vous devez être au contact pour échanger.' };
+    if (p.tradeId || target.tradeId) return { ok: false, error: 'Un échange est déjà en cours.' };
+    this.tradeInvites.set(target.id, { fromId: p.id, toId: target.id, at: this.now });
+    this.send(target.id, 'tradeInvite', { fromPlayer: this.publicPlayer(p) });
+    this.toast(p, 'Demande d’échange envoyée à ' + target.username + '.');
+    return { ok: true };
+  }
+
+  respondTradeInvite(p, fromId, accept) {
+    const invite = this.tradeInvites.get(p.id);
+    if (!invite || invite.fromId !== String(fromId)) return { ok: false, error: 'Invitation introuvable.' };
+    this.tradeInvites.delete(p.id);
+    const from = this.players.get(invite.fromId);
+    if (!from) return { ok: false, error: 'Le joueur n’est plus disponible.' };
+    if (!accept) {
+      this.toast(from, p.username + ' a refusé l’échange.');
+      return { ok: true, declined: true };
+    }
+    if (from.status !== 'IDLE' || p.status !== 'IDLE') return { ok: false, error: 'L’un des joueurs est occupé.' };
+    if (!this.playerNear(from, p, 1)) return { ok: false, error: 'Vous devez rester au contact pour échanger.' };
+    this.startTrade(from, p);
+    return { ok: true };
+  }
+
+  updateTradeOffer(p, offerRaw) {
+    const trade = this.trades.get(p.tradeId || '');
+    if (!trade) return { ok: false, error: 'Aucun échange actif.' };
+    if (!trade.players.includes(p.id)) return { ok: false, error: 'Échange invalide.' };
+    const nextOffer = this.normalizeTradeOffer(p, offerRaw);
+    const prevOffer = trade.offers[p.id] || { gold: 0, items: {}, accepted: false };
+    const changed = !this.sameTradeOffer(prevOffer, nextOffer);
+    trade.offers[p.id] = nextOffer;
+    trade.offers[p.id].accepted = changed ? false : !!prevOffer.accepted;
+    const otherId = trade.players.find((id) => id !== p.id);
+    if (changed && trade.offers[otherId]) trade.offers[otherId].accepted = false;
+    this.pushTrade(trade);
+    return { ok: true };
+  }
+
+  confirmTrade(p, accepted) {
+    const trade = this.trades.get(p.tradeId || '');
+    if (!trade) return { ok: false, error: 'Aucun échange actif.' };
+    const mine = trade.offers[p.id];
+    if (!mine) return { ok: false, error: 'Offre invalide.' };
+    mine.accepted = accepted !== false;
+    this.pushTrade(trade);
+    if (!mine.accepted) return { ok: true };
+    const otherId = trade.players.find((id) => id !== p.id);
+    const other = this.players.get(otherId);
+    if (!other || !trade.offers[otherId] || !trade.offers[otherId].accepted) return { ok: true };
+
+    const a = this.players.get(trade.players[0]);
+    const b = this.players.get(trade.players[1]);
+    if (!a || !b) {
+      this.closeTrade(trade, 'Échange interrompu.');
+      return { ok: false, error: 'Échange interrompu.' };
+    }
+    if (!this.playerNear(a, b, 1)) {
+      this.closeTrade(trade, 'Échange annulé : les joueurs se sont éloignés.');
+      return { ok: false, error: 'Les joueurs se sont éloignés.' };
+    }
+
+    const oa = this.normalizeTradeOffer(a, trade.offers[a.id]);
+    const ob = this.normalizeTradeOffer(b, trade.offers[b.id]);
+    trade.offers[a.id] = { ...oa, accepted: true };
+    trade.offers[b.id] = { ...ob, accepted: true };
+
+    a.gold -= oa.gold;
+    b.gold -= ob.gold;
+    b.gold += oa.gold;
+    a.gold += ob.gold;
+
+    for (const [key, qty] of Object.entries(oa.items)) {
+      a.inventory[key] -= qty;
+      if (a.inventory[key] <= 0) delete a.inventory[key];
+      b.inventory[key] = (b.inventory[key] || 0) + qty;
+    }
+    for (const [key, qty] of Object.entries(ob.items)) {
+      b.inventory[key] -= qty;
+      if (b.inventory[key] <= 0) delete b.inventory[key];
+      a.inventory[key] = (a.inventory[key] || 0) + qty;
+    }
+
+    this.closeTrade(trade, 'Échange terminé.');
+    return { ok: true, done: true };
+  }
+
+  cancelTrade(p) {
+    const trade = this.trades.get(p.tradeId || '');
+    if (!trade) return { ok: false, error: 'Aucun échange actif.' };
+    const otherId = trade.players.find((id) => id !== p.id);
+    const other = this.players.get(otherId);
+    this.closeTrade(trade, other ? (p.username + ' a annulé l’échange.') : 'Échange annulé.');
+    return { ok: true };
+  }
+
+  /* ---------- Duels amicaux (aucune perte de PV, ni d'or) ---------- */
+  requestDuel(p, targetId) {
+    const target = this.players.get(String(targetId));
+    if (!target || target.bot) return { ok: false, error: 'Joueur introuvable.' };
+    if (target.id === p.id) return { ok: false, error: 'Impossible de se défier soi-même.' };
+    if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
+    if (target.status !== 'IDLE') return { ok: false, error: 'Ce joueur est occupé.' };
+    if (!this.playerNear(p, target, 1)) return { ok: false, error: 'Vous devez être au contact pour défier.' };
+    this.duelInvites.set(target.id, { fromId: p.id, toId: target.id, at: this.now });
+    this.send(target.id, 'duelInvite', { fromPlayer: this.publicPlayer(p) });
+    this.toast(p, 'Défi envoyé à ' + target.username + '.');
+    return { ok: true };
+  }
+
+  respondDuelInvite(p, fromId, accept) {
+    const invite = this.duelInvites.get(p.id);
+    if (!invite || invite.fromId !== String(fromId)) return { ok: false, error: 'Défi introuvable.' };
+    this.duelInvites.delete(p.id);
+    const from = this.players.get(invite.fromId);
+    if (!from) return { ok: false, error: 'Le joueur n’est plus disponible.' };
+    if (!accept) {
+      this.toast(from, p.username + ' a refusé le duel.');
+      return { ok: true, declined: true };
+    }
+    if (from.status !== 'IDLE' || p.status !== 'IDLE') return { ok: false, error: 'L’un des joueurs est occupé.' };
+    if (!this.playerNear(from, p, 1)) return { ok: false, error: 'Vous devez rester au contact pour le duel.' };
+    this.resolveDuel(from, p);
+    return { ok: true };
+  }
+
+  /* Amical : pas de PV perdus, pas d'or en jeu — seul le palmarès évolue. */
+  resolveDuel(a, b) {
+    const powerA = combatPower(a);
+    const powerB = combatPower(b);
+    const chance = winChance(powerA, powerB);
+    const aWins = this.rng() < chance;
+    const winner = aWins ? a : b;
+    const loser = aWins ? b : a;
+    winner.duels.wins += 1;
+    loser.duels.losses += 1;
+    this.send(a.id, 'duelResult', {
+      opponent: b.username, won: aWins,
+      chance: Math.round(chance * 100), yourPower: Math.round(powerA), opponentPower: Math.round(powerB),
+    });
+    this.send(b.id, 'duelResult', {
+      opponent: a.username, won: !aWins,
+      chance: Math.round((1 - chance) * 100), yourPower: Math.round(powerB), opponentPower: Math.round(powerA),
+    });
+    this.log('⚔️ ' + winner.username + ' bat ' + loser.username + ' en duel amical.');
+    this.pushSelf(a);
+    this.pushSelf(b);
+  }
+
+  /* ---------- Guildes ---------- */
+  findAccountByUsername(username) {
+    return this.players.get('p_' + String(username || '').trim().toLowerCase()) || null;
+  }
+
+  guildOf(p) {
+    return p.guildId ? this.guilds.get(p.guildId) || null : null;
+  }
+
+  guildRosterPublic(guild) {
+    return guild.members.map((id) => {
+      const m = this.players.get(id);
+      if (!m) return null;
+      return {
+        id: m.id,
+        username: m.username,
+        online: !!m.online,
+        classLabel: (CLASSES[m.speciesClass] && CLASSES[m.speciesClass].label) || m.speciesClass,
+        isLeader: id === guild.leaderId,
+      };
+    }).filter(Boolean);
+  }
+
+  createGuild(p, name) {
+    name = String(name || '').trim().slice(0, 24);
+    if (name.length < 3) return { ok: false, error: 'Nom de guilde trop court (3 caractères minimum).' };
+    if (!/^[\p{L}\p{N} _-]+$/u.test(name)) return { ok: false, error: 'Nom invalide (lettres, chiffres, espaces, - et _).' };
+    if (p.guildId) return { ok: false, error: 'Vous êtes déjà dans une guilde.' };
+    if ([...this.guilds.values()].some((g) => g.name.toLowerCase() === name.toLowerCase())) {
+      return { ok: false, error: 'Ce nom de guilde est déjà pris.' };
+    }
+    const id = 'g_' + crypto.randomBytes(6).toString('hex');
+    const guild = { id, name, leaderId: p.id, members: [p.id], createdAt: this.now };
+    this.guilds.set(id, guild);
+    p.guildId = id;
+    this.pushSelf(p);
+    this.onGuildsDirty();
+    this.log('🏰 La guilde « ' + name + ' » a été fondée par ' + p.username + '.');
+    return { ok: true, guildId: id };
+  }
+
+  inviteToGuild(p, targetUsername) {
+    const guild = this.guildOf(p);
+    if (!guild) return { ok: false, error: 'Vous n’êtes pas dans une guilde.' };
+    if (guild.leaderId !== p.id) return { ok: false, error: 'Seul le chef de guilde peut inviter.' };
+    const target = this.findAccountByUsername(targetUsername);
+    if (!target || target.bot) return { ok: false, error: 'Joueur introuvable.' };
+    if (target.id === p.id) return { ok: false, error: 'Vous êtes déjà dans cette guilde.' };
+    if (target.guildId) return { ok: false, error: 'Ce joueur est déjà dans une guilde.' };
+    if (guild.members.length >= MAX_GUILD_MEMBERS) return { ok: false, error: 'Guilde complète (' + MAX_GUILD_MEMBERS + ' max).' };
+    target.guildInvite = { guildId: guild.id, guildName: guild.name, fromUsername: p.username, at: this.now };
+    this.pushSelf(target);
+    this.toast(p, 'Invitation envoyée à ' + target.username + '.');
+    return { ok: true };
+  }
+
+  respondGuildInvite(p, accept) {
+    const invite = p.guildInvite;
+    if (!invite) return { ok: false, error: 'Aucune invitation en attente.' };
+    p.guildInvite = null;
+    if (!accept) {
+      this.pushSelf(p);
+      return { ok: true, declined: true };
+    }
+    if (p.guildId) {
+      this.pushSelf(p);
+      return { ok: false, error: 'Vous êtes déjà dans une guilde.' };
+    }
+    const guild = this.guilds.get(invite.guildId);
+    if (!guild) {
+      this.pushSelf(p);
+      return { ok: false, error: 'Cette guilde n’existe plus.' };
+    }
+    if (guild.members.length >= MAX_GUILD_MEMBERS) {
+      this.pushSelf(p);
+      return { ok: false, error: 'Guilde complète.' };
+    }
+    guild.members.push(p.id);
+    p.guildId = guild.id;
+    this.pushSelf(p);
+    this.onGuildsDirty();
+    this.log('🏰 ' + p.username + ' a rejoint la guilde « ' + guild.name + ' ».');
+    return { ok: true };
+  }
+
+  leaveGuild(p) {
+    const guild = this.guildOf(p);
+    if (!guild) return { ok: false, error: 'Vous n’êtes pas dans une guilde.' };
+    guild.members = guild.members.filter((id) => id !== p.id);
+    p.guildId = null;
+    if (!guild.members.length) {
+      this.guilds.delete(guild.id);
+      this.log('🏰 La guilde « ' + guild.name + ' » a été dissoute (plus aucun membre).');
+    } else if (guild.leaderId === p.id) {
+      guild.leaderId = guild.members[0];
+      const newLeader = this.players.get(guild.leaderId);
+      if (newLeader) this.pushSelf(newLeader);
+      this.log('🏰 ' + (newLeader ? newLeader.username : '?') + ' devient chef de « ' + guild.name + ' ».');
+    }
+    this.pushSelf(p);
+    this.onGuildsDirty();
+    return { ok: true };
+  }
+
+  kickFromGuild(p, targetUsername) {
+    const guild = this.guildOf(p);
+    if (!guild) return { ok: false, error: 'Vous n’êtes pas dans une guilde.' };
+    if (guild.leaderId !== p.id) return { ok: false, error: 'Seul le chef de guilde peut exclure un membre.' };
+    const target = this.findAccountByUsername(targetUsername);
+    if (!target || !guild.members.includes(target.id)) return { ok: false, error: 'Ce joueur n’est pas dans votre guilde.' };
+    if (target.id === p.id) return { ok: false, error: 'Vous ne pouvez pas vous exclure vous-même (quittez la guilde).' };
+    guild.members = guild.members.filter((id) => id !== target.id);
+    target.guildId = null;
+    this.pushSelf(target);
+    this.onGuildsDirty();
+    this.toast(p, target.username + ' a été exclu de la guilde.');
+    this.log('🏰 ' + target.username + ' a été exclu de « ' + guild.name + ' ».');
+    return { ok: true };
+  }
+
+  guildInfo(p) {
+    const guild = this.guildOf(p);
+    if (!guild) return { ok: false, error: 'Vous n’êtes pas dans une guilde.' };
+    return {
+      ok: true,
+      guild: {
+        id: guild.id, name: guild.name, leaderId: guild.leaderId, maxMembers: MAX_GUILD_MEMBERS,
+        members: this.guildRosterPublic(guild),
+      },
+    };
+  }
+
+  /* ---------- Amis ---------- */
+  sendFriendRequest(p, targetUsername) {
+    const target = this.findAccountByUsername(targetUsername);
+    if (!target || target.bot) return { ok: false, error: 'Joueur introuvable.' };
+    if (target.id === p.id) return { ok: false, error: 'Impossible de vous ajouter vous-même.' };
+    if (p.friends.includes(target.id)) return { ok: false, error: target.username + ' est déjà votre ami.' };
+    if (target.friendRequests.some((r) => r.fromId === p.id)) return { ok: false, error: 'Demande déjà envoyée.' };
+    // Symétrie : si l'autre nous a déjà envoyé une demande, on l'accepte directement
+    const reciprocalIdx = p.friendRequests.findIndex((r) => r.fromId === target.id);
+    if (reciprocalIdx >= 0) {
+      p.friendRequests.splice(reciprocalIdx, 1);
+      p.friends.push(target.id);
+      target.friends.push(p.id);
+      this.pushSelf(p);
+      this.pushSelf(target);
+      this.toast(p, target.username + ' est maintenant votre ami.');
+      this.toast(target, p.username + ' est maintenant votre ami.');
+      return { ok: true, addedDirectly: true };
+    }
+    target.friendRequests.push({ fromId: p.id, fromUsername: p.username, at: this.now });
+    this.pushSelf(target);
+    this.toast(p, 'Demande d’ami envoyée à ' + target.username + '.');
+    return { ok: true };
+  }
+
+  respondFriendRequest(p, fromId, accept) {
+    const idx = p.friendRequests.findIndex((r) => r.fromId === String(fromId));
+    if (idx < 0) return { ok: false, error: 'Demande introuvable.' };
+    const req = p.friendRequests[idx];
+    p.friendRequests.splice(idx, 1);
+    const from = this.players.get(req.fromId);
+    if (!accept) {
+      this.pushSelf(p);
+      if (from) this.toast(from, p.username + ' a refusé votre demande d’ami.');
+      return { ok: true, declined: true };
+    }
+    if (!from) {
+      this.pushSelf(p);
+      return { ok: false, error: 'Ce joueur n’existe plus.' };
+    }
+    p.friends.push(from.id);
+    from.friends.push(p.id);
+    this.pushSelf(p);
+    this.pushSelf(from);
+    this.toast(from, p.username + ' a accepté votre demande d’ami.');
+    return { ok: true };
+  }
+
+  removeFriend(p, targetUsername) {
+    const target = this.findAccountByUsername(targetUsername);
+    if (!target) return { ok: false, error: 'Joueur introuvable.' };
+    if (!p.friends.includes(target.id)) return { ok: false, error: 'Vous n’êtes pas amis.' };
+    p.friends = p.friends.filter((id) => id !== target.id);
+    target.friends = target.friends.filter((id) => id !== p.id);
+    this.pushSelf(p);
+    this.pushSelf(target);
+    return { ok: true };
+  }
+
+  friendsList(p) {
+    return p.friends.map((id) => {
+      const f = this.players.get(id);
+      if (!f) return null;
+      return {
+        id: f.id,
+        username: f.username,
+        online: !!f.online,
+        classLabel: (CLASSES[f.speciesClass] && CLASSES[f.speciesClass].label) || f.speciesClass,
+      };
+    }).filter(Boolean);
+  }
+
+  /* ---------- Historique de discussion (coordination asynchrone) ---------- */
+  recordChat(entry) {
+    this.chatLog.push({ ...entry, at: this.now });
+    if (this.chatLog.length > CHAT_LOG_MAX) this.chatLog.shift();
+    this.onChatDirty();
+  }
+
+  /* Ce qu'un joueur a le droit de revoir en se (re)connectant : le général
+   * pour tout le monde, la guilde courante, et les MP qui le concernent. */
+  chatHistoryFor(p) {
+    return this.chatLog
+      .filter((m) => {
+        if (m.channel === 'guild') return !!p.guildId && m.guildId === p.guildId;
+        if (m.channel === 'whisper') return m.fromId === p.id || m.toId === p.id;
+        return true;
+      })
+      .map((m) => ({ from: m.from, to: m.to, text: m.text, type: m.type, channel: m.channel }));
   }
 
   raidsPayload() {
@@ -317,18 +882,20 @@ class Game {
         y = Math.round(Math.sin(a) * d);
         tries++;
       } while (!isWalkable(this.worldMap.tiles, x, y) && tries < 50);
-      this.bots.set('bot' + i, {
+      const bot = {
         id: 'bot' + i, username: BOT_NAMES[i % BOT_NAMES.length], speciesClass: cls, bot: true,
         mapId: 'world',
         pos: { x, y }, home: { x, y },
-        hp: 100, pa: 100,
+        pa: 100,
         harvestLevel: tier, weaponMastery: tier,
         weapon: { tier: Math.max(0, tier - 1), type: CLASS_GEAR[cls].weapon },
         armor: { tier: Math.max(0, tier - 1), type: CLASS_GEAR[cls].armor },
         inventory: {},
         status: 'IDLE', raidKey: null,
         nextThink: Math.random() * CONFIG.BOT_TICK_MS,
-      });
+      };
+      bot.hp = maxHp(bot);
+      this.bots.set('bot' + i, bot);
     }
   }
 
@@ -616,6 +1183,7 @@ class Game {
     if (p.characters.some((c) => c.speciesClass === speciesClass)) return { ok: false, error: 'Vous incarnez déjà cette forme.' };
     syncActiveCharacter(p);
     p.characters.push(newCharacter(speciesClass));
+    this.skinStateOf(p);
     this.pushSelf(p);
     return { ok: true, index: p.characters.length - 1 };
   }
@@ -866,6 +1434,7 @@ class Game {
       weaponTier: p.weapon ? p.weapon.tier : null,
       armorTier: p.armor ? p.armor.tier : null,
       gold: p.gold || 0,
+      premium: p[PREMIUM_CURRENCY.key] || 0,
       charSlots: p.charSlots,
       charCount: (p.characters || []).length,
     })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -903,6 +1472,16 @@ class Game {
     return { ok: true };
   }
 
+  adminGrantPremium(admin, username, amount) {
+    if (!admin || admin.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
+    const target = this.adminFindTarget(username);
+    if (!target) return { ok: false, error: 'Joueur introuvable.' };
+    const n = Math.floor(Number(amount)) || 0;
+    target[PREMIUM_CURRENCY.key] = Math.max(0, (target[PREMIUM_CURRENCY.key] || 0) + n);
+    this.pushSelf(target);
+    return { ok: true };
+  }
+
   adminGrantItem(admin, username, key, qty) {
     if (!admin || admin.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
     const target = this.adminFindTarget(username);
@@ -929,16 +1508,47 @@ class Game {
     return this.applyGearTier(target, slot, tier);
   }
 
-  say(p, text) {
-    this.broadcast('chat', { from: p.username, text, type: 'chat' });
+  say(p, text, channel, targetUsername) {
+    text = String(text || '').trim().slice(0, 120);
+    if (!text) return { ok: false, error: 'Message vide.' };
+    channel = (channel === 'guild' || channel === 'whisper') ? channel : 'general';
+
+    if (channel === 'guild') {
+      const guild = this.guildOf(p);
+      if (!guild) return { ok: false, error: 'Vous n’êtes pas dans une guilde.' };
+      const payload = { from: p.username, text, type: 'chat', channel: 'guild' };
+      this.recordChat({ ...payload, fromId: p.id, guildId: guild.id });
+      for (const id of guild.members) {
+        const m = this.players.get(id);
+        if (m && m.online) this.send(m.id, 'chat', payload);
+      }
+      return { ok: true };
+    }
+
+    if (channel === 'whisper') {
+      const target = this.findAccountByUsername(targetUsername);
+      if (!target || target.bot) return { ok: false, error: 'Joueur introuvable.' };
+      if (target.id === p.id) return { ok: false, error: 'Impossible de vous écrire à vous-même.' };
+      if (!p.friends.includes(target.id)) return { ok: false, error: 'Les messages privés sont réservés à vos amis.' };
+      const payload = { from: p.username, to: target.username, text, type: 'chat', channel: 'whisper' };
+      this.recordChat({ ...payload, fromId: p.id, toId: target.id });
+      this.send(p.id, 'chat', payload);
+      if (target.online) this.send(target.id, 'chat', payload);
+      return { ok: true, offline: !target.online };
+    }
+
+    const generalPayload = { from: p.username, text, type: 'chat', channel: 'general' };
+    this.recordChat({ ...generalPayload, fromId: p.id });
+    this.broadcast('chat', generalPayload);
     if (Math.random() < 0.5) {
       const bots = [...this.bots.values()];
       const bot = bots[Math.floor(Math.random() * bots.length)];
       this.pendingReplies.push({
         at: this.now + 1500 + Math.random() * 3500,
-        msg: { from: bot.username, text: BOT_CHAT[Math.floor(Math.random() * BOT_CHAT.length)], type: 'chat' },
+        msg: { from: bot.username, text: BOT_CHAT[Math.floor(Math.random() * BOT_CHAT.length)], type: 'chat', channel: 'general' },
       });
     }
+    return { ok: true };
   }
 
   checkLevelUp(p, kind) {
@@ -990,6 +1600,8 @@ class Game {
       speed: this.speed,
       players: [...this.players.values()],
       credentials,
+      guilds: [...this.guilds.values()],
+      chatLog: this.chatLog,
       mapDiffs: this.mapDiffs(),
       mapStates: this.mapStates(),
       worldDiffs: this.worldDiffs(),
@@ -1005,6 +1617,7 @@ class Game {
       p.status = 'IDLE';
       p.harvestKey = null;
       p.raidKey = null;
+      p.tradeId = null;
       if (!Array.isArray(p.characters) || !p.characters.length) {
         const c = {};
         for (const f of CHARACTER_FIELDS) c[f] = p[f];
@@ -1015,12 +1628,27 @@ class Game {
       if (typeof p.charSlots !== 'number') p.charSlots = CONFIG.FREE_CHAR_SLOTS;
       p.charSlots = Math.min(p.charSlots, MAX_CHAR_SLOTS);
       if (typeof p.gold !== 'number') p.gold = 0;
+      if (typeof p[PREMIUM_CURRENCY.key] !== 'number') p[PREMIUM_CURRENCY.key] = 0;
+      if (!Array.isArray(p.ownedSkins)) p.ownedSkins = [];
       if (!Array.isArray(p.visitedVillages)) p.visitedVillages = [];
       if (p.role !== 'admin' && p.role !== 'user') p.role = 'user';
+      if (!p.duels || typeof p.duels.wins !== 'number') p.duels = { wins: 0, losses: 0 };
+      if (typeof p.guildId !== 'string') p.guildId = null;
+      if (!p.guildInvite || typeof p.guildInvite !== 'object') p.guildInvite = null;
+      if (!Array.isArray(p.friends)) p.friends = [];
+      if (!Array.isArray(p.friendRequests)) p.friendRequests = [];
+      // Rééquilibrage des PV par classe : évite qu'un compte existant se
+      // retrouve avec plus de PV affichés que son nouveau maximum.
+      p.hp = Math.min(p.hp, maxHp(p));
+      this.skinStateOf(p);
       this.players.set(p.id, p);
       if (p.token) this.tokens.set(p.token, p.id);
     }
     for (const [id, cred] of Object.entries(data.credentials || {})) this.credentials.set(id, cred);
+    for (const g of data.guilds || []) {
+      if (g && g.id) this.guilds.set(g.id, g);
+    }
+    if (Array.isArray(data.chatLog)) this.chatLog = data.chatLog.slice(-CHAT_LOG_MAX);
     // Migration d'une base existante sans rôles : le compte le plus ancien
     // (par date de création) hérite du rôle admin, faute de quoi personne
     // n'aurait accès à l'administration après coup.
@@ -1062,4 +1690,4 @@ class Game {
   }
 }
 
-module.exports = { Game };
+module.exports = { Game, CHAT_LOG_MAX };

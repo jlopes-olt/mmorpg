@@ -49,6 +49,8 @@ if (store.countAccounts() === 0 && seed === null && fs.existsSync(LEGACY_STATE_F
     now: store.getMeta('now', 0),
     players: [],
     credentials: {},
+    guilds: store.getMeta('guilds', []),
+    chatLog: store.getMeta('chatLog', []),
     worldDiffs: store.loadDiffs(),
   };
   for (const { player, credentials } of store.loadAccounts()) {
@@ -80,6 +82,8 @@ function saveWorld() {
     store.transaction(() => {
       store.setMeta('seed', game.seed);
       store.setMeta('now', game.now);
+      store.setMeta('guilds', [...game.guilds.values()]);
+      store.setMeta('chatLog', game.chatLog);
       store.setMeta('savedAt', Date.now());
     });
     store.saveDiffs(game.worldDiffs());
@@ -95,6 +99,11 @@ function saveAll() {
 
 // Événements internes (fin de récolte, résolution de raid…) → écriture immédiate
 game.onDirty = (p) => saveAccountOf(p);
+// Création/adhésion/départ de guilde → écriture immédiate (pas d'attente du filet de sécurité)
+game.onGuildsDirty = () => saveWorld();
+// Chaque message (général/guilde/MP) → écriture immédiate, pour survivre à un redémarrage
+// entre l'envoi et la prochaine connexion du destinataire (coordination asynchrone).
+game.onChatDirty = () => saveWorld();
 
 // Migration : on fige tout de suite l'état importé, puis on archive le JSON
 if (store.countAccounts() === 0 && initialState && initialState.savedAt) {
@@ -174,6 +183,7 @@ io.on('connection', (socket) => {
     }
     if (r && r.ok) {
       socket.emit('self', player);
+      io.emit('players', game.publicPlayers());
       io.emit('raids', game.raidsPayload());
       saveAccountOf(player);
     }
@@ -192,8 +202,17 @@ io.on('connection', (socket) => {
   socket.on('village:teleport', act((d) => game.teleportVillage(player, Number(d.x), Number(d.y))));
   socket.on('char:create', act((d) => game.createCharacter(player, String(d.speciesClass))));
   socket.on('char:switch', act((d) => game.switchCharacter(player, d.index)));
+  socket.on('shop:buySkin', act((d) => game.buySkin(player, String(d.skinId))));
+  socket.on('shop:equipSkin', act((d) => game.equipSkin(player, d.skinId ? String(d.skinId) : null)));
   socket.on('cook', act((d) => game.cook(player, String(d.item), Number(d.tier))));
   socket.on('consume', act((d) => game.consume(player, String(d.key))));
+  socket.on('trade:request', act((d) => game.requestTrade(player, String(d.targetId))));
+  socket.on('trade:respond', act((d) => game.respondTradeInvite(player, String(d.fromId), !!d.accept)));
+  socket.on('trade:offer', act((d) => game.updateTradeOffer(player, d.offer || {})));
+  socket.on('trade:confirm', act((d) => game.confirmTrade(player, d.accept !== false)));
+  socket.on('trade:cancel', act(() => game.cancelTrade(player)));
+  socket.on('duel:request', act((d) => game.requestDuel(player, String(d.targetId))));
+  socket.on('duel:respond', act((d) => game.respondDuelInvite(player, String(d.fromId), !!d.accept)));
   socket.on('admin:tier', act((d) => game.setAdminTier(player, String(d.kind), Number(d.tier))));
   socket.on('admin:gear', act((d) => game.setAdminGear(player, String(d.slot), Number(d.tier))));
   socket.on('admin:stats', (payload, ack) => {
@@ -209,6 +228,7 @@ io.on('connection', (socket) => {
   socket.on('admin:setRole', act((d) => game.adminSetRole(player, String(d.username), String(d.role))));
   socket.on('admin:grantSlot', act((d) => game.adminGrantSlot(player, String(d.username), Number(d.count))));
   socket.on('admin:grantGold', act((d) => game.adminGrantGold(player, String(d.username), Number(d.amount))));
+  socket.on('admin:grantPremium', act((d) => game.adminGrantPremium(player, String(d.username), Number(d.amount))));
   socket.on('admin:grantItem', act((d) => game.adminGrantItem(player, String(d.username), String(d.key), Number(d.qty))));
   socket.on('admin:setLevel', act((d) => game.adminSetLevel(player, String(d.username), String(d.kind), Number(d.tier))));
   socket.on('admin:setGear', act((d) => game.adminSetGear(player, String(d.username), String(d.slot), Number(d.tier))));
@@ -221,12 +241,29 @@ io.on('connection', (socket) => {
     }
     return r;
   }));
-  socket.on('chat', (d) => {
-    if (player && d && d.text) game.say(player, String(d.text).slice(0, 120));
+  socket.on('chat', act((d) => game.say(player, String(d.text || ''), d.channel ? String(d.channel) : 'general', d.target ? String(d.target) : '')));
+  socket.on('guild:create', act((d) => game.createGuild(player, String(d.name))));
+  socket.on('guild:invite', act((d) => game.inviteToGuild(player, String(d.username))));
+  socket.on('guild:respond', act((d) => game.respondGuildInvite(player, !!d.accept)));
+  socket.on('guild:leave', act(() => game.leaveGuild(player)));
+  socket.on('guild:kick', act((d) => game.kickFromGuild(player, String(d.username))));
+  socket.on('guild:info', (payload, ack) => {
+    if (typeof ack !== 'function') ack = () => {};
+    if (!player || !game.players.has(player.id)) return ack({ ok: false, error: 'Non authentifié.' });
+    ack(game.guildInfo(player));
+  });
+  socket.on('friend:request', act((d) => game.sendFriendRequest(player, String(d.username))));
+  socket.on('friend:respond', act((d) => game.respondFriendRequest(player, String(d.fromId), !!d.accept)));
+  socket.on('friend:remove', act((d) => game.removeFriend(player, String(d.username))));
+  socket.on('friend:list', (payload, ack) => {
+    if (typeof ack !== 'function') ack = () => {};
+    if (!player || !game.players.has(player.id)) return ack({ ok: false, error: 'Non authentifié.' });
+    ack({ ok: true, list: game.friendsList(player) });
   });
 
   socket.on('disconnect', () => {
     if (!player) return;
+    if (player.tradeId) game.cancelTrade(player);
     if (sockets.get(player.id) === socket) sockets.delete(player.id);
     player.online = false;
     player.lastSeen = Date.now();
@@ -265,5 +302,5 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
 }
 
 httpServer.listen(PORT, () => {
-  console.log('Feralia Online : http://localhost:' + PORT + '  (SPEED x' + game.speed + ', DB ' + DB_FILE + ')');
+  console.log('FERALIA Online : http://localhost:' + PORT + '  (SPEED x' + game.speed + ', DB ' + DB_FILE + ')');
 });

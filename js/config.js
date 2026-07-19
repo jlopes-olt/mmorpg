@@ -66,34 +66,36 @@ const CONFIG = {
 /* Bases resserrées (18-22) : avec le combat probabiliste, un gros écart de
  * base créerait des % de victoire trop inégaux entre classes au T1 — la
  * différenciation vient des talents, pas des stats brutes. */
+/* baseHp suit le type d'armure de CLASS_GEAR (Plaques > Cuir > Étoffe),
+ * lui-même aligné sur le rôle : le Tank encaisse, le mage trinque. */
 const CLASSES = {
   LION_PALADIN: {
-    label: 'Lion Paladin', icon: 'LP', color: '#e8b23f', baseForce: 20,
+    label: 'Lion Paladin', icon: 'LP', color: '#e8b23f', baseForce: 20, baseHp: 115,
     role: 'Soutien',
     bonus: 'Aura : +10 % de puissance pour toute l’équipe (ne se cumule pas)',
   },
   OURS_GUERRIER: {
-    label: 'Ours Guerrier', icon: 'OG', color: '#c96f4a', baseForce: 22,
+    label: 'Ours Guerrier', icon: 'OG', color: '#c96f4a', baseForce: 22, baseHp: 130,
     role: 'Tank',
     bonus: 'Rempart : réduit de 30 % la perte de PV de toute l’équipe (ne se cumule pas)',
   },
   RENARD_VOLEUR: {
-    label: 'Renard Voleur', icon: 'RV', color: '#d98f3d', baseForce: 19,
+    label: 'Renard Voleur', icon: 'RV', color: '#d98f3d', baseForce: 19, baseHp: 95,
     role: 'Butin',
     bonus: 'Chapardeur : +50 % d’or looté en raid pour lui',
   },
   CHAT_MAGICIEN: {
-    label: 'Chat Magicien', icon: 'CM', color: '#7f7fd9', baseForce: 18,
+    label: 'Chat Magicien', icon: 'CM', color: '#7f7fd9', baseForce: 18, baseHp: 85,
     role: 'Dégâts',
     bonus: 'Canalisation : la force de son arme compte ×1,3',
   },
   CERF_DRUIDE: {
-    label: 'Cerf Druide', icon: 'CD', color: '#58b368', baseForce: 19,
+    label: 'Cerf Druide', icon: 'CD', color: '#58b368', baseForce: 19, baseHp: 100,
     role: 'Soin',
     bonus: 'Sève : rend 15 % de leurs PV max aux participants après une victoire (ne se cumule pas)',
   },
   CORBEAU_NECROMANCIEN: {
-    label: 'Corbeau Nécromancien', icon: 'CN', color: '#9a6fd1', baseForce: 19,
+    label: 'Corbeau Nécromancien', icon: 'CN', color: '#9a6fd1', baseForce: 19, baseHp: 90,
     role: 'Dégâts de groupe',
     bonus: 'Nuée : +8 % de puissance personnelle par participant au combat',
   },
@@ -104,6 +106,32 @@ const CLASSES = {
  * achetés/offerts. */
 const MAX_CHAR_SLOTS = Object.keys(CLASSES).length;
 
+const PREMIUM_CURRENCY = {
+  key: 'moonstones',
+  label: 'Lunaires',
+  icon: '✦',
+};
+
+const SKIN_ASSET_REV = '20260719b';
+
+const CLASS_SKIN_SCALE = {
+  RENARD_VOLEUR: 1,
+  CERF_DRUIDE: 1,
+  CHAT_MAGICIEN: 1,
+  OURS_GUERRIER: 1,
+  LION_PALADIN: 1,
+  CORBEAU_NECROMANCIEN: 1,
+};
+
+const CLASS_BASE_SKINS = {
+  RENARD_VOLEUR: 'assets/skins_coherent/renard_voleur/renard_voleur_base.png',
+  CERF_DRUIDE: 'assets/skins_coherent/cerf_druide/cerf_druide_base.png',
+  CHAT_MAGICIEN: 'assets/skins_coherent/chat_magicien/chat_magicien_base.png',
+  OURS_GUERRIER: 'assets/skins_coherent/ours_guerrier/ours_guerrier_base.png',
+  LION_PALADIN: 'assets/skins_coherent/lion_paladin/lion_paladin_base.png',
+  CORBEAU_NECROMANCIEN: 'assets/skins_coherent/corbeau_necromancien/corbeau_necromancien_base.png',
+};
+
 /* Arme et armure uniques, liées à la classe, évolutives T0→T5 */
 const CLASS_GEAR = {
   LION_PALADIN:         { weapon: 'Épée',    armor: 'Plaques' },
@@ -113,6 +141,119 @@ const CLASS_GEAR = {
   CERF_DRUIDE:          { weapon: 'Sceptre', armor: 'Cuir' },
   CORBEAU_NECROMANCIEN: { weapon: 'Faux',    armor: 'Étoffe' },
 };
+
+const SKIN_SHOP_ITEMS = [
+  {
+    id: 'skin_renard_nomade',
+    speciesClass: 'RENARD_VOLEUR',
+    label: 'Corsaire cramoisi',
+    asset: 'assets/skins_coherent/renard_voleur/renard_voleur_corsaire_cramoisi.png',
+    currency: 'gold',
+    price: 900,
+  },
+  {
+    id: 'skin_renard_duelliste',
+    speciesClass: 'RENARD_VOLEUR',
+    label: 'Ombre lunaire',
+    asset: 'assets/skins_coherent/renard_voleur/renard_voleur_ombre_lunaire.png',
+    currency: PREMIUM_CURRENCY.key,
+    price: 12,
+  },
+  {
+    id: 'skin_cerf_sage',
+    speciesClass: 'CERF_DRUIDE',
+    label: 'Sage fleuri',
+    asset: 'assets/skins_coherent/cerf_druide/cerf_druide_sage_fleuri.png',
+    currency: 'gold',
+    price: 900,
+  },
+  {
+    id: 'skin_cerf_chaman',
+    speciesClass: 'CERF_DRUIDE',
+    label: 'Chaman des marais',
+    asset: 'assets/skins_coherent/cerf_druide/cerf_druide_chaman_des_marais.png',
+    currency: PREMIUM_CURRENCY.key,
+    price: 12,
+  },
+  {
+    id: 'skin_chat_astromancien',
+    speciesClass: 'CHAT_MAGICIEN',
+    label: 'Astromancien pourpre',
+    asset: 'assets/skins_coherent/chat_magicien/chat_magicien_astromancien_pourpre.png',
+    currency: 'gold',
+    price: 900,
+  },
+  {
+    id: 'skin_chat_enchanteresse',
+    speciesClass: 'CHAT_MAGICIEN',
+    label: 'Enchanteresse émeraude',
+    asset: 'assets/skins_coherent/chat_magicien/chat_magicien_enchanteresse_emeraude.png',
+    currency: PREMIUM_CURRENCY.key,
+    price: 12,
+  },
+  {
+    id: 'skin_ours_berserker',
+    speciesClass: 'OURS_GUERRIER',
+    label: 'Berserker des glaces',
+    asset: 'assets/skins_coherent/ours_guerrier/ours_guerrier_berserker_des_glaces.png',
+    currency: 'gold',
+    price: 900,
+  },
+  {
+    id: 'skin_ours_sentinelle',
+    speciesClass: 'OURS_GUERRIER',
+    label: 'Sentinelle des forges',
+    asset: 'assets/skins_coherent/ours_guerrier/ours_guerrier_sentinelle_des_forges.png',
+    currency: PREMIUM_CURRENCY.key,
+    price: 12,
+  },
+  {
+    id: 'skin_lion_croise',
+    speciesClass: 'LION_PALADIN',
+    label: 'Croisé royal cramoisi',
+    asset: 'assets/skins_coherent/lion_paladin/lion_paladin_croise_royal_cramoisi.png',
+    currency: 'gold',
+    price: 900,
+  },
+  {
+    id: 'skin_lion_templier',
+    speciesClass: 'LION_PALADIN',
+    label: 'Templier émeraude',
+    asset: 'assets/skins_coherent/lion_paladin/lion_paladin_templier_emeraude.png',
+    currency: PREMIUM_CURRENCY.key,
+    price: 12,
+  },
+  {
+    id: 'skin_corbeau_oracle',
+    speciesClass: 'CORBEAU_NECROMANCIEN',
+    label: 'Oracle de peste',
+    asset: 'assets/skins_coherent/corbeau_necromancien/corbeau_necromancien_oracle_de_peste.png',
+    currency: 'gold',
+    price: 900,
+  },
+  {
+    id: 'skin_corbeau_cultiste',
+    speciesClass: 'CORBEAU_NECROMANCIEN',
+    label: 'Cultiste lunaire',
+    asset: 'assets/skins_coherent/corbeau_necromancien/corbeau_necromancien_cultiste_lunaire.png',
+    currency: PREMIUM_CURRENCY.key,
+    price: 12,
+  },
+];
+
+const SKIN_BY_ID = Object.fromEntries(SKIN_SHOP_ITEMS.map((item) => [item.id, item]));
+
+function skinAssetUrl(path) {
+  return path + '?v=' + SKIN_ASSET_REV;
+}
+
+function classSkinScale(speciesClass) {
+  return CLASS_SKIN_SCALE[speciesClass] || 0.84;
+}
+
+function baseSkinAsset(speciesClass) {
+  return CLASS_BASE_SKINS[speciesClass] || '';
+}
 
 /* Chaque palier porte un nom (aligné sur les assets) — l'affichage passe
  * par resourceLabel(type, tier) qui garde toujours le tier visible. */
@@ -263,9 +404,10 @@ function playerForce(p) {
   return Math.round(cls.baseForce + p.weapon.tier * 14 * weaponMult + p.weaponMastery * 6);
 }
 
-/* L'armure donne des PV max et réduit les pertes de PV en raid */
+/* PV max = socle de la classe (Tank > Soutien > Soin/Butin > Dégâts) +
+ * l'armure, qui ajoute le même montant par tier pour tous. */
 function maxHp(p) {
-  return 100 + p.armor.tier * 15;
+  return CLASSES[p.speciesClass].baseHp + p.armor.tier * 15;
 }
 
 function hpLossReduction(p) {
@@ -278,6 +420,7 @@ function newCharacter(speciesClass) {
   const gear = CLASS_GEAR[speciesClass];
   return {
     speciesClass,
+    skinId: null,
     harvestXp: 0, harvestLevel: 1,
     weaponXp: 0, weaponMastery: 1,
     weapon: { tier: 0, type: gear.weapon },
@@ -285,7 +428,11 @@ function newCharacter(speciesClass) {
   };
 }
 
-const CHARACTER_FIELDS = ['speciesClass', 'harvestXp', 'harvestLevel', 'weaponXp', 'weaponMastery', 'weapon', 'armor'];
+const CHARACTER_FIELDS = ['speciesClass', 'skinId', 'harvestXp', 'harvestLevel', 'weaponXp', 'weaponMastery', 'weapon', 'armor'];
+
+function skinFor(id) {
+  return id ? (SKIN_BY_ID[id] || null) : null;
+}
 
 /* Recopie la forme active (champs à plat sur le joueur) dans son slot */
 function syncActiveCharacter(p) {
@@ -384,6 +531,8 @@ if (typeof module !== 'undefined' && module.exports) {
     CONFIG, CLASSES, CLASS_GEAR, MAX_CHAR_SLOTS, RESOURCES, MONSTERS, MONSTER_FORCE,
     TERRAINS, TIER_COLORS, XP_LEVELS, UPGRADE_RECIPES, SPRITE_CELLS,
     RESOURCE_EMOJI, MONSTER_EMOJI, CHARACTER_FIELDS,
+    PREMIUM_CURRENCY, SKIN_SHOP_ITEMS, SKIN_BY_ID, SKIN_ASSET_REV, CLASS_SKIN_SCALE, CLASS_BASE_SKINS,
+    skinFor, skinAssetUrl, classSkinScale, baseSkinAsset,
     levelFromXp, playerForce, maxHp, hpLossReduction, stackKey, parseStackKey, resourceFamily,
     newCharacter, syncActiveCharacter, applyCharacter, rollGoldLoot,
     combatPower, teamPowerOf, winChance,

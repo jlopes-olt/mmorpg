@@ -121,6 +121,12 @@ const WORLD_ICON_FILES = {
   },
 };
 
+const PLAYER_SKIN_FILES = Object.fromEntries(
+  SKIN_SHOP_ITEMS.map((item) => [item.id, skinAssetUrl(item.asset)]).concat(
+    Object.entries(CLASS_BASE_SKINS).map(([speciesClass, asset]) => ['base:' + speciesClass, skinAssetUrl(asset)])
+  )
+);
+
 /* Bas utile de chaque rangee de la planche de sprites */
 const SPRITE_ROW_CROP = [0.875, 0.81];
 
@@ -172,7 +178,9 @@ class Renderer {
     this.sprites.src = (typeof window !== 'undefined' && window.WILDRIFT_SPRITE) || 'assets/personnages_small.png';
 
     this.worldIcons = { resource: {}, monster: {}, capital: null, village: {}, dungeon: {} };
+    this.playerSkins = {};
     this.terrainTiles = {};
+    this.playerHitboxes = [];
     this.loadWorldIcons();
     this.loadTerrainTiles();
     this.resize();
@@ -206,6 +214,9 @@ class Renderer {
     }
     for (const [terrain, src] of Object.entries(WORLD_ICON_FILES.dungeon)) {
       this.worldIcons.dungeon[terrain] = this.loadSimpleImage(src, 'structure');
+    }
+    for (const [skinId, src] of Object.entries(PLAYER_SKIN_FILES)) {
+      this.playerSkins[skinId] = this.loadSimpleImage(src, 'playerSkin');
     }
   }
 
@@ -574,10 +585,10 @@ class Renderer {
     ctx.lineWidth = 1;
   }
 
-  drawWorldSprite(image, cx, groundY, maxW, maxH, shadowW, shadowH) {
+  drawWorldSprite(image, cx, groundY, maxW, maxH, shadowW, shadowH, scaleAdjust) {
     if (!image || !image.ready || !image.processed || !image.bounds) return null;
     const b = image.bounds;
-    const scale = Math.min(maxW / b.w, maxH / b.h);
+    const scale = Math.min(maxW / b.w, maxH / b.h) * (scaleAdjust || 1);
     const dw = b.w * scale;
     const dh = b.h * scale;
     if (shadowW && shadowH) {
@@ -661,6 +672,34 @@ class Renderer {
     };
   }
 
+  playerOffset(index, count, isMe) {
+    if (count <= 1) return { x: 0, y: 0 };
+    const slots = [
+      { x: 0, y: 0 },
+      { x: -16, y: -5 },
+      { x: 16, y: -5 },
+      { x: -24, y: 7 },
+      { x: 24, y: 7 },
+      { x: 0, y: 12 },
+      { x: -12, y: 16 },
+      { x: 12, y: 16 },
+    ];
+    if (isMe) return slots[0];
+    return slots[Math.min(index, slots.length - 1)] || { x: 0, y: 0 };
+  }
+
+  pickPlayersAtScreen(sx, sy) {
+    const hits = [];
+    for (const hit of this.playerHitboxes) {
+      if (sx < hit.x1 || sx > hit.x2 || sy < hit.y1 || sy > hit.y2) continue;
+      const dx = sx - hit.cx;
+      const dy = sy - hit.cy;
+      hits.push({ player: hit.player, dist: Math.hypot(dx, dy) });
+    }
+    hits.sort((a, b) => a.dist - b.dist || a.player.username.localeCompare(b.player.username));
+    return hits.map((h) => h.player);
+  }
+
   draw() {
     const s = this.server, me = s.me, ctx = this.ctx;
     if (!me) return;
@@ -722,11 +761,34 @@ class Renderer {
     poi.sort((a, b) => a.cy - b.cy);
     for (const p of poi) this.drawContent(p.tile, p.cx, p.cy, p.visible, p.fogged);
 
-    const others = [...s.players.values()]
-      .filter((p) => p.id !== me.id && p.mapId === (me.mapId || 'world') && p.pos && Math.hypot(p.pos.x - px, p.pos.y - py) <= CONFIG.VIEW_RADIUS + 0.5)
-      .sort((a, b) => (a.pos.x + a.pos.y) - (b.pos.x + b.pos.y));
-    for (const p of others) this.drawPlayer(p, false);
-    this.drawPlayer(me, true);
+    const visiblePlayers = [...s.players.values()]
+      .filter((p) => p.mapId === (me.mapId || 'world') && p.pos && Math.hypot(p.pos.x - px, p.pos.y - py) <= CONFIG.VIEW_RADIUS + 0.5)
+      .sort((a, b) => {
+        const da = (a.pos.x + a.pos.y) - (b.pos.x + b.pos.y);
+        if (da) return da;
+        if (a.id === me.id) return 1;
+        if (b.id === me.id) return -1;
+        return a.username.localeCompare(b.username);
+      });
+    const groups = new Map();
+    for (const p of visiblePlayers) {
+      const key = tileKey(p.pos.x, p.pos.y);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(p);
+    }
+    this.playerHitboxes = [];
+    for (const p of visiblePlayers) {
+      const group = groups.get(tileKey(p.pos.x, p.pos.y)) || [p];
+      const ordered = group.slice().sort((a, b) => {
+        if (a.id === me.id) return -1;
+        if (b.id === me.id) return 1;
+        if (a.bot !== b.bot) return a.bot ? 1 : -1;
+        return a.username.localeCompare(b.username);
+      });
+      const index = ordered.findIndex((it) => it.id === p.id);
+      const slot = this.playerOffset(index, ordered.length, p.id === me.id);
+      this.drawPlayer(p, p.id === me.id, slot, ordered.length);
+    }
   }
 
   drawContent(tile, cx, cy, visible, fogged) {
@@ -964,16 +1026,25 @@ if (c.kind === 'dungeon') {
     ctx.fillText(text, cx, cy + 0.5);
   }
 
-  drawPlayer(p, isMe) {
+  drawPlayer(p, isMe, slot, stackCount) {
     const ctx = this.ctx;
-    const cx = this.isoX(p.pos.x, p.pos.y) - this.cam.x + this.w / 2;
-    const cy = this.isoY(p.pos.x, p.pos.y) - this.cam.y + this.h / 2;
+    const offset = slot || { x: 0, y: 0 };
+    const cx = this.isoX(p.pos.x, p.pos.y) - this.cam.x + this.w / 2 + offset.x;
+    const cy = this.isoY(p.pos.x, p.pos.y) - this.cam.y + this.h / 2 + offset.y;
     const cls = CLASSES[p.speciesClass];
 
     ctx.beginPath();
     ctx.ellipse(cx, cy + 6, 14, 5.5, 0, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
     ctx.fill();
+    if (stackCount > 1 && !isMe) {
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + 6, 16, 6.5, 0, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(208,224,236,0.38)';
+      ctx.lineWidth = 1.25;
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    }
     if (isMe) {
       ctx.beginPath();
       ctx.ellipse(cx, cy + 6, 18, 7.5, 0, 0, Math.PI * 2);
@@ -984,8 +1055,28 @@ if (c.kind === 'dungeon') {
     }
 
     let topY = cy - 34;
+    const skinSprite = this.playerSkins[p.skinId || ('base:' + p.speciesClass)] || null;
+    const skinScale = classSkinScale(p.speciesClass);
+    // La largeur n'est volontairement pas plafonnée serré : drawWorldSprite prend
+    // le ratio le plus contraignant (largeur OU hauteur), donc un skin au buste
+    // plus large que haut (cape ouverte, arme tenue à l'horizontale) se
+    // retrouvait rétréci en hauteur par rapport aux autres skins de la même
+    // classe. La hauteur doit rester le seul repère de taille — cohérent avec
+    // la feuille de sprites de base, qui fixe toujours une hauteur (dh) fixe.
+    const skinDrawn = this.drawWorldSprite(
+      skinSprite,
+      cx,
+      cy + 8,
+      isMe ? 120 : 104,
+      isMe ? 66 : 56,
+      0,
+      0,
+      skinScale
+    );
     const cell = SPRITE_CELLS[p.speciesClass];
-    if (this.spritesReady && cell) {
+    if (skinDrawn) {
+      topY = skinDrawn.topY;
+    } else if (this.spritesReady && cell) {
       const cw = this.sprites.width / 3, ch = this.sprites.height / 2;
       const sx = cell[0] * cw + cw * 0.06, sy = cell[1] * ch;
       const sw = cw * 0.88, sh = ch * SPRITE_ROW_CROP[cell[1]];
@@ -1023,6 +1114,16 @@ if (c.kind === 'dungeon') {
       ctx.fillStyle = '#58b368';
       ctx.fillRect(cx - 19, topY - 29, 38 * Math.max(0, Math.min(1, frac)), 5);
     }
+
+    this.playerHitboxes.push({
+      player: p,
+      cx,
+      cy: topY - 6,
+      x1: cx - 28,
+      y1: topY - 18,
+      x2: cx + 28,
+      y2: cy + 16,
+    });
   }
 
   roundRect(x, y, w, h, r) {

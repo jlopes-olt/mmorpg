@@ -20,6 +20,8 @@ class RemoteServer {
     this.speed = 1;
     this.meId = null;
     this.token = null;
+    this.trade = null;
+    this.chatHistory = [];
   }
 
   on(ev, cb) { (this.listeners[ev] = this.listeners[ev] || []).push(cb); }
@@ -113,6 +115,13 @@ class RemoteServer {
     });
     s.on('toast', (t) => this.emit('toast', t));
     s.on('result', (r) => this.emit('result', r));
+    s.on('tradeInvite', (d) => this.emit('tradeInvite', d));
+    s.on('trade', (d) => {
+      this.trade = d || null;
+      this.emit('trade', this.trade);
+    });
+    s.on('duelInvite', (d) => this.emit('duelInvite', d));
+    s.on('duelResult', (d) => this.emit('duelResult', d));
   }
 
   onInit(d) {
@@ -129,9 +138,12 @@ class RemoteServer {
       if (p.id !== d.selfId) this.players.set(p.id, p);
     }
     this.raids = new Map((d.raids || []).map((r) => [r.key, r]));
+    this.trade = d.trade || null;
+    this.chatHistory = d.chatHistory || [];
     this.switchMap(d.mapId || (d.self && d.self.mapId) || 'world');
     this.emit('ready');
     this.emit('self', this.me);
+    if (this.trade) this.emit('trade', this.trade);
   }
 
   register(username, password, speciesClass) {
@@ -166,8 +178,17 @@ class RemoteServer {
   teleportVillage(x, y) { return this.req('village:teleport', { x, y }); }
   createCharacter(speciesClass) { return this.req('char:create', { speciesClass }); }
   switchCharacter(index) { return this.req('char:switch', { index }); }
+  buySkin(skinId) { return this.req('shop:buySkin', { skinId }); }
+  equipSkin(skinId) { return this.req('shop:equipSkin', { skinId }); }
   cook(item, tier) { return this.req('cook', { item, tier }); }
   consume(key) { return this.req('consume', { key }); }
+  requestTrade(targetId) { return this.req('trade:request', { targetId }); }
+  respondTradeInvite(fromId, accept) { return this.req('trade:respond', { fromId, accept }); }
+  updateTradeOffer(offer) { return this.req('trade:offer', { offer }); }
+  confirmTrade(accept) { return this.req('trade:confirm', { accept }); }
+  cancelTrade() { return this.req('trade:cancel', {}); }
+  requestDuel(targetId) { return this.req('duel:request', { targetId }); }
+  respondDuelInvite(fromId, accept) { return this.req('duel:respond', { fromId, accept }); }
   setAdminTier(kind, tier) { return this.req('admin:tier', { kind, tier }); }
   setAdminGear(slot, tier) { return this.req('admin:gear', { slot, tier }); }
   dev(action) { return this.req('dev', action); }
@@ -176,8 +197,19 @@ class RemoteServer {
   adminSetRole(username, role) { return this.req('admin:setRole', { username, role }); }
   adminGrantSlot(username, count) { return this.req('admin:grantSlot', { username, count }); }
   adminGrantGold(username, amount) { return this.req('admin:grantGold', { username, amount }); }
+  adminGrantPremium(username, amount) { return this.req('admin:grantPremium', { username, amount }); }
   adminGrantItem(username, key, qty) { return this.req('admin:grantItem', { username, key, qty }); }
   adminSetLevel(username, kind, tier) { return this.req('admin:setLevel', { username, kind, tier }); }
   adminSetGear(username, slot, tier) { return this.req('admin:setGear', { username, slot, tier }); }
-  say(text) { this.socket.emit('chat', { text }); }
+  say(text, channel, target) { return this.req('chat', { text, channel, target }); }
+  createGuild(name) { return this.req('guild:create', { name }); }
+  inviteToGuild(username) { return this.req('guild:invite', { username }); }
+  respondGuildInvite(accept) { return this.req('guild:respond', { accept }); }
+  leaveGuild() { return this.req('guild:leave', {}); }
+  kickFromGuild(username) { return this.req('guild:kick', { username }); }
+  guildInfo() { return this.req('guild:info', {}); }
+  sendFriendRequest(username) { return this.req('friend:request', { username }); }
+  respondFriendRequest(fromId, accept) { return this.req('friend:respond', { fromId, accept }); }
+  removeFriend(username) { return this.req('friend:remove', { username }); }
+  friendsList() { return this.req('friend:list', {}); }
 }

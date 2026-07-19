@@ -24,7 +24,7 @@ const js = ['config', 'world', 'server', 'render', 'ui', 'main']
 const spriteB64 = fs.readFileSync(path.join(root, 'assets', 'personnages_small.png')).toString('base64');
 
 const out =
-  '<title>Feralia Online</title>\n' +
+  '<title>FERALIA Online</title>\n' +
   '<style>\n' + css + '</style>\n' +
   body + '\n' +
   '<script>window.WILDRIFT_SPRITE = "data:image/png;base64,' + spriteB64 + '";</script>\n' +
@@ -34,3 +34,4 @@ const target = process.argv[2] || path.join(root, 'dist', 'artifact.html');
 fs.mkdirSync(path.dirname(target), { recursive: true });
 fs.writeFileSync(target, out);
 console.log('Écrit :', target, '(' + out.length + ' octets)');
+

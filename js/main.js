@@ -13,11 +13,22 @@
 
 (function () {
   const remote = typeof io !== 'undefined' && location.protocol.indexOf('http') === 0;
+  const SHELL_REV = '20260718-skins-reset-1';
 
   // PWA : service worker (cache + installation sur l'écran d'accueil).
   // Échec silencieux en file:// / artifact.
   if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
-    navigator.serviceWorker.register('/sw.js').catch(() => { /* indisponible */ });
+    const lastRev = localStorage.getItem('feralia_shell_rev') || '';
+    const resetCaches = lastRev !== SHELL_REV
+      ? navigator.serviceWorker.getRegistrations()
+        .then((regs) => Promise.all(regs.map((reg) => reg.unregister())))
+        .then(() => ('caches' in window ? caches.keys().then((keys) => Promise.all(keys.map((key) => caches.delete(key)))) : null))
+        .catch(() => null)
+      : Promise.resolve();
+    resetCaches.finally(() => {
+      localStorage.setItem('feralia_shell_rev', SHELL_REV);
+      navigator.serviceWorker.register('/sw.js?v=' + SHELL_REV).catch(() => { /* indisponible */ });
+    });
   }
   const server = remote ? new RemoteServer() : new ServerSim(CONFIG.WORLD.SEED);
   const canvas = document.getElementById('map');
@@ -25,6 +36,14 @@
   const explored = new Set();
   const renderer = new Renderer(canvas, server, explored);
   const ui = new UI(server, renderer);
+  ui.onApproachPlayer = (player) => {
+    if (!player || !player.pos) return;
+    confirmWalk(player.pos.x, player.pos.y, {
+      title: 'S’approcher de ' + player.username + ' ?',
+      kicker: 'Rencontre',
+      badge: player.username,
+    });
+  };
   ui.onAdminReset = () => {
     ui.confirm('Réinitialiser ?', '<p>Personnage et progression seront effacés.</p>', 'Tout effacer', async () => {
       try {
@@ -362,8 +381,28 @@
     const moved = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y);
     downPos = null;
     if (moved > 12) return;
+    if (!server.me) return;
     const rect = canvas.getBoundingClientRect();
-    const t = renderer.screenToTile(e.clientX - rect.left, e.clientY - rect.top);
+    const localX = e.clientX - rect.left;
+    const localY = e.clientY - rect.top;
+    const players = renderer.pickPlayersAtScreen(localX, localY).filter((p) => p.id !== server.me.id);
+    if (players.length === 1) {
+      ui.showPlayerInteraction(players[0]);
+      return;
+    }
+    if (players.length > 1) {
+      ui.showPlayerPicker(players, {
+        tile: { x: players[0].pos.x, y: players[0].pos.y },
+        moveLabel: 'Aller sur la case',
+        moveCb: () => confirmWalk(players[0].pos.x, players[0].pos.y, {
+          title: 'Aller sur la case occupée ?',
+          kicker: 'Déplacement',
+          badge: 'Rencontre',
+        }),
+      });
+      return;
+    }
+    const t = renderer.screenToTile(localX, localY);
     handleTap(t.x, t.y);
   });
   window.addEventListener('keydown', (e) => {

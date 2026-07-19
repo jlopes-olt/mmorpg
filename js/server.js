@@ -26,6 +26,9 @@ class ServerSim {
     this.tiles = this.worldMap.tiles;
     this.players = new Map();
     this.raids = new Map();
+    this.tradeInvites = new Map();
+    this.trades = new Map();
+    this.trade = null;
     this.pendingReplies = [];
     this.listeners = {};
     this.meId = 'me';
@@ -39,6 +42,34 @@ class ServerSim {
   mapOf(id) { return this.maps.get(id) || this.worldMap; }
   tilesOf(p) { return this.mapOf((p && p.mapId) || 'world').tiles; }
   raidId(mapId, x, y) { return raidKey(mapId || 'world', x, y); }
+  skinStateOf(p) {
+    if (!p) return;
+    if (!Array.isArray(p.ownedSkins)) p.ownedSkins = [];
+    if (typeof p[PREMIUM_CURRENCY.key] !== 'number') p[PREMIUM_CURRENCY.key] = 0;
+    if (typeof p.skinId === 'undefined') p.skinId = null;
+    if (!Array.isArray(p.characters) || !p.characters.length) return;
+    for (const c of p.characters) {
+      if (typeof c.skinId === 'undefined') c.skinId = null;
+    }
+  }
+  publicPlayer(p) {
+    return {
+      id: p.id,
+      username: p.username,
+      speciesClass: p.speciesClass,
+      classLabel: (CLASSES[p.speciesClass] && CLASSES[p.speciesClass].label) || p.speciesClass,
+      role: (CLASSES[p.speciesClass] && CLASSES[p.speciesClass].role) || '',
+      pos: p.pos,
+      status: p.status,
+      bot: !!p.bot,
+      mapId: p.mapId || 'world',
+      weaponTier: p.weapon ? p.weapon.tier : 0,
+      armorTier: p.armor ? p.armor.tier : 0,
+      weaponType: p.weapon ? p.weapon.type : '',
+      armorType: p.armor ? p.armor.type : '',
+      skinId: p.skinId || null,
+    };
+  }
 
   syncCurrentMap() {
     const me = this.me;
@@ -74,6 +105,83 @@ class ServerSim {
     }
     return origin;
   }
+
+  isTradeableStack(key) {
+    const parsed = parseStackKey(String(key || ''));
+    return !!RESOURCES[parsed.type] && !CONSUMABLES[parsed.type];
+  }
+
+  playerNear(a, b, maxDist) {
+    return !!(a && b && (a.mapId || 'world') === (b.mapId || 'world') && this.chebyshev(a.pos, b.pos) <= (maxDist || 1));
+  }
+
+  tradePayloadFor(viewer, trade) {
+    if (!trade || !viewer) return null;
+    const meOffer = trade.offers[viewer.id] || { gold: 0, items: {}, accepted: false };
+    const otherId = trade.players.find((id) => id !== viewer.id);
+    const other = this.players.get(otherId);
+    const otherOffer = trade.offers[otherId] || { gold: 0, items: {}, accepted: false };
+    return {
+      id: trade.id,
+      withPlayer: other ? this.publicPlayer(other) : null,
+      offers: {
+        self: { gold: meOffer.gold, items: { ...meOffer.items }, accepted: !!meOffer.accepted },
+        other: { gold: otherOffer.gold, items: { ...otherOffer.items }, accepted: !!otherOffer.accepted },
+      },
+    };
+  }
+
+  pushTrade(trade) {
+    this.trade = trade ? this.tradePayloadFor(this.me, trade) : null;
+    this.emit('trade', this.trade);
+  }
+
+  closeTrade(trade, reason) {
+    if (!trade) return;
+    this.trades.delete(trade.id);
+    const me = this.me;
+    if (me && me.tradeId === trade.id) {
+      me.tradeId = null;
+      if (me.status === 'TRADING') me.status = 'IDLE';
+      this.emit('self', me);
+    }
+    this.pushTrade(null);
+    if (reason) this.toast(reason);
+  }
+
+  requestTrade(targetId) {
+    const target = this.players.get(String(targetId));
+    const me = this.me;
+    if (!target || target.bot) return { ok: false, error: 'Échanges disponibles en multijoueur réel.' };
+    if (target.id === me.id) return { ok: false, error: 'Impossible d’échanger avec vous-même.' };
+    return { ok: false, error: 'Échanges disponibles en multijoueur réel.' };
+  }
+
+  respondTradeInvite(fromId, accept) { return { ok: false, error: 'Échanges disponibles en multijoueur réel.' }; }
+  updateTradeOffer(offer) { return { ok: false, error: 'Échanges disponibles en multijoueur réel.' }; }
+  confirmTrade(accept) { return { ok: false, error: 'Échanges disponibles en multijoueur réel.' }; }
+  cancelTrade() { return { ok: false, error: 'Aucun échange actif.' }; }
+
+  requestDuel(targetId) {
+    const target = this.players.get(String(targetId));
+    const me = this.me;
+    if (!target || target.bot) return { ok: false, error: 'Duels disponibles en multijoueur réel.' };
+    if (target.id === me.id) return { ok: false, error: 'Impossible de se défier soi-même.' };
+    return { ok: false, error: 'Duels disponibles en multijoueur réel.' };
+  }
+
+  respondDuelInvite(fromId, accept) { return { ok: false, error: 'Duels disponibles en multijoueur réel.' }; }
+
+  createGuild(name) { return { ok: false, error: 'Guildes disponibles en multijoueur réel.' }; }
+  inviteToGuild(username) { return { ok: false, error: 'Guildes disponibles en multijoueur réel.' }; }
+  respondGuildInvite(accept) { return { ok: false, error: 'Guildes disponibles en multijoueur réel.' }; }
+  leaveGuild() { return { ok: false, error: 'Vous n’êtes pas dans une guilde.' }; }
+  kickFromGuild(username) { return { ok: false, error: 'Guildes disponibles en multijoueur réel.' }; }
+  guildInfo() { return { ok: false, error: 'Vous n’êtes pas dans une guilde.' }; }
+  sendFriendRequest(username) { return { ok: false, error: 'Amis disponibles en multijoueur réel.' }; }
+  respondFriendRequest(fromId, accept) { return { ok: false, error: 'Amis disponibles en multijoueur réel.' }; }
+  removeFriend(username) { return { ok: false, error: 'Amis disponibles en multijoueur réel.' }; }
+  friendsList() { return { ok: true, list: [] }; }
 
   mapStates() {
     const out = {};
@@ -133,14 +241,23 @@ class ServerSim {
       hp: 100, hpMs: 0,
       inventory: {},
       gold: 0,
+      [PREMIUM_CURRENCY.key]: 24,
+      ownedSkins: [],
       status: 'IDLE',
       harvestKey: null, harvestEndsAt: 0,
       raidKey: null,
+      tradeId: null,
+      duels: { wins: 0, losses: 0 },
+      guildId: null,
+      guildInvite: null,
+      friends: [],
+      friendRequests: [],
       characters: [newCharacter(speciesClass)],
       activeChar: 0,
       charSlots: CONFIG.FREE_CHAR_SLOTS,
       visitedVillages: [],
     };
+    this.skinStateOf(p);
     applyCharacter(p, 0);
     p.hp = maxHp(p);
     this.players.set(p.id, p);
@@ -166,8 +283,48 @@ class ServerSim {
     if (me.characters.some((c) => c.speciesClass === speciesClass)) return { ok: false, error: 'Vous incarnez déjà cette forme.' };
     syncActiveCharacter(me);
     me.characters.push(newCharacter(speciesClass));
+    this.skinStateOf(me);
     this.emit('self', me);
     return { ok: true, index: me.characters.length - 1 };
+  }
+
+  buySkin(skinId) {
+    const me = this.me;
+    const item = skinFor(String(skinId || ''));
+    if (!item) return { ok: false, error: 'Skin inconnu.' };
+    if (me.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
+    if (me.speciesClass !== item.speciesClass) return { ok: false, error: 'Ce skin est réservé à une autre classe.' };
+    this.skinStateOf(me);
+    if (me.ownedSkins.includes(item.id)) return { ok: false, error: 'Skin déjà possédé.' };
+    const walletKey = item.currency === PREMIUM_CURRENCY.key ? PREMIUM_CURRENCY.key : 'gold';
+    const balance = Number(me[walletKey] || 0);
+    if (balance < item.price) {
+      return { ok: false, error: walletKey === 'gold' ? 'Pas assez d’or.' : ('Pas assez de ' + PREMIUM_CURRENCY.label.toLowerCase() + '.') };
+    }
+    me[walletKey] = balance - item.price;
+    me.ownedSkins.push(item.id);
+    this.emit('self', me);
+    return { ok: true };
+  }
+
+  equipSkin(skinId) {
+    const me = this.me;
+    this.skinStateOf(me);
+    const desired = skinId ? String(skinId) : null;
+    if (!desired) {
+      me.skinId = null;
+      syncActiveCharacter(me);
+      this.emit('self', me);
+      return { ok: true };
+    }
+    const item = skinFor(desired);
+    if (!item) return { ok: false, error: 'Skin inconnu.' };
+    if (item.speciesClass !== me.speciesClass) return { ok: false, error: 'Ce skin ne correspond pas à votre forme active.' };
+    if (!me.ownedSkins.includes(item.id)) return { ok: false, error: 'Vous ne possédez pas ce skin.' };
+    me.skinId = item.id;
+    syncActiveCharacter(me);
+    this.emit('self', me);
+    return { ok: true };
   }
 
   /* ---------- Cuisine : la Marmite (Capitale + villages) ---------- */
@@ -252,18 +409,20 @@ class ServerSim {
         y = Math.round(Math.sin(a) * d);
         tries++;
       } while (!isWalkable(this.worldMap.tiles, x, y) && tries < 50);
-      this.players.set('bot' + i, {
+      const bot = {
         id: 'bot' + i, username: BOT_NAMES[i % BOT_NAMES.length], speciesClass: cls, bot: true,
         mapId: 'world',
         pos: { x, y }, home: { x, y },
-        hp: 100, pa: 100,
+        pa: 100,
         harvestLevel: tier, weaponMastery: tier,
         weapon: { tier: Math.max(0, tier - 1), type: CLASS_GEAR[cls].weapon },
         armor: { tier: Math.max(0, tier - 1), type: CLASS_GEAR[cls].armor },
         inventory: {},
         status: 'IDLE', raidKey: null,
         nextThink: Math.random() * CONFIG.BOT_TICK_MS,
-      });
+      };
+      bot.hp = maxHp(bot);
+      this.players.set('bot' + i, bot);
     }
   }
 
@@ -659,17 +818,21 @@ class ServerSim {
     return { ok: true };
   }
 
-  say(text) {
+  say(text, channel) {
+    if (channel === 'guild' || channel === 'whisper') {
+      return { ok: false, error: (channel === 'guild' ? 'Guildes' : 'Messages privés') + ' disponibles en multijoueur réel.' };
+    }
     const me = this.me;
-    this.emit('chat', { from: me.username, text, type: 'chat', self: true });
+    this.emit('chat', { from: me.username, text, type: 'chat', channel: 'general', self: true });
     if (Math.random() < 0.5) {
       const bots = [...this.players.values()].filter((p) => p.bot);
       const bot = bots[Math.floor(Math.random() * bots.length)];
       this.pendingReplies.push({
         at: this.now + 1500 + Math.random() * 3500,
-        msg: { from: bot.username, text: BOT_CHAT[Math.floor(Math.random() * BOT_CHAT.length)], type: 'chat' },
+        msg: { from: bot.username, text: BOT_CHAT[Math.floor(Math.random() * BOT_CHAT.length)], type: 'chat', channel: 'general' },
       });
     }
+    return { ok: true };
   }
 
   checkLevelUp(p, kind) {
@@ -734,6 +897,7 @@ class ServerSim {
     p.status = 'IDLE';
     p.harvestKey = null;
     p.raidKey = null;
+    p.tradeId = null;
     if (!Array.isArray(p.characters) || !p.characters.length) {
       const c = {};
       for (const f of CHARACTER_FIELDS) c[f] = p[f];
@@ -743,10 +907,18 @@ class ServerSim {
     if (!p.mapId) p.mapId = 'world';
     if (typeof p.charSlots !== 'number') p.charSlots = CONFIG.FREE_CHAR_SLOTS;
     if (typeof p.gold !== 'number') p.gold = 0;
+    if (typeof p[PREMIUM_CURRENCY.key] !== 'number') p[PREMIUM_CURRENCY.key] = 0;
+    if (!Array.isArray(p.ownedSkins)) p.ownedSkins = [];
     if (!Array.isArray(p.visitedVillages)) p.visitedVillages = [];
+    if (!p.duels || typeof p.duels.wins !== 'number') p.duels = { wins: 0, losses: 0 };
+    if (typeof p.guildId !== 'string') p.guildId = null;
+    if (!p.guildInvite || typeof p.guildInvite !== 'object') p.guildInvite = null;
+    if (!Array.isArray(p.friends)) p.friends = [];
+    if (!Array.isArray(p.friendRequests)) p.friendRequests = [];
     const away = Math.max(0, Date.now() - (data.savedAt || Date.now()));
     p.pa = Math.min(CONFIG.PA.MAX, p.pa + Math.floor(away / CONFIG.PA.REGEN_MS));
     p.hp = Math.min(maxHp(p), p.hp + Math.floor(away / CONFIG.HP.REGEN_MS));
+    this.skinStateOf(p);
     this.players.set(p.id, p);
     for (const [mapId, state] of Object.entries(data.mapStates || {})) {
       const map = this.mapOf(mapId);

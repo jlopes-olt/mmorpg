@@ -4,20 +4,22 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <meta name="theme-color" content="#14181d">
-  <title>Feralia Online</title>
+  <meta name="application-name" content="FERALIA Online">
+  <meta name="apple-mobile-web-app-title" content="FERALIA Online">
+  <title>FERALIA Online</title>
   <link rel="icon" type="image/png" sizes="192x192" href="assets/icons/icon-192.png">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=20260718-skins-reset-1">
 </head>
 <body>
   <div id="app">
     <div id="splash">
       <div class="splash-inner">
-        <img class="splash-logo" src="assets/feralia_online_logo.png" alt="Feralia Online">
+        <img class="splash-logo" src="assets/feralia_online_logo.png" alt="FERALIA Online">
       </div>
     </div>
 
@@ -86,7 +88,7 @@
       <button data-panel="shop"><span class="ico nav-ico nav-ico-shop" aria-hidden="true"></span><span>Boutique</span></button>
       <button data-panel="profile"><span class="ico nav-ico nav-ico-profile" aria-hidden="true"></span><span>Profil</span></button>
       <button data-panel="map"><span class="ico nav-ico nav-ico-map" aria-hidden="true"></span><span>Carte</span></button>
-      <button data-panel="social"><span class="ico nav-ico nav-ico-social" aria-hidden="true"></span><span>Social</span></button>
+      <button data-panel="social"><span class="ico nav-ico nav-ico-social" aria-hidden="true"></span><span class="nav-badge hidden" id="socialNavBadge"></span><span>Social</span></button>
     </nav>
 
     <!-- Pop-ups contextuelles (récolte, raid, résultats) -->
@@ -115,12 +117,13 @@
   <!-- Fourni par le backend Node ; échoue silencieusement en local pur
        (file:// / artifact) et le jeu bascule alors en simulation solo. -->
   <script src="/socket.io/socket.io.js"></script>
-  <script src="js/config.js"></script>
-  <script src="js/world.js"></script>
-  <script src="js/server.js"></script>
-  <script src="js/net.js"></script>
-  <script src="js/render.js"></script>
-  <script src="js/ui.js"></script>
-  <script src="js/main.js"></script>
+  <script src="js/config.js?v=20260718-skins-reset-1"></script>
+  <script src="js/world.js?v=20260718-skins-reset-1"></script>
+  <script src="js/server.js?v=20260718-skins-reset-1"></script>
+  <script src="js/net.js?v=20260718-skins-reset-1"></script>
+  <script src="js/render.js?v=20260718-skins-reset-1"></script>
+  <script src="js/ui.js?v=20260718-skins-reset-1"></script>
+  <script src="js/main.js?v=20260718-skins-reset-1"></script>
 </body>
 </html>
+

@@ -22,6 +22,11 @@ class UI {
     this.inventorySort = 'type';
     this.adminOpen = false;   // état du <details> admin, survit aux re-rendus
     this.adminExpandedUser = null;   // ligne dépliée dans le dashboard admin, survit aux re-rendus
+    this.chatChannel = 'general';   // 'general' | 'guild' | 'whisper', survit aux re-rendus
+    this.chatWhisperTarget = null;  // pseudo de l'ami actuellement en conversation privée
+    this.chatUnread = { general: false, guild: false, whisper: false };
+    this.lastSeenGuildInviteKey = null;
+    this.seenFriendRequestKeys = new Set();
     this.onAdminReset = null;
     this.combatSwordSrc = 'assets/combat_sword.png';
     this.modalAssetSrc = {
@@ -48,6 +53,9 @@ class UI {
       POTION_SEVE: 'assets/item_potion_de_seve.png',
     };
     this.harvestFxTimer = null;
+    this.popupMode = null;
+    this.tradeDraft = null;
+    this.tradeUiState = { filter: 'ALL', scrollTop: 0 };
 
     // Feuille de sprites partagée avec le CSS (avatars DOM).
     // URL absolue obligatoire : une url() relative dans une custom
@@ -73,7 +81,7 @@ class UI {
       if (!r.ok) this.toast(r.error);
     });
     $('popup').addEventListener('click', (e) => {
-      if (e.target.id === 'popup') this.closePopup();
+      if (e.target.id === 'popup' && this.popupMode !== 'trade') this.closePopup();
     });
     document.querySelectorAll('#nav button').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -84,13 +92,82 @@ class UI {
 
     server.on('toast', (t) => this.toast(t.text));
     server.on('chat', (msg) => this.pushFeed(msg));
+    server.on('ready', () => {
+      // Historique reçu à la connexion (général vu de tous, guilde courante,
+      // MP qui nous concernent) : on le rejoue pour retrouver le fil après
+      // une déconnexion, et on signale ce qui n'a pas encore été lu.
+      const history = Array.isArray(this.server.chatHistory) ? this.server.chatHistory.slice(-120) : [];
+      this.feed = history.map((m) => ({
+        ...m,
+        self: !!(m.from && this.server.me && m.from === this.server.me.username),
+      }));
+      for (const m of this.feed) {
+        if (m.type === 'chat' && !m.self) this.chatUnread[m.channel || 'general'] = true;
+      }
+      this.updateChatBadges();
+    });
     server.on('result', (r) => this.showResult(r));
+    server.on('tradeInvite', (invite) => this.showTradeInvite(invite));
+    server.on('duelInvite', (invite) => this.showDuelInvite(invite));
+    server.on('duelResult', (r) => this.showDuelResult(r));
+    server.on('trade', (trade) => {
+      if (trade) {
+        this.tradeDraft = {
+          id: trade.id,
+          gold: (trade.offers && trade.offers.self && trade.offers.self.gold) || 0,
+          items: { ...(((trade.offers && trade.offers.self) || {}).items || {}) },
+        };
+        this.showTradePopup(trade);
+      } else {
+        this.tradeDraft = null;
+        if (this.popupMode === 'trade') this.closePopup();
+      }
+    });
     server.on('self', () => {
       if (this.openSheet === 'inventory') this.showSheet('inventory');
       if (this.openSheet === 'shop') this.showSheet('shop');
       if (this.openSheet === 'profile') this.showSheet('profile');
       if (this.openSheet === 'capital') this.showSheet('capital');
       if (this.openSheet === 'marmite') this.showSheet('marmite');
+      // Re-rendu complet sauf si l'utilisateur est en train de saisir du texte
+      // (message, nom de guilde, pseudo…) — sinon le rafraîchissement
+      // périodique de self l'effacerait en pleine frappe. Et même quand on
+      // rafraîchit, on restaure le défilement pour ne pas ramener en haut
+      // quelqu'un qui lisait le fil ou la liste des membres.
+      if (this.openSheet === 'social') {
+        const sheetBody = $('sheetBody');
+        const active = document.activeElement;
+        const isTyping = sheetBody && active && sheetBody.contains(active) &&
+          (active.tagName === 'INPUT' || active.tagName === 'SELECT' || active.tagName === 'TEXTAREA');
+        if (!isTyping) {
+          // build_social est asynchrone (fetch guilde/amis) : on ne peut pas
+          // restaurer le défilement juste après l'appel, il faut le faire à
+          // la fin du rendu réel (renderSocial), une fois le contenu repeuplé.
+          this.pendingSocialScrollTop = sheetBody ? sheetBody.scrollTop : null;
+          this.showSheet('social');
+        }
+      }
+      if (this.popupMode === 'trade' && this.server.trade) this.showTradePopup(this.server.trade);
+    });
+    server.on('self', (p) => {
+      if (p && p.guildInvite) {
+        const key = p.guildInvite.guildId + '|' + p.guildInvite.at;
+        if (key !== this.lastSeenGuildInviteKey) {
+          this.lastSeenGuildInviteKey = key;
+          this.toast('🏰 ' + p.guildInvite.fromUsername + ' vous invite dans « ' + p.guildInvite.guildName + ' ».');
+        }
+      } else {
+        this.lastSeenGuildInviteKey = null;
+      }
+      if (p && Array.isArray(p.friendRequests)) {
+        for (const r of p.friendRequests) {
+          const key = r.fromId + '|' + r.at;
+          if (!this.seenFriendRequestKeys.has(key)) {
+            this.seenFriendRequestKeys.add(key);
+            this.toast('👥 ' + r.fromUsername + ' vous a envoyé une demande d’ami.');
+          }
+        }
+      }
     });
   }
 
@@ -261,6 +338,404 @@ showDungeonPopup(tile, onEnter) {
     );
   }
 
+  playerSummaryHtml(player) {
+    const cls = CLASSES[player.speciesClass] || { label: player.classLabel || player.speciesClass, role: player.role || '' };
+    return (
+      '<div class="player-peek">' +
+        this.spriteAvatar(player.speciesClass, 'small', player.skinId) +
+        '<div class="player-peek-copy">' +
+          '<div class="player-peek-name">' + esc(player.username) + '</div>' +
+          '<div class="player-peek-class">' + esc(cls.label) + (cls.role ? ' · ' + esc(cls.role) : '') + '</div>' +
+          '<div class="player-peek-gear">Arme T' + (player.weaponTier || 0) + ' · Armure T' + (player.armorTier || 0) + '</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  showPlayerPicker(players, opts) {
+    const wrap = $('popup');
+    wrap.innerHTML = '';
+    const card = document.createElement('div');
+    card.className = 'popup-card';
+    const tile = opts && opts.tile;
+    card.innerHTML =
+      '<h3>Aventuriers présents</h3>' +
+      '<div class="popup-body">' +
+        '<p>' + players.length + ' héros occupent cette zone' +
+        (tile ? ' <b>(' + tile.x + ', ' + tile.y + ')</b>' : '') + '.</p>' +
+        '<div class="player-choice-list"></div>' +
+      '</div>';
+    const list = card.querySelector('.player-choice-list');
+    for (const player of players) {
+      const btn = document.createElement('button');
+      btn.className = 'travel-choice player-choice';
+      btn.innerHTML =
+        '<span class="travel-choice-title">' + esc(player.username) + '</span>' +
+        '<span class="travel-choice-meta">' + esc(player.classLabel || ((CLASSES[player.speciesClass] || {}).label || player.speciesClass)) +
+        ' · Arme T' + (player.weaponTier || 0) + ' · Armure T' + (player.armorTier || 0) + '</span>';
+      btn.addEventListener('click', () => this.showPlayerInteraction(player));
+      list.appendChild(btn);
+    }
+
+    const row = document.createElement('div');
+    row.className = 'popup-actions';
+    if (opts && opts.moveLabel && opts.moveCb) {
+      const moveBtn = document.createElement('button');
+      moveBtn.className = 'btn primary';
+      moveBtn.textContent = opts.moveLabel;
+      moveBtn.addEventListener('click', () => { this.closePopup(); opts.moveCb(); });
+      row.appendChild(moveBtn);
+    }
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'btn';
+    closeBtn.textContent = 'Fermer';
+    closeBtn.addEventListener('click', () => this.closePopup());
+    row.appendChild(closeBtn);
+    card.appendChild(row);
+    wrap.appendChild(card);
+    wrap.classList.remove('hidden');
+    this.popupMode = 'generic';
+  }
+
+  showPlayerInspect(player) {
+    const cls = CLASSES[player.speciesClass] || { label: player.classLabel || player.speciesClass, bonus: '' };
+    this.popup(
+      'Profil de ' + esc(player.username),
+      this.playerSummaryHtml(player) +
+      '<p><b>Arme</b> : ' + esc(player.weaponType || 'Équipement') + ' · T' + (player.weaponTier || 0) + '</p>' +
+      '<p><b>Armure</b> : ' + esc(player.armorType || 'Équipement') + ' · T' + (player.armorTier || 0) + '</p>' +
+      (cls.bonus ? '<p class="dim small">Talent : ' + esc(cls.bonus) + '</p>' : ''),
+      [{ label: 'Fermer' }]
+    );
+  }
+
+  showPlayerInteraction(player) {
+    const me = this.server.me;
+    const near = me && player && player.pos && me.pos && (this.server.chebyshev(me.pos, player.pos) <= 1) &&
+      ((me.mapId || 'world') === (player.mapId || 'world'));
+    const wrap = $('popup');
+    wrap.innerHTML = '';
+    const card = document.createElement('div');
+    card.className = 'popup-card';
+    card.innerHTML =
+      '<h3>Interaction</h3>' +
+      '<div class="popup-body">' +
+        this.playerSummaryHtml(player) +
+        '<p class="dim small">' + (near ? 'Vous êtes au contact.' : 'Approchez-vous pour échanger.') + '</p>' +
+      '</div>';
+    const row = document.createElement('div');
+    row.className = 'popup-actions popup-actions-wrap';
+
+    if (!near) {
+      const moveBtn = document.createElement('button');
+      moveBtn.className = 'btn primary';
+      moveBtn.textContent = 'S’approcher';
+      moveBtn.addEventListener('click', () => {
+        this.closePopup();
+        if (this.onApproachPlayer) this.onApproachPlayer(player);
+      });
+      row.appendChild(moveBtn);
+    } else if (!player.bot) {
+      const tradeBtn = document.createElement('button');
+      tradeBtn.className = 'btn primary';
+      tradeBtn.textContent = 'Échanger';
+      tradeBtn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.requestTrade(player.id));
+        if (!r.ok) this.toast(r.error);
+      });
+      row.appendChild(tradeBtn);
+
+      const duelBtn = document.createElement('button');
+      duelBtn.className = 'btn';
+      duelBtn.textContent = '⚔ Défier en duel';
+      duelBtn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.requestDuel(player.id));
+        if (!r.ok) this.toast(r.error);
+        else this.closePopup();
+      });
+      row.appendChild(duelBtn);
+    }
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'btn';
+    closeBtn.textContent = 'Fermer';
+    closeBtn.addEventListener('click', () => this.closePopup());
+    row.appendChild(closeBtn);
+
+    card.appendChild(row);
+    wrap.appendChild(card);
+    wrap.classList.remove('hidden');
+    this.popupMode = 'generic';
+  }
+
+  showTradeInvite(invite) {
+    if (!invite || !invite.fromPlayer) return;
+    const from = invite.fromPlayer;
+    this.popup(
+      'Demande d’échange',
+      this.playerSummaryHtml(from) + '<p>Accepter l’échange avec ' + esc(from.username) + ' ?</p>',
+      [
+        {
+          label: 'Refuser',
+          cb: async () => {
+            const r = await Promise.resolve(this.server.respondTradeInvite(from.id, false));
+            if (!r.ok) this.toast(r.error);
+          },
+        },
+        {
+          label: 'Accepter',
+          primary: true,
+          cb: async () => {
+            const r = await Promise.resolve(this.server.respondTradeInvite(from.id, true));
+            if (!r.ok) this.toast(r.error);
+          },
+        },
+      ]
+    );
+  }
+
+  showDuelInvite(invite) {
+    if (!invite || !invite.fromPlayer) return;
+    const from = invite.fromPlayer;
+    this.popup(
+      'Défi en duel',
+      this.playerSummaryHtml(from) +
+      '<p>' + esc(from.username) + ' vous défie en duel amical.</p>' +
+      '<p class="dim small">Aucune perte de PV ni d’or — seul le palmarès évolue.</p>',
+      [
+        {
+          label: 'Refuser',
+          cb: async () => {
+            const r = await Promise.resolve(this.server.respondDuelInvite(from.id, false));
+            if (!r.ok) this.toast(r.error);
+          },
+        },
+        {
+          label: 'Accepter',
+          primary: true,
+          cb: async () => {
+            const r = await Promise.resolve(this.server.respondDuelInvite(from.id, true));
+            if (!r.ok) this.toast(r.error);
+          },
+        },
+      ]
+    );
+  }
+
+  showDuelResult(r) {
+    if (!r) return;
+    this.popup(
+      r.won ? '⚔ Victoire en duel !' : '⚔ Défaite en duel',
+      '<p>Face à <b>' + esc(r.opponent) + '</b> — ' + r.chance + ' % de chances de victoire.</p>' +
+      '<p class="dim small">Puissance : ' + r.yourPower + ' contre ' + r.opponentPower + '.</p>' +
+      '<p class="dim small">Duel amical : aucune perte de PV ni d’or.</p>',
+      [{ label: 'Fermer', primary: true }]
+    );
+  }
+
+  tradeOfferSummaryHtml(offer) {
+    const parts = [];
+    if (offer.gold) parts.push(offer.gold + ' or');
+    for (const [key, qty] of Object.entries(offer.items || {})) {
+      const parsed = parseStackKey(key);
+      parts.push(qty + '× ' + this.tradeStackLabel(parsed.type, parsed.tier));
+    }
+    return parts.length ? parts.join('<br>') : '<span class="dim">Aucune offre</span>';
+  }
+
+  tradeStackLabel(type, tier) {
+    if (CONSUMABLES[type]) return CONSUMABLES[type].label + ' T' + tier;
+    return resourceLabel(type, tier);
+  }
+
+  tradeStackKind(type) {
+    if (CONSUMABLES[type]) return 'CONSUMABLE';
+    if (type === 'BOIS' || type === 'BOIS_ANCIEN') return 'BOIS';
+    if (type === 'MINERAI' || type === 'MINERAI_RUNIQUE') return 'MINERAI';
+    if (type === 'PLANTE' || type === 'FLEUR_ASTRALE' || type === 'TOURBE_VIVANTE') return 'PLANTE';
+    if (type === 'INGREDIENT') return 'INGREDIENT';
+    return 'AUTRE';
+  }
+
+  tradeStackIconSrc(type, tier) {
+    if (CONSUMABLES[type]) return this.getConsumableTargetSrc(type);
+    return this.getResourceTargetSrc(type, tier);
+  }
+
+  sameTradeOffer(a, b) {
+    const goldA = Number((a && a.gold) || 0);
+    const goldB = Number((b && b.gold) || 0);
+    if (goldA !== goldB) return false;
+    const itemsA = (a && a.items) || {};
+    const itemsB = (b && b.items) || {};
+    const keysA = Object.keys(itemsA).filter((k) => Number(itemsA[k]) > 0).sort();
+    const keysB = Object.keys(itemsB).filter((k) => Number(itemsB[k]) > 0).sort();
+    if (keysA.length !== keysB.length) return false;
+    for (let i = 0; i < keysA.length; i++) {
+      const key = keysA[i];
+      if (key !== keysB[i]) return false;
+      if (Number(itemsA[key]) !== Number(itemsB[key])) return false;
+    }
+    return true;
+  }
+
+  showTradePopup(trade) {
+    if (!trade || !trade.withPlayer) return;
+    const me = this.server.me;
+    const own = trade.offers.self || { gold: 0, items: {}, accepted: false };
+    const other = trade.offers.other || { gold: 0, items: {}, accepted: false };
+    const draft = this.tradeDraft && this.tradeDraft.id === trade.id
+      ? this.tradeDraft
+      : { id: trade.id, gold: own.gold || 0, items: { ...(own.items || {}) } };
+    const resourceKeys = Object.keys(me.inventory || {}).filter((key) => {
+      const parsed = parseStackKey(key);
+      return !!RESOURCES[parsed.type] || !!CONSUMABLES[parsed.type];
+    }).sort((a, b) => {
+        const pa = parseStackKey(a);
+        const pb = parseStackKey(b);
+        const ka = this.tradeStackKind(pa.type);
+        const kb = this.tradeStackKind(pb.type);
+        if (ka !== kb) return ka.localeCompare(kb);
+        if (pa.type !== pb.type) return this.tradeStackLabel(pa.type, pa.tier).localeCompare(this.tradeStackLabel(pb.type, pb.tier));
+        return pa.tier - pb.tier;
+      });
+    const filterDefs = [
+      ['ALL', 'Tout'],
+      ['BOIS', 'Bois'],
+      ['MINERAI', 'Minerai'],
+      ['PLANTE', 'Plante'],
+      ['INGREDIENT', 'Ingrédients'],
+      ['CONSUMABLE', 'Consommables'],
+    ];
+    const selectedFilter = this.tradeUiState.filter || 'ALL';
+
+    const wrap = $('popup');
+    wrap.innerHTML = '';
+    const card = document.createElement('div');
+    card.className = 'popup-card trade-popup';
+    card.innerHTML =
+      '<h3>Échange avec ' + esc(trade.withPlayer.username) + '</h3>' +
+      '<div class="popup-body">' +
+        '<div class="trade-head">' +
+          this.playerSummaryHtml(trade.withPlayer) +
+        '</div>' +
+        '<div class="trade-grid">' +
+          '<div class="trade-side">' +
+            '<div class="trade-side-title">Votre offre ' + (own.accepted ? '<span class="role-chip">Validée</span>' : '') + '</div>' +
+            '<label class="trade-gold-label">Or' +
+              '<input id="tradeGoldInput" class="trade-gold-input" type="number" min="0" max="' + (me.gold || 0) + '" value="' + (draft.gold || 0) + '">' +
+            '</label>' +
+            '<div class="trade-filterbar">' +
+              filterDefs.map(([key, label]) =>
+                '<button class="btn trade-filter-btn' + (selectedFilter === key ? ' active' : '') + '" data-trade-filter="' + key + '">' + label + '</button>'
+              ).join('') +
+            '</div>' +
+            '<div class="trade-list" id="tradeOfferList"></div>' +
+          '</div>' +
+          '<div class="trade-side">' +
+            '<div class="trade-side-title">Offre adverse ' + (other.accepted ? '<span class="role-chip">Validée</span>' : '') + '</div>' +
+            '<div class="trade-summary-box">' + this.tradeOfferSummaryHtml(other) + '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    const list = card.querySelector('#tradeOfferList');
+    const filteredKeys = resourceKeys.filter((key) => {
+      if (selectedFilter === 'ALL') return true;
+      const parsed = parseStackKey(key);
+      return this.tradeStackKind(parsed.type) === selectedFilter;
+    });
+    if (!filteredKeys.length) {
+      list.innerHTML = '<p class="dim small">Aucune ressource ou consommable échangeable.</p>';
+    } else {
+      for (const key of filteredKeys) {
+        const parsed = parseStackKey(key);
+        const art = this.tradeStackIconSrc(parsed.type, parsed.tier);
+        const row = document.createElement('label');
+        row.className = 'trade-row';
+        row.innerHTML =
+          '<span class="trade-row-art">' +
+            (art ? '<img class="trade-row-icon" src="' + art + '" alt="">' : '<span class="trade-row-fallback">' + (RESOURCE_EMOJI[parsed.type] || '❔') + '</span>') +
+          '</span>' +
+          '<span class="trade-row-copy"><span class="trade-row-name">' + esc(this.tradeStackLabel(parsed.type, parsed.tier)) + '</span>' +
+          '<span class="trade-row-kind">' + esc(this.tradeStackKind(parsed.type)) + '</span></span>' +
+          '<span class="trade-row-have">x' + (me.inventory[key] || 0) + '</span>' +
+          '<input class="trade-qty-input" data-trade-key="' + esc(key) + '" type="number" min="0" max="' + (me.inventory[key] || 0) + '" value="' + ((draft.items && draft.items[key]) || 0) + '">';
+        list.appendChild(row);
+      }
+    }
+
+    const syncTradeDraft = () => {
+      const next = { id: trade.id, gold: 0, items: {} };
+      const goldInput = card.querySelector('#tradeGoldInput');
+      next.gold = Math.max(0, Number(goldInput && goldInput.value || 0));
+      card.querySelectorAll('[data-trade-key]').forEach((input) => {
+        const qty = Math.max(0, Number(input.value || 0));
+        if (qty > 0) next.items[input.dataset.tradeKey] = qty;
+      });
+      this.tradeDraft = next;
+      return next;
+    };
+    const rememberTradeUiState = () => {
+      const activeFilter = card.querySelector('[data-trade-filter].active');
+      this.tradeUiState.filter = activeFilter ? activeFilter.dataset.tradeFilter : (this.tradeUiState.filter || 'ALL');
+      this.tradeUiState.scrollTop = list.scrollTop;
+    };
+
+    const goldInput = card.querySelector('#tradeGoldInput');
+    if (goldInput) goldInput.addEventListener('input', syncTradeDraft);
+    card.querySelectorAll('[data-trade-key]').forEach((input) => {
+      input.addEventListener('input', syncTradeDraft);
+      input.addEventListener('change', syncTradeDraft);
+    });
+    card.querySelectorAll('[data-trade-filter]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.tradeUiState.filter = btn.dataset.tradeFilter;
+        this.tradeUiState.scrollTop = 0;
+        this.showTradePopup(trade);
+      });
+    });
+    list.addEventListener('scroll', () => {
+      this.tradeUiState.scrollTop = list.scrollTop;
+    });
+    requestAnimationFrame(() => {
+      list.scrollTop = this.tradeUiState.scrollTop || 0;
+    });
+
+    const row = document.createElement('div');
+    row.className = 'popup-actions popup-actions-wrap';
+    const confirmBtn = document.createElement('button');
+    confirmBtn.className = 'btn primary';
+    confirmBtn.textContent = own.accepted ? 'Retirer validation' : 'Valider';
+    confirmBtn.addEventListener('click', async () => {
+      rememberTradeUiState();
+      if (!own.accepted) {
+        const offer = syncTradeDraft();
+        if (!this.sameTradeOffer(offer, own)) {
+          const up = await Promise.resolve(this.server.updateTradeOffer(offer));
+          if (!up.ok) { this.toast(up.error); return; }
+        }
+      }
+      const r = await Promise.resolve(this.server.confirmTrade(!own.accepted));
+      if (!r.ok) this.toast(r.error);
+    });
+    row.appendChild(confirmBtn);
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'btn';
+    cancelBtn.textContent = 'Annuler échange';
+    cancelBtn.addEventListener('click', async () => {
+      rememberTradeUiState();
+      const r = await Promise.resolve(this.server.cancelTrade());
+      if (!r.ok) this.toast(r.error);
+    });
+    row.appendChild(cancelBtn);
+
+    card.appendChild(row);
+    wrap.appendChild(card);
+    wrap.classList.remove('hidden');
+    this.popupMode = 'trade';
+  }
+
   /* ---------- HUD (appelé à chaque frame) ---------- */
   updateHud() {
     const me = this.server.me;
@@ -356,6 +831,7 @@ showDungeonPopup(tile, onEnter) {
     opts = opts || {};
     const wrap = $('popup');
     wrap.innerHTML = '';
+    this.popupMode = opts.mode || 'generic';
     const card = document.createElement('div');
     card.className = opts.className || 'popup-card';
     card.innerHTML =
@@ -397,7 +873,10 @@ showDungeonPopup(tile, onEnter) {
     });
   }
 
-  closePopup() { $('popup').classList.add('hidden'); }
+  closePopup() {
+    this.popupMode = null;
+    $('popup').classList.add('hidden');
+  }
 
   loadCombatFxAssets() {
     const img = new Image();
@@ -650,7 +1129,7 @@ showDungeonPopup(tile, onEnter) {
       if (r.gold) lines.push('<p><span class="battle-label">Or</span> <b class="gold-c">+' + r.gold + ' 🪙</b></p>');
       if (r.food) {
         const pf = parseStackKey(r.food);
-        lines.push('<p><span class="battle-label">Trouvaille</span> ' + (RESOURCE_EMOJI[pf.type] || '🍄') + ' 1× ' + resourceLabel(pf.type, pf.tier) + '</p>');
+        lines.push('<p><span class="battle-label">Trouvaille</span> ' + (RESOURCE_EMOJI[pf.type] || '❔') + ' 1× ' + resourceLabel(pf.type, pf.tier) + '</p>');
       }
       lines.push('<p><span class="battle-label">Maîtrise</span> +' + r.xp + ' XP d’arme</p>');
     } else {
@@ -855,19 +1334,99 @@ showDungeonPopup(tile, onEnter) {
   }
 
   build_shop(body) {
-    body.innerHTML =
-      '<div class="upg shop-empty">' +
-        '<div class="upg-head"><b>Échoppes fermées</b><span class="dim">Bientôt</span></div>' +
-        '<p>La boutique arrivera dans une prochaine étape.</p>' +
-        '<p class="dim">Pour l’instant, vos services actifs restent ceux de la Capitale : téléporteurs, repos et amélioration d’équipement.</p>' +
+    const me = this.server.me;
+    const goldSkins = SKIN_SHOP_ITEMS.filter((item) => item.currency === 'gold');
+    const premiumSkins = SKIN_SHOP_ITEMS.filter((item) => item.currency === PREMIUM_CURRENCY.key);
+    const moneyCard =
+      '<div class="shop-wallets">' +
+        '<div class="shop-wallet"><span class="shop-wallet-label">Or</span><b>' + (me.gold || 0).toLocaleString('fr-FR') + ' 🪙</b></div>' +
+        '<div class="shop-wallet premium"><span class="shop-wallet-label">' + PREMIUM_CURRENCY.label + '</span><b>' +
+          (me[PREMIUM_CURRENCY.key] || 0).toLocaleString('fr-FR') + ' ' + PREMIUM_CURRENCY.icon + '</b></div>' +
       '</div>';
+    body.innerHTML =
+      moneyCard +
+      '<div class="shop-section">' +
+        '<div class="upg-head"><b>Garde-robe des aventuriers</b><span class="dim">Skins contre or</span></div>' +
+        '<div class="shop-grid">' + goldSkins.map((item) => this.shopSkinCard(me, item)).join('') + '</div>' +
+      '</div>' +
+      '<div class="shop-section premium">' +
+        '<div class="upg-head"><b>Collection premium</b><span class="dim">' + PREMIUM_CURRENCY.label + ' ' + PREMIUM_CURRENCY.icon + '</span></div>' +
+        '<div class="shop-grid">' + premiumSkins.map((item) => this.shopSkinCard(me, item)).join('') + '</div>' +
+      '</div>' +
+      '<div class="upg shop-premium-note">' +
+        '<div class="upg-head"><b>Partie premium</b><span class="dim">Monnaie spéciale</span></div>' +
+        '<p>Les <b>' + PREMIUM_CURRENCY.label + '</b> servent aux variantes rares et à la future boutique cosmétique.</p>' +
+        '<p class="dim">Pour les tests, tu peux t’en attribuer depuis le menu admin.</p>' +
+      '</div>';
+    body.querySelectorAll('[data-shop-buy]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.buySkin(btn.dataset.shopBuy));
+        this.toast(r.ok ? 'Skin acheté.' : r.error);
+      });
+    });
+    body.querySelectorAll('[data-shop-equip]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const value = btn.dataset.shopEquip === 'base' ? null : btn.dataset.shopEquip;
+        const r = await Promise.resolve(this.server.equipSkin(value));
+        this.toast(r.ok ? 'Apparence mise à jour.' : r.error);
+      });
+    });
+  }
+
+  shopSkinCard(me, item) {
+    const cls = CLASSES[item.speciesClass] || { label: item.speciesClass, role: '' };
+    const owned = !!(me.ownedSkins || []).includes(item.id);
+    const equipped = me.speciesClass === item.speciesClass && me.skinId === item.id;
+    const compatible = me.speciesClass === item.speciesClass;
+    const canAfford = Number(me[item.currency] || 0) >= item.price;
+    let cta = '';
+    if (equipped) cta = '<button class="btn shop-btn" data-shop-equip="base">Tenue de base</button>';
+    else if (owned) cta = '<button class="btn primary shop-btn" data-shop-equip="' + item.id + '"' + (compatible ? '' : ' disabled') + '>Équiper</button>';
+    else cta = '<button class="btn primary shop-btn" data-shop-buy="' + item.id + '"' + (compatible && canAfford ? '' : ' disabled') + '>Acheter</button>';
+    return (
+      '<article class="shop-card' + (equipped ? ' equipped' : '') + (owned ? ' owned' : '') + '">' +
+        '<div class="shop-card-art" style="--skin-scale:' + classSkinScale(item.speciesClass) + '"><img src="' + skinAssetUrl(item.asset) + '" alt="' + esc(item.label) + '"></div>' +
+        '<div class="shop-card-copy">' +
+          '<div class="shop-card-top">' +
+            '<b>' + esc(item.label) + '</b>' +
+            '<span class="role-chip">' + esc(cls.label) + '</span>' +
+          '</div>' +
+          '<div class="shop-card-meta">' + esc(cls.role || 'Classe') + '</div>' +
+          '<div class="shop-card-price ' + (item.currency === PREMIUM_CURRENCY.key ? 'premium' : 'gold') + '">' +
+            (item.currency === PREMIUM_CURRENCY.key ? PREMIUM_CURRENCY.icon : '🪙') + ' ' + item.price +
+          '</div>' +
+          '<div class="shop-card-state">' +
+            (equipped ? 'Équipé' : owned ? 'Possédé' : compatible ? (canAfford ? 'Disponible' : 'Fonds insuffisants') : 'Active cette classe pour l’utiliser') +
+          '</div>' +
+        '</div>' +
+        '<div class="shop-card-actions">' + cta + '</div>' +
+      '</article>'
+    );
   }
 
   /* Avatar découpé dans la feuille de sprites (grille 3x2) */
-  spriteAvatar(speciesClass, extraClass) {
+  spriteAvatar(speciesClass, extraClass, skinId) {
+    const skin = skinFor(skinId);
+    const asset = skin ? skin.asset : baseSkinAsset(speciesClass);
+    if (asset) {
+      return '<span class="avatar skin-avatar ' + (extraClass || '') + '" style="--skin-scale:' + classSkinScale(speciesClass) + '"><img src="' + skinAssetUrl(asset) + '" alt="' + esc(skin ? skin.label : 'Tenue de base') + '"></span>';
+    }
     const cell = SPRITE_CELLS[speciesClass];
     return '<span class="avatar sprite ' + (extraClass || '') + '" style="background-position:' +
       (cell[0] * 50) + '% ' + (cell[1] * 100) + '%"></span>';
+  }
+
+  wardrobePreview(speciesClass, skinId) {
+    const skin = skinFor(skinId);
+    const asset = skin ? skin.asset : baseSkinAsset(speciesClass);
+    if (asset) {
+      return '<div class="wardrobe-preview" style="--skin-scale:' + classSkinScale(speciesClass) + '"><img class="wardrobe-preview-img" src="' + skinAssetUrl(asset) + '" alt="' + esc(skin ? skin.label : 'Tenue de base') + '"></div>';
+    }
+    const cell = SPRITE_CELLS[speciesClass];
+    return '<div class="wardrobe-preview wardrobe-preview-base">' +
+      '<span class="wardrobe-base-sprite" style="background-position:' +
+      (cell[0] * 50) + '% ' + (cell[1] * 100) + '%"></span>' +
+    '</div>';
   }
 
   build_profile(body) {
@@ -881,7 +1440,7 @@ showDungeonPopup(tile, onEnter) {
     body.innerHTML =
       // En-tête façon fiche d'aventurier : portrait cerclé d'or, nom, devise
       '<div class="profile-hero">' +
-        this.spriteAvatar(me.speciesClass, 'hero') +
+        this.spriteAvatar(me.speciesClass, 'hero', me.skinId) +
         '<div class="hero-name">' + esc(me.username) + '</div>' +
         '<div class="hero-class">' + cls.label + ' <span class="role-chip">' + cls.role + '</span></div>' +
         '<p class="hero-bonus">« ' + cls.bonus + ' »</p>' +
@@ -891,6 +1450,8 @@ showDungeonPopup(tile, onEnter) {
         '<span>⚔ Puissance <b>' + power + '</b></span>' +
         '<span>♥ PV max <b>' + maxHp(me) + '</b></span>' +
         '<span>🪙 Or <b>' + (me.gold || 0).toLocaleString('fr-FR') + '</b></span>' +
+        '<span>' + PREMIUM_CURRENCY.icon + ' ' + PREMIUM_CURRENCY.label + ' <b>' + (me[PREMIUM_CURRENCY.key] || 0).toLocaleString('fr-FR') + '</b></span>' +
+        '<span>🥊 Duels <b>' + ((me.duels && me.duels.wins) || 0) + 'V / ' + ((me.duels && me.duels.losses) || 0) + 'D</b></span>' +
       '</div>' +
 
       this.xpBar('Niveau de récolte', me.harvestLevel, me.harvestXp) +
@@ -901,6 +1462,8 @@ showDungeonPopup(tile, onEnter) {
       '<div class="profile-sec-title">Équipement</div>' +
       '<div class="gear-line"><span class="gear-ico">⚔️</span><span class="gear-name">' + me.weapon.type + '</span><span class="tier t' + me.weapon.tier + '">T' + me.weapon.tier + '</span></div>' +
       '<div class="gear-line"><span class="gear-ico">🛡️</span><span class="gear-name">Armure de ' + me.armor.type + '</span><span class="tier t' + me.armor.tier + '">T' + me.armor.tier + '</span></div>' +
+      '<div class="gear-line"><span class="gear-ico">✨</span><span class="gear-name">Apparence ' + esc((skinFor(me.skinId) || {}).label || 'Tenue de base') + '</span><span class="tier">Actuelle</span></div>' +
+      '<button id="profileSkinBtn" class="btn wide">Changer d’apparence</button>' +
       '<p class="dim small profile-hint">Unique et évolutif — chez le Forgeron de la Capitale.</p>' +
 
       '<div class="section-divider">✦</div>' +
@@ -991,6 +1554,7 @@ showDungeonPopup(tile, onEnter) {
     body.querySelectorAll('.char-create').forEach((btn) => {
       btn.addEventListener('click', () => this.showCharacterCreatePopup());
     });
+    $('profileSkinBtn').addEventListener('click', () => this.showSkinWardrobePopup());
   }
 
   /* ---------- Administration (rôle admin, multijoueur uniquement) ---------- */
@@ -1061,6 +1625,7 @@ showDungeonPopup(tile, onEnter) {
         const qty = Math.max(1, Number(qtyInput.value) || 1);
         let r;
         if (what === 'gold') r = await Promise.resolve(this.server.adminGrantGold(username, qty));
+        else if (what === 'premium') r = await Promise.resolve(this.server.adminGrantPremium(username, qty));
         else if (what === 'level:harvest') r = await Promise.resolve(this.server.adminSetLevel(username, 'harvest', tier));
         else if (what === 'level:weapon') r = await Promise.resolve(this.server.adminSetLevel(username, 'weapon', tier));
         else if (what === 'gear:weapon') r = await Promise.resolve(this.server.adminSetGear(username, 'weapon', tier));
@@ -1081,7 +1646,7 @@ showDungeonPopup(tile, onEnter) {
           '<span class="admin-dot ' + (p.online ? 'on' : 'off') + '"></span>' +
           '<span class="admin-player-name">' + esc(p.username) + '</span>' +
           (p.role === 'admin' ? '<span class="role-chip">Admin</span>' : '') +
-          '<span class="dim small admin-player-meta">' + esc(p.classLabel || '') + ' · Récolte ' + p.harvestLevel + ' · Arme ' + p.weaponMastery + ' · 🪙 ' + (p.gold || 0) + '</span>' +
+          '<span class="dim small admin-player-meta">' + esc(p.classLabel || '') + ' · Récolte ' + p.harvestLevel + ' · Arme ' + p.weaponMastery + ' · 🪙 ' + (p.gold || 0) + ' · ' + PREMIUM_CURRENCY.icon + ' ' + (p.premium || 0) + '</span>' +
         '</summary>' +
         '<div class="admin-player-body">' +
           '<p class="dim small">Inscrit le ' + dateStr + ' · ' + p.charCount + ' personnage(s) / ' + p.charSlots + ' emplacement(s) (max ' + MAX_CHAR_SLOTS + ') · arme T' + p.weaponTier + ' · armure T' + p.armorTier + '</p>' +
@@ -1109,6 +1674,7 @@ showDungeonPopup(tile, onEnter) {
         '<select class="admin-select admin-select-what" data-role="what">' +
           '<optgroup label="Compte">' +
             '<option value="gold">🪙 Or</option>' +
+            '<option value="premium">' + PREMIUM_CURRENCY.icon + ' ' + PREMIUM_CURRENCY.label + '</option>' +
           '</optgroup>' +
           '<optgroup label="Progression">' +
             '<option value="level:harvest">⛏ Niveau de récolte</option>' +
@@ -1210,11 +1776,12 @@ showDungeonPopup(tile, onEnter) {
       const cls = CLASSES[c.speciesClass];
       cards.push(
         '<div class="char-card' + (i === me.activeChar ? ' active' : '') + '">' +
-          this.spriteAvatar(c.speciesClass) +
+          this.spriteAvatar(c.speciesClass, '', c.skinId) +
           '<span class="char-info">' +
             '<b>' + cls.label + ' <span class="role-chip">' + cls.role + '</span></b>' +
             '<small>Maîtrise T' + c.weaponMastery + ' · Récolte T' + c.harvestLevel +
-            ' · Arme T' + c.weapon.tier + ' · Armure T' + c.armor.tier + '</small>' +
+            ' · Arme T' + c.weapon.tier + ' · Armure T' + c.armor.tier +
+            ' · ' + esc((skinFor(c.skinId) || {}).label || 'Base') + '</small>' +
           '</span>' +
           (i === me.activeChar
             ? '<span class="char-active-badge">Actif</span>'
@@ -1286,9 +1853,79 @@ showDungeonPopup(tile, onEnter) {
     wrap.classList.remove('hidden');
   }
 
+  showSkinWardrobePopup() {
+    const me = this.server.me;
+    const ownedIds = new Set(me.ownedSkins || []);
+    const available = SKIN_SHOP_ITEMS.filter((item) => item.speciesClass === me.speciesClass && ownedIds.has(item.id));
+    const wrap = $('popup');
+    wrap.innerHTML = '';
+    const card = document.createElement('div');
+    card.className = 'popup-card';
+    card.innerHTML =
+      '<h3>Garde-robe</h3>' +
+      '<div class="popup-body">' +
+        '<p class="dim">Choisissez l’apparence de votre forme active: <b>' + esc((CLASSES[me.speciesClass] || {}).label || me.speciesClass) + '</b>.</p>' +
+        '<div class="shop-grid wardrobe-grid"></div>' +
+      '</div>';
+    const grid = card.querySelector('.wardrobe-grid');
+
+    const base = document.createElement('button');
+    base.className = 'shop-card wardrobe-card' + (!me.skinId ? ' equipped' : '');
+    base.innerHTML =
+      '<div class="shop-card-art wardrobe-art">' + this.wardrobePreview(me.speciesClass, null) + '</div>' +
+      '<div class="shop-card-copy">' +
+        '<div class="shop-card-top"><b>Tenue de base</b><span class="role-chip">Standard</span></div>' +
+        '<div class="shop-card-state">' + (!me.skinId ? 'Équipée' : 'Disponible') + '</div>' +
+      '</div>' +
+      '<div class="shop-card-actions"><span class="btn ' + (!me.skinId ? '' : 'primary ') + 'shop-btn">' + (!me.skinId ? 'Actuelle' : 'Équiper') + '</span></div>';
+    base.addEventListener('click', async () => {
+      const r = await Promise.resolve(this.server.equipSkin(null));
+      this.toast(r.ok ? 'Apparence mise à jour.' : r.error);
+      if (r.ok) this.closePopup();
+    });
+    grid.appendChild(base);
+
+    for (const item of available) {
+      const owned = document.createElement('button');
+      owned.className = 'shop-card wardrobe-card' + (me.skinId === item.id ? ' equipped owned' : ' owned');
+      owned.innerHTML =
+        '<div class="shop-card-art wardrobe-art">' + this.wardrobePreview(me.speciesClass, item.id) + '</div>' +
+        '<div class="shop-card-copy">' +
+          '<div class="shop-card-top"><b>' + esc(item.label) + '</b><span class="role-chip">Possédé</span></div>' +
+          '<div class="shop-card-state">' + (me.skinId === item.id ? 'Équipé' : 'Cliquer pour équiper') + '</div>' +
+        '</div>' +
+        '<div class="shop-card-actions"><span class="btn ' + (me.skinId === item.id ? '' : 'primary ') + 'shop-btn">' + (me.skinId === item.id ? 'Actuel' : 'Équiper') + '</span></div>';
+      owned.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.equipSkin(item.id));
+        this.toast(r.ok ? 'Apparence mise à jour.' : r.error);
+        if (r.ok) this.closePopup();
+      });
+      grid.appendChild(owned);
+    }
+
+    if (!available.length) {
+      const empty = document.createElement('div');
+      empty.className = 'upg';
+      empty.innerHTML = '<p>Aucun skin possédé pour cette forme pour le moment.</p><p class="dim">Passe par la boutique pour débloquer des apparences.</p>';
+      card.querySelector('.popup-body').appendChild(empty);
+    }
+
+    const row = document.createElement('div');
+    row.className = 'popup-actions';
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'btn';
+    closeBtn.textContent = 'Fermer';
+    closeBtn.addEventListener('click', () => this.closePopup());
+    row.appendChild(closeBtn);
+    card.appendChild(row);
+    wrap.appendChild(card);
+    wrap.classList.remove('hidden');
+    this.popupMode = 'generic';
+  }
+
   xpBar(label, lvl, xp) {
     if (lvl >= 6) {
-      return '<div class="xp"><div class="xp-head"><span>' + label + '</span><span class="tier t6">T6 â€” max</span></div>' +
+      return '<div class="xp"><div class="xp-head"><span>' + label + '</span><span class="tier t6">T6 — max</span></div>' +
         '<div class="xp-track"><div class="xp-fill" style="width:100%"></div></div></div>';
     }
     if (lvl >= 5) {
@@ -1317,22 +1954,238 @@ showDungeonPopup(tile, onEnter) {
   }
 
   build_social(body) {
+    const me = this.server.me;
+    body.innerHTML = '<p class="dim">Chargement…</p>';
+    Promise.all([
+      me.guildId ? Promise.resolve(this.server.guildInfo()) : Promise.resolve({ ok: false }),
+      Promise.resolve(this.server.friendsList()),
+    ]).then(([guildRes, friendsRes]) => {
+      if (this.openSheet !== 'social') return;   // fermé entre-temps
+      this.renderSocial(
+        body, me,
+        (guildRes && guildRes.ok) ? guildRes.guild : null,
+        (friendsRes && friendsRes.ok) ? friendsRes.list : []
+      );
+    });
+  }
+
+  renderSocial(body, me, guild, friends) {
+    // L'onglet actif est sous les yeux : plus la peine d'y signaler du non-lu.
+    this.chatUnread[this.chatChannel] = false;
+
+    const tabs = [
+      { key: 'general', label: 'Général' },
+      { key: 'guild', label: 'Guilde' },
+      { key: 'whisper', label: 'MP' },
+    ];
+    const tabsHtml = '<div class="chat-tabs">' +
+      tabs.map((t) => '<button class="chat-tab' + (this.chatChannel === t.key ? ' active' : '') + '" data-chat-tab="' + t.key + '">' +
+        t.label + '<span class="chat-tab-badge' + (this.chatUnread[t.key] ? '' : ' hidden') + '"></span></button>').join('') +
+    '</div>';
+
+    let whisperBarHtml = '';
+    if (this.chatChannel === 'whisper') {
+      if (!friends.length) {
+        whisperBarHtml = '<p class="dim small chat-whisper-hint">Ajoutez un ami pour lui écrire en privé.</p>';
+        this.chatWhisperTarget = null;
+      } else {
+        if (!this.chatWhisperTarget || !friends.some((f) => f.username === this.chatWhisperTarget)) {
+          this.chatWhisperTarget = friends[0].username;
+        }
+        whisperBarHtml = '<div class="chat-whisper-bar"><select id="whisperTargetSelect">' +
+          friends.map((f) => '<option value="' + esc(f.username) + '"' + (f.username === this.chatWhisperTarget ? ' selected' : '') + '>' +
+            (f.online ? '🟢 ' : '⚪ ') + esc(f.username) + '</option>').join('') +
+        '</select></div>';
+      }
+    }
+
+    const canType = this.chatChannel !== 'whisper' ? true : !!(this.chatWhisperTarget && friends.length);
+    const placeholder = this.chatChannel === 'general' ? 'Écrire dans le canal général…'
+      : this.chatChannel === 'guild' ? (guild ? 'Écrire à la guilde…' : 'Rejoignez une guilde pour discuter ici')
+      : (this.chatWhisperTarget ? ('Écrire à ' + this.chatWhisperTarget + '…') : 'Choisissez un ami…');
+
     body.innerHTML =
+      tabsHtml +
+      whisperBarHtml +
       '<div id="feed" class="feed"></div>' +
       '<div class="chat-row">' +
-        '<input id="chatInput" type="text" maxlength="120" placeholder="Écrire au canal local…" autocomplete="off">' +
-        '<button id="chatSend" class="btn primary">Envoyer</button>' +
-      '</div>';
+        '<input id="chatInput" type="text" maxlength="120" placeholder="' + esc(placeholder) + '"' + (canType ? '' : ' disabled') + ' autocomplete="off">' +
+        '<button id="chatSend" class="btn primary"' + (canType ? '' : ' disabled') + '>Envoyer</button>' +
+      '</div>' +
+      '<div class="section-divider">✦</div>' +
+      this.buildGuildSectionHtml(me, guild) +
+      '<div class="section-divider">✦</div>' +
+      this.buildFriendsSectionHtml(me, friends);
+
     this.renderFeed();
+
+    body.querySelectorAll('[data-chat-tab]').forEach((btn) => {
+      btn.addEventListener('click', () => { this.chatChannel = btn.dataset.chatTab; this.showSheet('social'); });
+    });
+    const whisperSelect = $('whisperTargetSelect');
+    if (whisperSelect) {
+      whisperSelect.addEventListener('change', () => {
+        this.chatWhisperTarget = whisperSelect.value;
+        this.showSheet('social');
+      });
+    }
+
     const send = () => {
       const input = $('chatInput');
       const text = input.value.trim();
-      if (!text) return;
+      if (!text || !canType) return;
       input.value = '';
-      this.server.say(text);
+      const target = this.chatChannel === 'whisper' ? this.chatWhisperTarget : undefined;
+      Promise.resolve(this.server.say(text, this.chatChannel, target)).then((r) => {
+        if (!r.ok) this.toast(r.error);
+      });
     };
     $('chatSend').addEventListener('click', send);
     $('chatInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+
+    this.wireGuildSection(body);
+    this.wireFriendsSection(body);
+    this.updateChatBadges();
+
+    if (typeof this.pendingSocialScrollTop === 'number') {
+      const sheetBody = $('sheetBody');
+      if (sheetBody) sheetBody.scrollTop = this.pendingSocialScrollTop;
+      this.pendingSocialScrollTop = null;
+    }
+  }
+
+  /* ---------- Guilde ---------- */
+  buildGuildSectionHtml(me, guild) {
+    if (me.guildInvite) {
+      return '<div class="profile-sec-title">Guilde</div>' +
+        '<div class="invite-card">' +
+          '<p>' + esc(me.guildInvite.fromUsername) + ' vous invite dans <b>' + esc(me.guildInvite.guildName) + '</b>.</p>' +
+          '<div class="admin-row-actions">' +
+            '<button class="btn" id="guildInviteDecline">Refuser</button>' +
+            '<button class="btn primary" id="guildInviteAccept">Rejoindre</button>' +
+          '</div>' +
+        '</div>';
+    }
+    if (!guild) {
+      return '<div class="profile-sec-title">Guilde</div>' +
+        '<p class="dim small">Fondez une guilde pour coopérer et discuter en privé avec vos alliés.</p>' +
+        '<div class="chat-row">' +
+          '<input id="guildNameInput" type="text" maxlength="24" placeholder="Nom de la guilde…">' +
+          '<button id="guildCreateBtn" class="btn primary">Fonder</button>' +
+        '</div>';
+    }
+    const isLeader = guild.leaderId === me.id;
+    const rows = guild.members.map((m) => (
+      '<div class="friend-row">' +
+        '<span class="admin-dot ' + (m.online ? 'on' : 'off') + '"></span>' +
+        '<span class="friend-name">' + esc(m.username) + (m.isLeader ? ' <span class="role-chip">Chef</span>' : '') + '</span>' +
+        '<span class="dim small friend-class">' + esc(m.classLabel) + '</span>' +
+        (isLeader && !m.isLeader ? '<button class="btn btn-small" data-guild-kick="' + esc(m.username) + '">Exclure</button>' : '') +
+      '</div>'
+    )).join('');
+    return '<div class="profile-sec-title">Guilde <span class="sec-count">' + guild.members.length + ' / ' + guild.maxMembers + '</span></div>' +
+      '<div class="hero-name guild-name">' + esc(guild.name) + '</div>' +
+      '<div class="friend-list">' + rows + '</div>' +
+      (isLeader ? '<div class="chat-row"><input id="guildInviteInput" type="text" maxlength="16" placeholder="Pseudo à inviter…"><button id="guildInviteBtn" class="btn primary">Inviter</button></div>' : '') +
+      '<button class="btn wide danger" id="guildLeaveBtn">Quitter la guilde</button>';
+  }
+
+  wireGuildSection(body) {
+    const acceptBtn = $('guildInviteAccept');
+    if (acceptBtn) acceptBtn.addEventListener('click', async () => {
+      const r = await Promise.resolve(this.server.respondGuildInvite(true));
+      if (!r.ok) this.toast(r.error); else this.showSheet('social');
+    });
+    const declineBtn = $('guildInviteDecline');
+    if (declineBtn) declineBtn.addEventListener('click', async () => {
+      const r = await Promise.resolve(this.server.respondGuildInvite(false));
+      if (!r.ok) this.toast(r.error); else this.showSheet('social');
+    });
+    const createBtn = $('guildCreateBtn');
+    if (createBtn) createBtn.addEventListener('click', async () => {
+      const input = $('guildNameInput');
+      const name = input.value.trim();
+      if (!name) return;
+      const r = await Promise.resolve(this.server.createGuild(name));
+      if (!r.ok) this.toast(r.error); else this.showSheet('social');
+    });
+    const inviteBtn = $('guildInviteBtn');
+    if (inviteBtn) inviteBtn.addEventListener('click', async () => {
+      const input = $('guildInviteInput');
+      const username = input.value.trim();
+      if (!username) return;
+      const r = await Promise.resolve(this.server.inviteToGuild(username));
+      this.toast(r.ok ? 'Invitation envoyée.' : r.error);
+      if (r.ok) input.value = '';
+    });
+    body.querySelectorAll('[data-guild-kick]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.kickFromGuild(btn.dataset.guildKick));
+        if (!r.ok) this.toast(r.error); else this.showSheet('social');
+      });
+    });
+    const leaveBtn = $('guildLeaveBtn');
+    if (leaveBtn) leaveBtn.addEventListener('click', () => {
+      this.confirm('Quitter la guilde ?', '<p>Vous devrez être réinvité pour la rejoindre à nouveau.</p>', 'Quitter', async () => {
+        const r = await Promise.resolve(this.server.leaveGuild());
+        if (!r.ok) this.toast(r.error); else this.showSheet('social');
+      });
+    });
+  }
+
+  /* ---------- Amis ---------- */
+  buildFriendsSectionHtml(me, friends) {
+    const requests = (me.friendRequests || []).map((r) => (
+      '<div class="invite-card">' +
+        '<p>' + esc(r.fromUsername) + ' souhaite devenir votre ami.</p>' +
+        '<div class="admin-row-actions">' +
+          '<button class="btn" data-friend-decline="' + esc(r.fromId) + '">Refuser</button>' +
+          '<button class="btn primary" data-friend-accept="' + esc(r.fromId) + '">Accepter</button>' +
+        '</div>' +
+      '</div>'
+    )).join('');
+    const rows = friends.map((f) => (
+      '<div class="friend-row">' +
+        '<span class="admin-dot ' + (f.online ? 'on' : 'off') + '"></span>' +
+        '<span class="friend-name">' + esc(f.username) + '</span>' +
+        '<span class="dim small friend-class">' + esc(f.classLabel) + '</span>' +
+        '<button class="btn btn-small" data-friend-remove="' + esc(f.username) + '">Retirer</button>' +
+      '</div>'
+    )).join('');
+    return '<div class="profile-sec-title">Amis <span class="sec-count">' + friends.length + '</span></div>' +
+      requests +
+      (friends.length ? '<div class="friend-list">' + rows + '</div>' : '<p class="dim small">Aucun ami pour l’instant.</p>') +
+      '<div class="chat-row"><input id="friendAddInput" type="text" maxlength="16" placeholder="Ajouter un ami (pseudo)…"><button id="friendAddBtn" class="btn primary">Ajouter</button></div>';
+  }
+
+  wireFriendsSection(body) {
+    body.querySelectorAll('[data-friend-accept]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.respondFriendRequest(btn.dataset.friendAccept, true));
+        if (!r.ok) this.toast(r.error); else this.showSheet('social');
+      });
+    });
+    body.querySelectorAll('[data-friend-decline]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.respondFriendRequest(btn.dataset.friendDecline, false));
+        if (!r.ok) this.toast(r.error); else this.showSheet('social');
+      });
+    });
+    body.querySelectorAll('[data-friend-remove]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.removeFriend(btn.dataset.friendRemove));
+        if (!r.ok) this.toast(r.error); else this.showSheet('social');
+      });
+    });
+    const addBtn = $('friendAddBtn');
+    if (addBtn) addBtn.addEventListener('click', async () => {
+      const input = $('friendAddInput');
+      const username = input.value.trim();
+      if (!username) return;
+      const r = await Promise.resolve(this.server.sendFriendRequest(username));
+      this.toast(r.ok ? (r.addedDirectly ? 'Vous êtes maintenant amis !' : 'Demande envoyée.') : r.error);
+      if (r.ok) { input.value = ''; this.showSheet('social'); }
+    });
   }
 
   build_capital(body) {
@@ -1398,18 +2251,54 @@ showDungeonPopup(tile, onEnter) {
     this.feed.push(msg);
     if (this.feed.length > 120) this.feed.shift();
     if (this.openSheet === 'social') this.renderFeed();
+
+    if (msg.type === 'chat' && !msg.self) {
+      const ch = msg.channel || 'general';
+      const inView = this.openSheet === 'social' && this.chatChannel === ch &&
+        (ch !== 'whisper' || (this.chatWhisperTarget && (msg.from === this.chatWhisperTarget || msg.to === this.chatWhisperTarget)));
+      if (!inView) {
+        this.chatUnread[ch] = true;
+        this.updateChatBadges();
+      }
+    }
+  }
+
+  /* Pastilles de messages non lus : icône Social (bar du bas) + onglets de canal */
+  updateChatBadges() {
+    const navBadge = $('socialNavBadge');
+    if (navBadge) {
+      const anyUnread = this.chatUnread.general || this.chatUnread.guild || this.chatUnread.whisper;
+      navBadge.classList.toggle('hidden', !anyUnread);
+    }
+    document.querySelectorAll('.chat-tab').forEach((btn) => {
+      const badge = btn.querySelector('.chat-tab-badge');
+      if (badge) badge.classList.toggle('hidden', !this.chatUnread[btn.dataset.chatTab]);
+    });
   }
 
   renderFeed() {
     const el = $('feed');
     if (!el) return;
-    el.innerHTML = this.feed.map((m) => {
+    // Ne recolle en bas que si on y était déjà — sinon on gèle le défilement
+    // de quelqu'un qui remonte lire l'historique.
+    const wasNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    const prevScrollTop = el.scrollTop;
+    const relevant = this.feed.filter((m) => {
+      const ch = m.channel || 'general';
+      if (ch !== this.chatChannel) return false;
+      if (ch === 'whisper') {
+        if (!this.chatWhisperTarget) return false;
+        return m.from === this.chatWhisperTarget || m.to === this.chatWhisperTarget;
+      }
+      return true;
+    });
+    el.innerHTML = relevant.map((m) => {
       if (m.type === 'chat') {
         return '<div class="msg' + (m.self ? ' me' : '') + '"><b>' + esc(m.from) + '</b> ' + esc(m.text) + '</div>';
       }
       return '<div class="msg sys">' + esc(m.text) + '</div>';
     }).join('');
-    el.scrollTop = el.scrollHeight;
+    el.scrollTop = wasNearBottom ? el.scrollHeight : prevScrollTop;
   }
 
   /* ---------- Création de personnage ---------- */
@@ -1437,7 +2326,7 @@ showDungeonPopup(tile, onEnter) {
 
     overlay.innerHTML =
       '<div class="creation-card">' +
-        '<h1>Feralia <span class="dim">Online</span></h1>' +
+        '<h1>FERALIA <span class="dim">Online</span></h1>' +
         '<div class="auth-tabs">' +
           '<button id="tabLogin" class="auth-tab active" type="button">Se connecter</button>' +
           '<button id="tabRegister" class="auth-tab" type="button">Créer un compte</button>' +
@@ -1528,7 +2417,7 @@ showDungeonPopup(tile, onEnter) {
     ).join('');
     overlay.innerHTML =
       '<div class="creation-card">' +
-        '<h1>Feralia <span class="dim">Online</span></h1>' +
+        '<h1>FERALIA <span class="dim">Online</span></h1>' +
         '<p class="dim">Choisissez votre combo espèce / classe — il est définitif.</p>' +
         '<input id="nameInput" type="text" maxlength="16" placeholder="Nom d’aventurier…" autocomplete="off">' +
         '<div class="class-grid">' + cards + '</div>' +

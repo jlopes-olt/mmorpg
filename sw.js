@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v2';
+const VERSION = 'wildrift-v4-brand-icon-refresh';
 
 const CORE = [
   '/',
@@ -27,6 +27,10 @@ const CORE = [
   '/js/main.js',
   '/assets/personnages_small.png',
   '/manifest.webmanifest',
+  '/assets/icons/icon-192.png',
+  '/assets/icons/icon-512.png',
+  '/assets/icons/icon-maskable-512.png',
+  '/assets/icons/apple-touch-icon.png',
 ];
 
 self.addEventListener('install', (e) => {
