@@ -853,54 +853,105 @@ class Game {
     return { ok: true, healed, cost, hp: c.hp, hpMax: c.hpMax };
   }
 
-  assaultCastle(p, terrain) {
+  /* Lance (ou rejoint) un siège : un lobby de 30 s s'ouvre, comme pour un raid
+   * de monstre — les autres membres de la guilde assaillante ont le temps
+   * de venir grossir les rangs avant la résolution (voir resolveSiege). */
+  createSiege(p, terrain) {
     if (!CASTLE_TERRAINS.includes(terrain)) return { ok: false, error: 'Zone invalide.' };
     if (!p.guildId) return { ok: false, error: 'Vous devez être dans une guilde.' };
     const c = this.castleOf(terrain);
     if (!c.ownerGuildId) return { ok: false, error: 'Ce château n’appartient à personne — revendiquez-le plutôt.' };
     if (c.ownerGuildId === p.guildId) return { ok: false, error: 'Vous ne pouvez pas assiéger le château de votre propre guilde.' };
+    const key = 'siege:' + terrain;
+    if (this.raids.has(key)) return this.joinRaid(p, key);
     if (!this.atCastle(p, terrain)) return { ok: false, error: 'Vous devez être au château pour lancer l’assaut.' };
     if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
     if (p.pa < CONFIG.COSTS.RAID) return { ok: false, error: 'Pas assez de PA (' + CONFIG.COSTS.RAID + ' requis).' };
-
     const tile = this.castleTileFor(terrain);
-    const attackers = [...this.players.values()].filter((m) =>
-      !m.bot && m.guildId === p.guildId && m.status === 'IDLE' && m.pa >= CONFIG.COSTS.RAID &&
-      (m.mapId || 'world') === 'world' && m.pos.x === tile.x && m.pos.y === tile.y
-    );
-    for (const a of attackers) a.pa -= CONFIG.COSTS.RAID;
+    p.pa -= CONFIG.COSTS.RAID;
+    p.status = 'LOBBY_COMBAT';
+    p.raidKey = key;
+    this.raids.set(key, {
+      key,
+      siege: true,
+      terrain,
+      tileKey: tileKey(tile.x, tile.y),
+      mapId: 'world',
+      tier: c.level,
+      label: 'Château (' + (TERRAINS[terrain] ? TERRAINS[terrain].label : terrain) + ')',
+      monsterForce: this.castleDefenseForce(c),
+      participants: [p.id],
+      leaderId: p.id,
+      attackerGuildId: p.guildId,
+      defenderGuildId: c.ownerGuildId,
+      endsAt: this.now + CONFIG.LOBBY_MS,
+    });
+    return { ok: true };
+  }
+
+  resolveSiege(key, raid) {
+    this.raids.delete(key);
+    const c = this.castleOf(raid.terrain);
+    const members = raid.participants.map((id) => this.memberById(id)).filter(Boolean);
+    const attackers = members.filter((m) => m.guildId === raid.attackerGuildId);
+    for (const a of attackers) { a.status = 'IDLE'; a.raidKey = null; }
+    const guildAtk = this.guilds.get(raid.attackerGuildId);
+    const guildDef = c.ownerGuildId ? this.guilds.get(c.ownerGuildId) : null;
+
+    // Le château peut ne plus avoir de propriétaire valide (guilde dissoute
+    // pendant le siège) ou appartenir déjà aux assaillants : on annule sans dégâts.
+    if (!guildDef || c.ownerGuildId === raid.attackerGuildId) {
+      if (!guildDef) c.ownerGuildId = null;
+      for (const a of attackers) {
+        if (a.bot) continue;
+        this.pushSelf(a);
+        this.send(a.id, 'siegeResult', { cancelled: true, terrain: raid.terrain, label: raid.label });
+      }
+      return;
+    }
 
     const force = teamPowerOf(attackers);
     const defense = this.castleDefenseForce(c);
     const chance = winChance(force, defense);
     const victory = this.rng() < chance;
-    const guildAtk = this.guilds.get(p.guildId);
-    const guildDef = this.guilds.get(c.ownerGuildId);
+    let captured = false;
 
     if (!victory) {
       for (const a of attackers) {
         a.hp = Math.max(1, Math.ceil(maxHp(a) * CONFIG.COMBAT.DEATH_HP_PCT));
         a.mapId = 'world';
         a.pos = { x: 0, y: 0 };
-        this.pushSelf(a);
       }
-      this.log('🏰 L’assaut de « ' + guildAtk.name + ' » contre le château (' + terrain + ') de « ' + guildDef.name + ' » a échoué.');
-      return { ok: true, victory: false, captured: false, chance: Math.round(chance * 100) };
+      this.log('🏰 L’assaut de « ' + guildAtk.name + ' » contre le château (' + raid.terrain + ') de « ' + guildDef.name + ' » a échoué.');
+    } else {
+      c.hp = Math.max(0, c.hp - CASTLE_DAMAGE_PER_ASSAULT);
+      if (c.hp <= 0) {
+        captured = true;
+        c.ownerGuildId = raid.attackerGuildId;
+        c.hp = Math.round(c.hpMax * 0.5);
+        this.log('🏰 « ' + guildAtk.name + ' » a pris le château (' + raid.terrain + ') à « ' + guildDef.name + ' » !');
+      } else {
+        this.log('🏰 « ' + guildAtk.name + ' » entame le château (' + raid.terrain + ') de « ' + guildDef.name + ' » (' + c.hp + '/' + c.hpMax + ' PS restants).');
+      }
+      this.onGuildsDirty();
     }
 
-    c.hp = Math.max(0, c.hp - CASTLE_DAMAGE_PER_ASSAULT);
-    let captured = false;
-    if (c.hp <= 0) {
-      captured = true;
-      c.ownerGuildId = p.guildId;
-      c.hp = Math.round(c.hpMax * 0.5);
-      this.log('🏰 « ' + guildAtk.name + ' » a pris le château (' + terrain + ') à « ' + guildDef.name + ' » !');
-    } else {
-      this.log('🏰 « ' + guildAtk.name + ' » entame le château (' + terrain + ') de « ' + guildDef.name + ' » (' + c.hp + '/' + c.hpMax + ' PS restants).');
+    for (const a of attackers) {
+      if (a.bot) continue;
+      this.pushSelf(a);
+      this.send(a.id, 'siegeResult', {
+        victory, captured, chance,
+        terrain: raid.terrain,
+        label: raid.label,
+        teamForce: Math.round(force),
+        defenseForce: Math.round(defense),
+        hp: c.hp,
+        hpMax: c.hpMax,
+        attackerGuildName: guildAtk.name,
+        defenderGuildName: guildDef.name,
+        participants: attackers.map((m) => m.username),
+      });
     }
-    for (const a of attackers) this.pushSelf(a);
-    this.onGuildsDirty();
-    return { ok: true, victory: true, captured, chance: Math.round(chance * 100), hp: c.hp, hpMax: c.hpMax };
   }
 
   /* ---------- Amis ---------- */
@@ -997,6 +1048,7 @@ class Game {
   raidsPayload() {
     return [...this.raids.values()].map((r) => ({
       key: r.key,
+      siege: !!r.siege,
       tileKey: r.tileKey,
       mapId: r.mapId,
       tier: r.tier,
@@ -1081,7 +1133,10 @@ class Game {
     }
 
     for (const [key, raid] of [...this.raids]) {
-      if (this.now >= raid.endsAt) this.resolveRaid(key, raid);
+      if (this.now >= raid.endsAt) {
+        if (raid.siege) this.resolveSiege(key, raid);
+        else this.resolveRaid(key, raid);
+      }
     }
 
     for (const b of this.bots.values()) {
@@ -1189,6 +1244,9 @@ class Game {
     const raid = this.raids.get(key);
     if (!raid) return { ok: false, error: 'Ce lobby n’existe plus.' };
     if (raid.mapId !== p.mapId) return { ok: false, error: 'Ce lobby est sur une autre carte.' };
+    if (raid.siege && p.guildId !== raid.attackerGuildId) {
+      return { ok: false, error: 'Seuls les membres de la guilde assaillante peuvent rejoindre ce siège.' };
+    }
     if (raid.participants.includes(p.id)) return { ok: false, error: 'Vous êtes déjà dans ce lobby.' };
     if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
     const tile = this.tilesOf(p).get(raid.tileKey);
@@ -1486,8 +1544,8 @@ class Game {
     } else {
       p.buff = { type: parsed.type, tier: parsed.tier, combats: BUFF_COMBATS };
       this.toast(p, item.icon + ' ' + item.label + ' T' + parsed.tier + ' actif (' + BUFF_COMBATS + ' combats)');
-      // Le % de victoire du lobby en cours doit refléter le buff
-      if (p.raidKey) this.raidsChanged();
+      // Le % de victoire du lobby en cours (raid ou siège) reflétera le buff au
+      // prochain broadcast périodique de raidsPayload() (toutes les 500 ms).
     }
     return { ok: true };
   }

@@ -115,6 +115,7 @@ class RemoteServer {
     });
     s.on('toast', (t) => this.emit('toast', t));
     s.on('result', (r) => this.emit('result', r));
+    s.on('siegeResult', (r) => this.emit('siegeResult', r));
     s.on('tradeInvite', (d) => this.emit('tradeInvite', d));
     s.on('trade', (d) => {
       this.trade = d || null;

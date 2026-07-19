@@ -241,6 +241,8 @@
       else confirmWalk(tx, ty, {
         title: 'Aller au château ?',
         kicker: 'Territoire',
+        mediaSrc: ui.getSpriteSrc(renderer.worldIcons.castle[renderer.castleLevels[tile.terrain] || 0]),
+        mediaClass: 'structure',
         badge: 'Château (' + tile.terrain + ')',
       });
       return;

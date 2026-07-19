@@ -119,6 +119,14 @@ const WORLD_ICON_FILES = {
     MONTAGNE: 'assets/donjon_montagne.png',
     MARECAGE: 'assets/donjon_marais.png',
   },
+  castle: {
+    0: 'assets/guild_castle/chateau_guilde_niveau_0.png',
+    1: 'assets/guild_castle/chateau_guilde_niveau_1.png',
+    2: 'assets/guild_castle/chateau_guilde_niveau_2.png',
+    3: 'assets/guild_castle/chateau_guilde_niveau_3.png',
+    4: 'assets/guild_castle/chateau_guilde_niveau_4.png',
+    5: 'assets/guild_castle/chateau_guilde_niveau_5.png',
+  },
 };
 
 const PLAYER_SKIN_FILES = Object.fromEntries(
@@ -178,13 +186,17 @@ class Renderer {
     this.sprites.onerror = () => { this.spritesReady = false; };
     this.sprites.src = (typeof window !== 'undefined' && window.WILDRIFT_SPRITE) || 'assets/personnages_small.png';
 
-    this.worldIcons = { resource: {}, monster: {}, capital: null, village: {}, dungeon: {} };
+    this.worldIcons = { resource: {}, monster: {}, capital: null, village: {}, dungeon: {}, castle: {} };
+    this.castleLevels = {};
     this.playerSkins = {};
     this.terrainTiles = {};
     this.playerHitboxes = [];
     this.loadWorldIcons();
     this.loadTerrainTiles();
     this.resize();
+    if (server && typeof server.on === 'function') {
+      server.on('ready', () => this.refreshCastleLevels());
+    }
   }
 
   resize() {
@@ -216,8 +228,29 @@ class Renderer {
     for (const [terrain, src] of Object.entries(WORLD_ICON_FILES.dungeon)) {
       this.worldIcons.dungeon[terrain] = this.loadSimpleImage(src, 'structure');
     }
+    for (const [level, src] of Object.entries(WORLD_ICON_FILES.castle)) {
+      this.worldIcons.castle[level] = this.loadSimpleImage(src, 'structure');
+    }
     for (const [skinId, src] of Object.entries(PLAYER_SKIN_FILES)) {
       this.playerSkins[skinId] = this.loadSimpleImage(src, 'playerSkin');
+    }
+  }
+
+  setCastleInfo(list) {
+    for (const castle of list || []) {
+      const active = castle && castle.ownerGuildId && Number(castle.hp) > 0;
+      const level = active ? Number(castle.level) || 1 : 0;
+      this.castleLevels[castle.terrain] = Math.max(0, Math.min(5, level));
+    }
+  }
+
+  async refreshCastleLevels() {
+    if (!this.server || typeof this.server.castlesInfo !== 'function') return;
+    try {
+      const result = await Promise.resolve(this.server.castlesInfo());
+      if (result && result.ok) this.setCastleInfo(result.list);
+    } catch (error) {
+      // Le niveau 0 reste le repli visuel tant que l'etat serveur est indisponible.
     }
   }
 
@@ -886,7 +919,8 @@ if (c.kind === 'dungeon') {
         stroke: 'rgba(211, 106, 82, 0.5)',
         glow: 'rgba(211, 106, 82, 0.22)',
       });
-      const sprite = this.worldIcons.castle;
+      const level = this.castleLevels[c.terrain || tile.terrain] || 0;
+      const sprite = this.worldIcons.castle[level] || this.worldIcons.castle[0];
       const drawn = sprite && this.drawWorldSprite(
         sprite,
         cx,
@@ -1133,7 +1167,8 @@ if (c.kind === 'dungeon') {
     this.label(cx, topY - 7, p.username, isMe ? '#f4cd6e' : '#dfe5ec', 9);
 
     if (p.status === 'LOBBY_COMBAT') {
-      this.label(cx, topY - 18, 'RAID', '#ff7b6b', 11);
+      const inRaid = p.raidKey && this.server.raids.get(p.raidKey);
+      this.label(cx, topY - 18, (inRaid && inRaid.siege) ? 'SIÈGE' : 'RAID', '#ff7b6b', 11);
     }
 
     if (isMe && p.status === 'HARVESTING') {

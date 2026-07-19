@@ -612,41 +612,63 @@ assert.strictEqual(bob.gold, goldBeforeRepair - repairRes.cost, 'coût de répar
 assert.ok(!g.repairCastle(bob, 'FORET', 999999).ok, 'réparer une structure déjà pleine échoue');
 
 // --- Siège : Alice fonde sa propre guilde et assiège le château des Faucons ---
+// Depuis ce fix, l'assaut ouvre un lobby de 30 s (comme un raid de monstre)
+// au lieu de résoudre instantanément un combat 1 contre le château.
 assert.ok(g.createGuild(alice, 'Loups').ok, 'Alice fonde sa propre guilde pour assiéger');
 alice.mapId = 'world'; alice.status = 'IDLE';
 alice.pos = { x: foretCastleTile.x, y: foretCastleTile.y };
 
-assert.ok(!g.assaultCastle(bob, 'FORET').ok, 'impossible d’assiéger le château de sa propre guilde');
+assert.ok(!g.createSiege(bob, 'FORET').ok, 'impossible d’assiéger le château de sa propre guilde');
 
+const siegeKey = 'siege:FORET';
 alice.pa = 50; alice.hp = maxHp(alice);
+assert.ok(g.createSiege(alice, 'FORET').ok, 'lobby de siège créé');
+assert.strictEqual(alice.status, 'LOBBY_COMBAT', 'Alice passe en lobby le temps du siège');
+assert.strictEqual(alice.raidKey, siegeKey, 'la clé de siège est bien celle attendue');
+assert.ok(g.raids.has(siegeKey), 'le lobby de siège existe dans this.raids');
+assert.ok(!g.joinRaid(bob, siegeKey).ok, 'un membre de la guilde défenseuse ne peut pas rejoindre le siège adverse');
+assert.ok(!g.startRaidNow(bob, siegeKey).ok, 'seule la meneuse du siège peut le lancer');
+
 g.rng = () => 0.999;   // assaut repoussé à coup sûr
 const beforeFailHp = g.castleOf('FORET').hp;
-const failedAssault = g.assaultCastle(alice, 'FORET');
-assert.ok(failedAssault.ok && !failedAssault.victory, 'assaut repoussé');
+sent.length = 0;
+assert.ok(g.startRaidNow(alice, siegeKey).ok, 'la meneuse lance l’assaut');
+g.tick(300);
+assert.ok(!g.raids.has(siegeKey), 'lobby de siège résolu et retiré');
+let siegeResults = sent.filter((m) => m.ev === 'siegeResult').map((m) => m.data);
+assert.strictEqual(siegeResults.length, 1, 'rapport de siège envoyé à l’assaillante');
+assert.ok(!siegeResults[0].victory, 'assaut repoussé');
 assert.strictEqual(g.castleOf('FORET').hp, beforeFailHp, 'PS inchangés après un assaut repoussé');
 assert.strictEqual(alice.hp, Math.ceil(maxHp(alice) * CONFIG.COMBAT.DEATH_HP_PCT), 'attaquants repoussés = rapatriés à 25 % des PV');
 assert.deepStrictEqual(alice.pos, { x: 0, y: 0 }, 'rapatriement à la Capitale après un assaut repoussé');
+assert.strictEqual(alice.status, 'IDLE', 'Alice repasse IDLE après la résolution du siège');
 
 alice.pos = { x: foretCastleTile.x, y: foretCastleTile.y };
-alice.pa = 50; alice.hp = maxHp(alice);
+alice.pa = 50; alice.hp = maxHp(alice); alice.status = 'IDLE';
 g.rng = () => 0;   // assaut réussi à coup sûr
 const beforeHitHp = g.castleOf('FORET').hp;
-const hitAssault = g.assaultCastle(alice, 'FORET');
-assert.ok(hitAssault.ok && hitAssault.victory && !hitAssault.captured, 'assaut réussi mais château pas encore pris');
+sent.length = 0;
+assert.ok(g.createSiege(alice, 'FORET').ok, 'second lobby de siège créé');
+assert.ok(g.startRaidNow(alice, siegeKey).ok);
+g.tick(300);
+siegeResults = sent.filter((m) => m.ev === 'siegeResult').map((m) => m.data);
+assert.ok(siegeResults[0].victory && !siegeResults[0].captured, 'assaut réussi mais château pas encore pris');
 assert.strictEqual(g.castleOf('FORET').hp, beforeHitHp - CASTLE_DAMAGE_PER_ASSAULT, 'PS réduits du montant par assaut');
 
-// Assauts répétés jusqu'à la capture complète
+// Assauts répétés (lobby → lancement → résolution) jusqu'à la capture complète
 let guard = 0;
 while (g.castleOf('FORET').ownerGuildId !== alice.guildId && guard < 20) {
   alice.pos = { x: foretCastleTile.x, y: foretCastleTile.y };
   alice.pa = 50; alice.hp = maxHp(alice); alice.status = 'IDLE';
-  g.assaultCastle(alice, 'FORET');
+  g.createSiege(alice, 'FORET');
+  g.startRaidNow(alice, siegeKey);
+  g.tick(300);
   guard++;
 }
 assert.strictEqual(g.castleOf('FORET').ownerGuildId, alice.guildId, 'château finalement conquis par les Loups');
 assert.ok(g.castleOf('FORET').hp > 0, 'le château conquis conserve une partie de sa structure (pas remis à 0)');
 g.rng = Math.random;
-console.log('Châteaux : fondation/renfort/réparation ✔, siège ✔, conquête ✔');
+console.log('Châteaux : fondation/renfort/réparation ✔, siège (lobby 30 s, comme un raid) ✔, conquête ✔');
 
 // --- Bonus de zone : l'or looté en Forêt est bonifié pour la guilde propriétaire ---
 let foretMob = null;

@@ -107,6 +107,7 @@ class UI {
       this.updateChatBadges();
     });
     server.on('result', (r) => this.showResult(r));
+    server.on('siegeResult', (r) => this.showSiegeResult(r));
     server.on('tradeInvite', (invite) => this.showTradeInvite(invite));
     server.on('duelInvite', (invite) => this.showDuelInvite(invite));
     server.on('duelResult', (r) => this.showDuelResult(r));
@@ -346,11 +347,17 @@ showDungeonPopup(tile, onEnter) {
     const res = await Promise.resolve(this.server.castlesInfo());
     if (this.popupMode !== 'castle') return;   // fermé entre-temps
     const list = (res && res.ok) ? res.list : [];
+    if (this.renderer && typeof this.renderer.setCastleInfo === 'function') {
+      this.renderer.setCastleInfo(list);
+    }
     const c = list.find((x) => x.terrain === terrain) ||
       { terrain, ownerGuildId: null, ownerGuildName: null, hp: 0, hpMax: 0, level: 0, maxLevel: CASTLE_MAX_LEVEL, isOwnGuild: false };
 
     const pct = c.hpMax ? Math.max(0, Math.min(100, Math.round(100 * c.hp / c.hpMax))) : 0;
     const bonusPct = Math.round((CASTLE_ZONE_GOLD_BONUS - 1) * 100);
+    const siegeKey = 'siege:' + terrain;
+    const activeSiege = (me.guildId && c.ownerGuildId && !c.isOwnGuild) ? this.server.raids.get(siegeKey) : null;
+    const alreadyInSiege = !!(activeSiege && me.raidKey === siegeKey);
     const bodyHtml =
       (c.ownerGuildName
         ? '<p>Tenu par <b>' + esc(c.ownerGuildName) + '</b> — niveau ' + c.level + ' / ' + c.maxLevel + '</p>' +
@@ -362,6 +369,11 @@ showDungeonPopup(tile, onEnter) {
         : !c.ownerGuildId ? '<p class="dim small">Fondation : ' + CASTLE_CLAIM_COST_GOLD + ' 🪙 (contribution personnelle).</p>'
         : c.isOwnGuild ? '<p class="dim small">Renfort : ' + CASTLE_REINFORCE_COST_GOLD + ' 🪙 · Réparation : ' + CASTLE_REPAIR_GOLD_PER_HP + ' 🪙/PS.</p>'
         : '');
+    const siegeHtml = activeSiege
+      ? '<p class="dim small">' + (alreadyInSiege ? 'Vous participez au siège en cours' : 'Siège en cours') + ' — ' +
+        activeSiege.participants.length + ' assaillant(s) — ' + this.chanceHtml(this.server.raidChance(activeSiege)) + ' de victoire — résolution dans ' +
+        Math.max(0, Math.ceil((activeSiege.endsAt - this.server.now) / 1000)) + ' s.</p>'
+      : '';
 
     const actions = [{ label: 'Fermer' }];
     if (me.guildId && !c.ownerGuildId) {
@@ -370,6 +382,7 @@ showDungeonPopup(tile, onEnter) {
         primary: true,
         cb: async () => {
           const r = await Promise.resolve(this.server.claimCastle(terrain));
+          if (r.ok && this.renderer) this.renderer.refreshCastleLevels();
           this.toast(r.ok ? 'Château fondé !' : r.error);
         },
       });
@@ -378,6 +391,7 @@ showDungeonPopup(tile, onEnter) {
         label: 'Réparer',
         cb: async () => {
           const r = await Promise.resolve(this.server.repairCastle(terrain, me.gold));
+          if (r.ok && this.renderer) this.renderer.refreshCastleLevels();
           this.toast(r.ok ? ('Réparé de ' + r.healed + ' PS pour ' + r.cost + ' 🪙.') : r.error);
         },
       });
@@ -387,25 +401,27 @@ showDungeonPopup(tile, onEnter) {
           primary: true,
           cb: async () => {
             const r = await Promise.resolve(this.server.reinforceCastle(terrain));
+            if (r.ok && this.renderer) this.renderer.refreshCastleLevels();
             this.toast(r.ok ? ('Château renforcé (niveau ' + r.level + ').') : r.error);
           },
         });
       }
-    } else if (me.guildId && c.ownerGuildId && !c.isOwnGuild) {
+    } else if (me.guildId && c.ownerGuildId && !c.isOwnGuild && !alreadyInSiege) {
       actions.unshift({
-        label: '⚔ Assaut',
+        label: activeSiege ? 'Rejoindre le siège' : '⚔ Lancer le siège',
         primary: true,
         cb: async () => {
           const r = await Promise.resolve(this.server.assaultCastle(terrain));
+          if (r.ok && this.renderer) this.renderer.refreshCastleLevels();
           if (!r.ok) { this.toast(r.error); return; }
-          if (!r.victory) this.toast('Assaut repoussé (' + r.chance + ' % de chances) — repli à la Capitale.');
-          else if (r.captured) this.toast('🏰 Château conquis !');
-          else this.toast('Assaut réussi (' + r.chance + ' % de chances) — ' + r.hp + ' / ' + r.hpMax + ' PS restants.');
+          this.toast(activeSiege
+            ? 'Vous rejoignez le siège en cours.'
+            : '⚔ Siège lancé — ralliez vos alliés avant la résolution (30 s).');
         },
       });
     }
 
-    this.popup('Château — ' + terrainName, bodyHtml, actions, { mode: 'castle' });
+    this.popup('Château — ' + terrainName, bodyHtml + siegeHtml, actions, { mode: 'castle' });
   }
 
   playerSummaryHtml(player) {
@@ -842,9 +858,10 @@ showDungeonPopup(tile, onEnter) {
         banner.classList.remove('hidden');
         const chance = this.server.raidChance(raid);
         const pct = Math.round(chance * 100);
-        $('lobbyText').textContent = '⚔ Raid ' + raid.label + ' T' + raid.tier + ' — résolution dans ' +
-          Math.max(0, Math.ceil((raid.endsAt - this.server.now) / 1000)) + ' s — ' +
-          raid.participants.length + ' participant(s)';
+        const secsLeft = Math.max(0, Math.ceil((raid.endsAt - this.server.now) / 1000));
+        $('lobbyText').textContent = raid.siege
+          ? '🏰 Siège — ' + raid.label + ' — résolution dans ' + secsLeft + ' s — ' + raid.participants.length + ' assaillant(s)'
+          : '⚔ Raid ' + raid.label + ' T' + raid.tier + ' — résolution dans ' + secsLeft + ' s — ' + raid.participants.length + ' participant(s)';
         const chanceEl = $('lobbyChance');
         chanceEl.classList.remove('hidden');
         chanceEl.textContent = pct + ' % de victoire';
@@ -1221,6 +1238,37 @@ showDungeonPopup(tile, onEnter) {
     );
   }
 
+  /* ---------- Résultat de siège de château ---------- */
+  async showSiegeResult(r) {
+    if (r.cancelled) {
+      this.toast(esc(r.label) + ' — le siège a été annulé (château sans propriétaire valide).');
+      return;
+    }
+    await this.playCombatClash({ victory: r.victory, label: r.label });
+    const lines = [
+      '<div class="vs battle-vs"><span>' + esc(r.attackerGuildName) + ' <b>' + r.teamForce + '</b></span>' +
+        '<span class="vs-x">contre</span><span><b>' + r.defenseForce + '</b> ' + esc(r.defenderGuildName) + '</span></div>',
+      '<p><span class="battle-label">Assaillants</span> ' + r.participants.map(esc).join(', ') + '</p>',
+      '<p><span class="battle-label">Chances</span> ' + this.chanceHtml(r.chance) + ' de victoire — le sort a ' + (r.victory ? 'souri' : 'tranché') + '.</p>',
+    ];
+    if (!r.victory) {
+      lines.push('<p class="hp-c"><b>☠ Assaut repoussé.</b> Rapatriement à la Capitale — reposez-vous à la fontaine avant de repartir.</p>');
+    } else if (r.captured) {
+      lines.push('<p class="ok-c"><b>🏰 Château conquis !</b> ' + esc(r.label) + ' appartient désormais à ' + esc(r.attackerGuildName) + '.</p>');
+    } else {
+      lines.push('<p><span class="battle-label">Structure</span> ' + r.hp + ' / ' + r.hpMax + ' PS restants.</p>');
+    }
+    this.popup(
+      r.victory ? (r.captured ? 'Château conquis' : 'Assaut réussi') : 'Assaut repoussé',
+      lines.join(''),
+      [{ label: 'Continuer', primary: true }],
+      {
+        className: 'popup-card action-popup result-popup tone-' + (r.victory ? 'harvest' : 'danger'),
+        kicker: 'Rapport de siège',
+      }
+    );
+  }
+
   playCombatClash(r) {
     return new Promise((resolve) => {
       const wrap = $('combatFx');
@@ -1228,7 +1276,7 @@ showDungeonPopup(tile, onEnter) {
         '<div class="combat-fx-backdrop ' + (r.victory ? 'victory' : 'defeat') + '">' +
           '<div class="combat-fx-center">' +
             '<div class="combat-fx-title">Affrontement</div>' +
-            '<div class="combat-fx-subtitle">' + esc(r.label) + ' T' + r.tier + '</div>' +
+            '<div class="combat-fx-subtitle">' + esc(r.label) + (r.tier ? ' T' + r.tier : '') + '</div>' +
             '<div class="combat-fx-swords" aria-hidden="true">' +
               '<img class="combat-fx-sword sword-left" src="' + this.combatSwordSrc + '" alt="">' +
               '<span class="combat-fx-flash"></span>' +

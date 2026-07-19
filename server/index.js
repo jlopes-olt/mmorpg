@@ -290,7 +290,7 @@ io.on('connection', (socket) => {
   socket.on('castle:claim', act((d) => game.claimCastle(player, String(d.terrain))));
   socket.on('castle:reinforce', act((d) => game.reinforceCastle(player, String(d.terrain))));
   socket.on('castle:repair', act((d) => game.repairCastle(player, String(d.terrain), Number(d.gold))));
-  socket.on('castle:assault', act((d) => game.assaultCastle(player, String(d.terrain))));
+  socket.on('castle:assault', act((d) => game.createSiege(player, String(d.terrain))));
 
   socket.on('disconnect', () => {
     if (!player) return;
