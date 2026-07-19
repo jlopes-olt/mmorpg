@@ -53,6 +53,7 @@ if (store.countAccounts() === 0 && seed === null && fs.existsSync(LEGACY_STATE_F
     castles: store.getMeta('castles', []),
     chatLog: store.getMeta('chatLog', []),
     worldDiffs: store.loadDiffs(),
+    wildSalt: store.getMeta('wildSalt', 0),
   };
   for (const { player, credentials } of store.loadAccounts()) {
     initialState.players.push(player);
@@ -86,6 +87,7 @@ function saveWorld() {
       store.setMeta('guilds', [...game.guilds.values()]);
       store.setMeta('castles', [...game.castles.values()]);
       store.setMeta('chatLog', game.chatLog);
+      store.setMeta('wildSalt', game.wildSalt);
       store.setMeta('savedAt', Date.now());
     });
     store.saveDiffs(game.worldDiffs());
@@ -323,6 +325,31 @@ setInterval(() => {
     if (p) saveAccountOf(p);
   }
 }, 30000);
+
+// Redistribution nocturne de la faune sauvage (ressources ET monstres —
+// jamais les villages/donjons/château/capitale) : évite qu'une case reste la
+// meilleure case de farm/chasse indéfiniment. Heure locale du serveur,
+// réglable via WILD_RESET_HOUR (2 par défaut = 2 h du matin).
+const WILD_RESET_HOUR = Math.max(0, Math.min(23, Number(process.env.WILD_RESET_HOUR) || 2));
+function msUntilNextWildReset() {
+  const now = new Date();
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), WILD_RESET_HOUR, 0, 0, 0);
+  if (next <= now) next.setDate(next.getDate() + 1);
+  return next.getTime() - now.getTime();
+}
+function runNightlyWildReset() {
+  const r = game.redistributeWildlife();
+  saveWorld();
+  console.log('🌱 Redistribution nocturne de la faune sauvage effectuée (salt ' + r.salt + ').');
+}
+(function scheduleNightlyWildReset() {
+  const wait = msUntilNextWildReset();
+  console.log('🌙 Prochaine redistribution de la faune sauvage dans ' + Math.round(wait / 60000) + ' min (' + WILD_RESET_HOUR + 'h, heure serveur).');
+  setTimeout(() => {
+    runNightlyWildReset();
+    setInterval(runNightlyWildReset, 24 * 60 * 60 * 1000);
+  }, wait);
+})();
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {

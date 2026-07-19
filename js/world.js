@@ -214,6 +214,46 @@ function generateWorldMap(seed) {
   };
 }
 
+/* Rejoue la couche de FAUNE SAUVAGE du monde (ressources ET monstres — jamais
+ * les repères villages/donjons/château/capitale) — utilisé pour la
+ * redistribution nocturne, afin qu'un joueur ne puisse pas camper la même
+ * case indéfiniment. Fonction pure et déterministe : mêmes (seed, salt) =
+ * même disposition, sur le serveur comme chez chaque client (voir net.js) —
+ * pas besoin d'envoyer la carte complète sur le réseau. Un seul jet par
+ * tuile (comme à la génération d'origine) : ressource et monstre restent
+ * mutuellement exclusifs, jamais superposés. salt=0 reproduit exactement la
+ * disposition posée par generateWorldMap. */
+function applyWildLayer(tiles, seed, salt) {
+  const saltInput = 3 + (salt || 0) * 7919;
+  for (const tile of tiles.values()) {
+    const isWild = !tile.content || tile.content.kind === 'resource' || tile.content.kind === 'monster';
+    if (!isWild) continue;   // repère (village/donjon/château/capitale) : jamais touché
+    const dist = Math.hypot(tile.x, tile.y);
+    if (dist <= 1.5) { tile.content = null; continue; }   // abords de la Capitale : toujours dégagés
+    const r = hash2(tile.x, tile.y, seed, saltInput);
+    const tier = tierAtDistance(dist);
+    if (r < 0.085) {
+      tile.content = {
+        kind: 'resource',
+        type: resourceTypeAt(tile.x, tile.y, seed, tile.terrain),
+        tier,
+        inactiveUntil: 0,
+      };
+    } else if (r < 0.145 && dist > CONFIG.SAFE_RADIUS + 1) {
+      tile.content = {
+        kind: 'monster',
+        type: MONSTERS[tier].type,
+        label: MONSTERS[tier].label,
+        tier,
+        force: MONSTER_FORCE[tier],
+        inactiveUntil: 0,
+      };
+    } else {
+      tile.content = null;
+    }
+  }
+}
+
 function carveDungeon(set, x1, y1, x2, y2) {
   let x = x1, y = y1;
   set.add(tileKey(x, y));
@@ -432,6 +472,6 @@ if (typeof module !== 'undefined' && module.exports) {
     mulberry32, hash2, tileKey, raidKey, tierAtDistance, terrainAt, resourceTypeAt,
     villageNameFor, dungeonBossFor, dungeonResourceFor, dungeonResourcePoolFor,
     generateWorld, generateWorldMap, generateDungeonMap, generateGameMaps,
-    inBounds, isWalkable, boundsOf, attachBounds,
+    inBounds, isWalkable, boundsOf, attachBounds, applyWildLayer,
   };
 }

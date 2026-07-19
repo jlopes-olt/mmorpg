@@ -596,19 +596,26 @@ assert.ok(!g.claimCastle(bob, 'FORET').ok, 'un château déjà fondé ne peut pa
 assert.ok(!g.reinforceCastle(alice, 'FORET').ok, 'un non-membre ne peut pas renforcer le château des Faucons');
 assert.ok(!g.repairCastle(alice, 'FORET', 999).ok, 'un non-membre ne peut pas le réparer non plus');
 
+assert.ok(!g.reinforceCastle(bob, 'FORET').ok, 'renfort refusé sans le bois requis');
+bob.inventory.BOIS_1 = 40;   // Forêt -> BOIS, niveau 2 -> tier 1 × 40 (voir CASTLE_REINFORCE_RESOURCES)
 const goldBeforeReinforce = bob.gold;
-assert.ok(g.reinforceCastle(bob, 'FORET').ok, 'renfort par un membre');
+assert.ok(g.reinforceCastle(bob, 'FORET').ok, 'renfort par un membre (or + ressources)');
 foretCastle = g.castleOf('FORET');
 assert.strictEqual(foretCastle.level, 2, 'niveau augmenté');
 assert.strictEqual(foretCastle.hpMax, CASTLE_BASE_HP + CASTLE_HP_PER_LEVEL, 'PS max augmentés');
-assert.strictEqual(bob.gold, goldBeforeReinforce - CASTLE_REINFORCE_COST_GOLD, 'coût de renfort prélevé');
+assert.strictEqual(bob.gold, goldBeforeReinforce - CASTLE_REINFORCE_COST_GOLD, 'coût de renfort en or prélevé');
+assert.ok(!bob.inventory.BOIS_1, 'le bois requis est bien consommé');
 
 foretCastle.hp -= 120;   // simule des dégâts subis précédemment
+assert.ok(!g.repairCastle(bob, 'FORET', 999999).ok, 'réparation refusée sans bois en stock');
+bob.inventory.BOIS_1 = 20;   // 120 PS / 10 PS-par-unité (CASTLE_REPAIR_HP_PER_RESOURCE) = 12 unités requises
 const goldBeforeRepair = bob.gold;
 const repairRes = g.repairCastle(bob, 'FORET', 999999);
 assert.ok(repairRes.ok && repairRes.healed === 120, 'réparation jusqu’à pleine structure');
 assert.strictEqual(g.castleOf('FORET').hp, g.castleOf('FORET').hpMax, 'structure pleinement restaurée');
-assert.strictEqual(bob.gold, goldBeforeRepair - repairRes.cost, 'coût de réparation proportionnel prélevé');
+assert.strictEqual(bob.gold, goldBeforeRepair - repairRes.cost, 'coût de réparation en or prélevé');
+assert.strictEqual(repairRes.resourceCost, 12, 'coût en ressources proportionnel aux PS rendus');
+assert.strictEqual(bob.inventory.BOIS_1, 8, 'seul le bois nécessaire est consommé (20 - 12)');
 assert.ok(!g.repairCastle(bob, 'FORET', 999999).ok, 'réparer une structure déjà pleine échoue');
 
 // --- Siège : Alice fonde sa propre guilde et assiège le château des Faucons ---
@@ -752,6 +759,67 @@ assert.strictEqual(expRes.added, 0, 'entrées invalides ignorées sans erreur');
 assert.strictEqual(alice.exploredWorld.length, 3, 'aucune entrée invalide n’a été stockée');
 assert.deepStrictEqual(g.exploreTiles(alice, []), { ok: true, added: 0 }, 'liste vide sans effet');
 console.log('Brouillard de guerre : ajout ✔, déduplication ✔, entrées invalides filtrées ✔');
+
+// --- Redistribution nocturne de la faune sauvage : ressources ET monstres,
+// jamais les repères (capitale/villages/donjons/château) ---
+const poiKinds = new Set(['capital', 'village', 'dungeon', 'castle']);
+const poiSnapshot = [];
+for (const t of g.tiles.values()) {
+  if (t.content && poiKinds.has(t.content.kind)) poiSnapshot.push({ key: t.x + ',' + t.y, content: { ...t.content } });
+}
+assert.ok(poiSnapshot.length > 0, 'des repères (capitale/villages/donjons/châteaux) existent avant redistribution');
+
+function wildKeysOf(tiles, kind) {
+  return new Set([...tiles.values()].filter((t) => t.content && t.content.kind === kind).map((t) => t.x + ',' + t.y));
+}
+const resourceKeysBefore = wildKeysOf(g.tiles, 'resource');
+const monsterKeysBefore = wildKeysOf(g.tiles, 'monster');
+assert.ok(resourceKeysBefore.size > 0, 'des ressources existent avant toute redistribution');
+assert.ok(monsterKeysBefore.size > 0, 'des monstres existent avant toute redistribution');
+assert.strictEqual(g.wildSalt, 0, 'aucune redistribution n’a encore eu lieu');
+
+const redist = g.redistributeWildlife();
+assert.ok(redist.ok && redist.salt === 1, 'première redistribution : salt incrémenté à 1');
+assert.strictEqual(g.wildSalt, 1);
+
+for (const poi of poiSnapshot) {
+  assert.deepStrictEqual(g.tiles.get(poi.key).content, poi.content, 'repère intact après redistribution : ' + poi.key);
+}
+const resourceKeysAfter = wildKeysOf(g.tiles, 'resource');
+const monsterKeysAfter = wildKeysOf(g.tiles, 'monster');
+assert.ok(resourceKeysAfter.size > 0, 'des ressources existent toujours après redistribution');
+assert.ok(monsterKeysAfter.size > 0, 'des monstres existent toujours après redistribution');
+
+function countSame(before, after) {
+  let n = 0;
+  for (const k of after) if (before.has(k)) n++;
+  return n;
+}
+const sameResource = countSame(resourceKeysBefore, resourceKeysAfter);
+const sameMonster = countSame(monsterKeysBefore, monsterKeysAfter);
+assert.ok(sameResource < resourceKeysAfter.size, 'au moins une partie des ressources a changé de case (' + sameResource + '/' + resourceKeysAfter.size + ' inchangées)');
+assert.ok(sameMonster < monsterKeysAfter.size, 'au moins une partie des monstres a changé de case (' + sameMonster + '/' + monsterKeysAfter.size + ' inchangés)');
+for (const poi of poiSnapshot) {
+  assert.ok(!resourceKeysAfter.has(poi.key), 'aucune ressource posée sur une case repère : ' + poi.key);
+  assert.ok(!monsterKeysAfter.has(poi.key), 'aucun monstre posé sur une case repère : ' + poi.key);
+}
+for (const t of g.tiles.values()) {
+  if (t.content && (t.content.kind === 'resource' || t.content.kind === 'monster')) {
+    assert.strictEqual(t.content.inactiveUntil, 0, 'faune redistribuée immédiatement disponible : ' + t.content.kind);
+  }
+}
+console.log('Redistribution nocturne : repères intacts ✔, ressources déplacées (' + (resourceKeysAfter.size - sameResource) + '/' + resourceKeysAfter.size +
+  ') ✔, monstres déplacés (' + (monsterKeysAfter.size - sameMonster) + '/' + monsterKeysAfter.size + ') ✔, jamais sur une case spéciale ✔');
+
+// Persistance : la disposition post-redistribution se reconstruit après un redémarrage
+// à partir du seul salt (pas besoin de stocker la carte entière).
+const snapWorld = JSON.parse(JSON.stringify(g.serialize()));
+const gWorld2 = new Game(snapWorld.seed, snapWorld);
+assert.strictEqual(gWorld2.wildSalt, g.wildSalt, 'salt de redistribution restauré après redémarrage');
+for (const [key, t] of g.tiles) {
+  assert.deepStrictEqual(gWorld2.tiles.get(key).content, t.content, 'disposition identique après redémarrage : ' + key);
+}
+console.log('Redistribution nocturne : disposition reconstruite après redémarrage à partir du seul salt ✔');
 
 // --- Persistance aller-retour (token, état ET mot de passe) ---
 const snap = JSON.parse(JSON.stringify(g.serialize()));

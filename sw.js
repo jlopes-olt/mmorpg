@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v7-explore-sync';
+const VERSION = 'wildrift-v9-tile-ux-castle-cost';
 
 const CORE = [
   '/',

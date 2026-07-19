@@ -18,6 +18,7 @@ class RemoteServer {
     this.seed = 0;
     this.now = 0;
     this.speed = 1;
+    this.wildSalt = 0;
     this.meId = null;
     this.token = null;
     this.trade = null;
@@ -109,6 +110,11 @@ class RemoteServer {
       this.raids = new Map(list.map((r) => [r.key, r]));
     });
     s.on('time', (d) => { this.now = d.now; this.speed = d.speed || 1; });
+    s.on('world:wildSalt', (d) => {
+      this.wildSalt = d.salt || 0;
+      const world = this.mapOf('world');
+      if (world) applyWildLayer(world.tiles, this.seed, this.wildSalt);
+    });
     s.on('chat', (m) => {
       m.self = !!(m.from && this.me && m.from === this.me.username);
       this.emit('chat', m);
@@ -131,7 +137,12 @@ class RemoteServer {
     this.seed = d.seed;
     this.now = d.now;
     this.speed = d.speed || 1;
+    this.wildSalt = d.wildSalt || 0;
     this.maps = generateGameMaps(d.seed);
+    if (this.wildSalt > 0) {
+      const world = this.maps.get('world');
+      if (world) applyWildLayer(world.tiles, d.seed, this.wildSalt);
+    }
     this.applyMapStates(d.mapStates || {});
     this.applyMapDiffs(d.mapDiffs || {});
     this.players = new Map([[d.selfId, d.self]]);

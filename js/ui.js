@@ -355,6 +355,8 @@ showDungeonPopup(tile, onEnter) {
 
     const pct = c.hpMax ? Math.max(0, Math.min(100, Math.round(100 * c.hp / c.hpMax))) : 0;
     const bonusPct = Math.round((CASTLE_ZONE_GOLD_BONUS - 1) * 100);
+    const resType = CASTLE_TERRAIN_RESOURCE[terrain];
+    const nextRecipe = CASTLE_REINFORCE_RESOURCES[c.level + 1];
     const siegeKey = 'siege:' + terrain;
     const activeSiege = (me.guildId && c.ownerGuildId) ? this.server.raids.get(siegeKey) : null;
     const alreadyInSiege = !!(activeSiege && me.raidKey === siegeKey);
@@ -367,8 +369,12 @@ showDungeonPopup(tile, onEnter) {
       '<p class="dim small">Le tenir offre à la guilde +' + bonusPct + ' % d’or sur toute la zone ' + terrainName + '.</p>' +
       (!me.guildId ? '<p class="hp-c small">Rejoignez une guilde pour revendiquer, renforcer ou assiéger un château.</p>'
         : !c.ownerGuildId ? '<p class="dim small">Fondation : ' + CASTLE_CLAIM_COST_GOLD + ' 🪙 (contribution personnelle).</p>'
-        : c.isOwnGuild ? '<p class="dim small">Renfort : ' + CASTLE_REINFORCE_COST_GOLD + ' 🪙 · Réparation : ' + CASTLE_REPAIR_GOLD_PER_HP + ' 🪙/PS.</p>'
-        : '');
+        : c.isOwnGuild
+          ? '<p class="dim small">Renfort : ' + CASTLE_REINFORCE_COST_GOLD + ' 🪙' +
+            (nextRecipe ? ' + ' + nextRecipe.qty + '× ' + esc(resourceLabel(resType, nextRecipe.tier)) : '') +
+            ' · Réparation : ' + CASTLE_REPAIR_GOLD_PER_HP + ' 🪙/PS + 1× ' + esc(resourceLabel(resType, CASTLE_REPAIR_RESOURCE_TIER)) +
+            ' / ' + CASTLE_REPAIR_HP_PER_RESOURCE + ' PS.</p>'
+          : '');
     const secsLeftSiege = activeSiege ? Math.max(0, Math.ceil((activeSiege.endsAt - this.server.now) / 1000)) : 0;
     const siegeHtml = !activeSiege ? '' : c.isOwnGuild
       ? '<p class="hp-c small"><b>🛡 Vous êtes assiégés !</b> ' + activeSiege.participants.length + ' assaillant(s) — ' +
@@ -395,7 +401,7 @@ showDungeonPopup(tile, onEnter) {
         cb: async () => {
           const r = await Promise.resolve(this.server.repairCastle(terrain, me.gold));
           if (r.ok && this.renderer) this.renderer.refreshCastleLevels();
-          this.toast(r.ok ? ('Réparé de ' + r.healed + ' PS pour ' + r.cost + ' 🪙.') : r.error);
+          this.toast(r.ok ? ('Réparé de ' + r.healed + ' PS pour ' + r.cost + ' 🪙 + ' + r.resourceCost + '× ' + resourceLabel(r.resourceType, r.resourceTier) + '.') : r.error);
         },
       });
       if (c.level < c.maxLevel) {
@@ -500,8 +506,9 @@ showDungeonPopup(tile, onEnter) {
 
   showPlayerInteraction(player) {
     const me = this.server.me;
-    const near = me && player && player.pos && me.pos && (this.server.chebyshev(me.pos, player.pos) <= 1) &&
-      ((me.mapId || 'world') === (player.mapId || 'world'));
+    const sameMap = me && player && ((me.mapId || 'world') === (player.mapId || 'world'));
+    const dist = (sameMap && me.pos && player.pos) ? this.server.chebyshev(me.pos, player.pos) : Infinity;
+    const near = dist <= 1;
     const wrap = $('popup');
     wrap.innerHTML = '';
     const card = document.createElement('div');
@@ -510,7 +517,7 @@ showDungeonPopup(tile, onEnter) {
       '<h3>Interaction</h3>' +
       '<div class="popup-body">' +
         this.playerSummaryHtml(player) +
-        '<p class="dim small">' + (near ? 'Vous êtes au contact.' : 'Approchez-vous pour échanger.') + '</p>' +
+        '<p class="dim small">' + (dist === 0 ? 'Vous partagez la même case.' : near ? 'Vous êtes au contact.' : 'Approchez-vous pour échanger.') + '</p>' +
       '</div>';
     const row = document.createElement('div');
     row.className = 'popup-actions popup-actions-wrap';
@@ -543,6 +550,19 @@ showDungeonPopup(tile, onEnter) {
         else this.closePopup();
       });
       row.appendChild(duelBtn);
+    }
+
+    // Au contact (adjacent) mais pas encore sur sa case exacte : proposer de
+    // le rejoindre quand même (ex. pour accéder à un repère qu'il occupe).
+    if (dist === 1) {
+      const joinBtn = document.createElement('button');
+      joinBtn.className = 'btn';
+      joinBtn.textContent = 'Rejoindre sa case';
+      joinBtn.addEventListener('click', () => {
+        this.closePopup();
+        if (this.onApproachPlayer) this.onApproachPlayer(player);
+      });
+      row.appendChild(joinBtn);
     }
 
     const closeBtn = document.createElement('button');
@@ -932,7 +952,7 @@ showDungeonPopup(tile, onEnter) {
         '<h3>' + title + '</h3><div class="popup-body">' + bodyHtml + '</div>' +
       '</div>';
     const row = document.createElement('div');
-    row.className = 'popup-actions';
+    row.className = 'popup-actions' + (actions.length > 2 ? ' popup-actions-wrap' : '');
     for (const a of actions) {
       const btn = document.createElement('button');
       btn.className = a.primary ? 'btn primary' : 'btn';

@@ -13,7 +13,7 @@
 
 (function () {
   const remote = typeof io !== 'undefined' && location.protocol.indexOf('http') === 0;
-  const SHELL_REV = '20260719-explore-sync-1';
+  const SHELL_REV = '20260719-tile-ux-castle-cost-1';
 
   // PWA : service worker (cache + installation sur l'écran d'accueil).
   // Échec silencieux en file:// / artifact.
@@ -487,15 +487,41 @@
     const rect = canvas.getBoundingClientRect();
     const localX = e.clientX - rect.left;
     const localY = e.clientY - rect.top;
-    // Sur sa propre case, un repère (château, village…) prime sur la présence
-    // d'autres joueurs — sinon un château défendu ne serait jamais cliquable
-    // (le clic tomberait toujours sur le popup du défenseur posté dessus).
+    // Sur sa propre case, un repère (château, village…) rivalise avec la
+    // présence d'autres joueurs — sinon un château défendu ne serait jamais
+    // cliquable (le clic tomberait toujours sur le popup du défenseur posté
+    // dessus). Si les deux s'appliquent, on laisse choisir plutôt que de
+    // trancher silencieusement (voir le popup de choix ci-dessous).
     const tappedTile = renderer.screenToTile(localX, localY);
     const ownTileContent = server.tiles.get(tileKey(tappedTile.x, tappedTile.y));
     const onOwnLandmark = server.me.pos.x === tappedTile.x && server.me.pos.y === tappedTile.y &&
       ownTileContent && ownTileContent.content &&
       ['castle', 'village', 'capital', 'dungeon', 'portal'].includes(ownTileContent.content.kind);
-    const players = onOwnLandmark ? [] : renderer.pickPlayersAtScreen(localX, localY).filter((p) => p.id !== server.me.id);
+    const playersOnTappedTile = renderer.pickPlayersAtScreen(localX, localY).filter((p) => p.id !== server.me.id);
+
+    if (onOwnLandmark && playersOnTappedTile.length > 0) {
+      const landmarkLabels = { castle: '🏰 Château', village: '🏘 Village', capital: '⚒ Capitale', dungeon: '🕳 Donjon', portal: '🌀 Portail' };
+      const landmarkLabel = landmarkLabels[ownTileContent.content.kind] || 'Repère';
+      ui.popup(
+        'Que faire ici ?',
+        '<p class="dim small">' + playersOnTappedTile.length + ' autre' + (playersOnTappedTile.length > 1 ? 's aventuriers partagent' : ' aventurier partage') + ' cette case.</p>',
+        [
+          { label: 'Fermer' },
+          {
+            label: playersOnTappedTile.length === 1 ? 'Voir ' + esc(playersOnTappedTile[0].username) : 'Voir les joueurs (' + playersOnTappedTile.length + ')',
+            cb: () => {
+              if (playersOnTappedTile.length === 1) ui.showPlayerInteraction(playersOnTappedTile[0]);
+              else ui.showPlayerPicker(playersOnTappedTile, { tile: tappedTile });
+            },
+          },
+          { label: landmarkLabel, primary: true, cb: () => handleTap(tappedTile.x, tappedTile.y) },
+        ],
+        { mode: 'generic' }
+      );
+      return;
+    }
+
+    const players = onOwnLandmark ? [] : playersOnTappedTile;
     if (players.length === 1) {
       ui.showPlayerInteraction(players[0]);
       return;
@@ -580,6 +606,11 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
   document.getElementById('devReveal').addEventListener('click', () => {
     for (const key of server.tiles.keys()) explored.add(key);
     ui.toast('Carte révélée (DEV)');
+  });
+  document.getElementById('devResourceReset').addEventListener('click', async () => {
+    if (!remote) { ui.toast('Disponible en multijoueur réel.'); return; }
+    const r = await Promise.resolve(server.dev({ wildReset: true }));
+    ui.toast(r.ok ? ('🌱 Faune & ressources redistribuées (salt ' + r.salt + ')') : r.error);
   });
   document.getElementById('devReset').addEventListener('click', () => {
     ui.onAdminReset();

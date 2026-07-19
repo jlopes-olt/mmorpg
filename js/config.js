@@ -124,6 +124,21 @@ const CASTLE_REPAIR_GOLD_PER_HP = 2;
 const CASTLE_DAMAGE_PER_ASSAULT = 150;
 const CASTLE_ZONE_GOLD_BONUS = 1.15;
 
+// Renfort/réparation coûtent aussi des ressources (en plus de l'or) — la
+// ressource du biome du château (bois en Forêt, minerai en Montagne, etc.),
+// pour ancrer le château dans son terrain plutôt qu'un simple sink d'or.
+const CASTLE_TERRAIN_RESOURCE = { FORET: 'BOIS', PLAINE: 'PLANTE', MONTAGNE: 'MINERAI', MARECAGE: 'INGREDIENT' };
+// Renfort : coût fixe par niveau cible (comme les recettes de forge).
+const CASTLE_REINFORCE_RESOURCES = {
+  2: { tier: 1, qty: 40 },
+  3: { tier: 2, qty: 50 },
+  4: { tier: 3, qty: 60 },
+  5: { tier: 4, qty: 80 },
+};
+// Réparation : entretien courant, toujours au tier 1, proportionnel aux PS rendus.
+const CASTLE_REPAIR_RESOURCE_TIER = 1;
+const CASTLE_REPAIR_HP_PER_RESOURCE = 10;
+
 const PREMIUM_CURRENCY = {
   key: 'moonstones',
   label: 'Lunaires',
@@ -550,6 +565,7 @@ if (typeof module !== 'undefined' && module.exports) {
     CASTLE_TERRAINS, CASTLE_BASE_HP, CASTLE_HP_PER_LEVEL, CASTLE_MAX_LEVEL,
     CASTLE_CLAIM_COST_GOLD, CASTLE_REINFORCE_COST_GOLD, CASTLE_REPAIR_GOLD_PER_HP,
     CASTLE_DAMAGE_PER_ASSAULT, CASTLE_ZONE_GOLD_BONUS,
+    CASTLE_TERRAIN_RESOURCE, CASTLE_REINFORCE_RESOURCES, CASTLE_REPAIR_RESOURCE_TIER, CASTLE_REPAIR_HP_PER_RESOURCE,
     TERRAINS, TIER_COLORS, XP_LEVELS, UPGRADE_RECIPES, SPRITE_CELLS,
     RESOURCE_EMOJI, MONSTER_EMOJI, CHARACTER_FIELDS,
     PREMIUM_CURRENCY, SKIN_SHOP_ITEMS, SKIN_BY_ID, SKIN_ASSET_REV, CLASS_SKIN_SCALE, CLASS_BASE_SKINS,

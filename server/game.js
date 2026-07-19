@@ -44,6 +44,10 @@ class Game {
     this.worldMap = this.maps.get('world');
     this.currentMapId = 'world';
     this.tiles = this.worldMap.tiles;
+    // Incrémenté à chaque redistribution nocturne de la faune sauvage (voir
+    // redistributeWildlife) — persisté pour reconstruire la même disposition
+    // après un redémarrage, sans avoir à stocker la carte entière.
+    this.wildSalt = 0;
     this.players = new Map();
     this.credentials = new Map();
     this.bots = new Map();
@@ -295,6 +299,7 @@ class Game {
       seed: this.seed,
       now: this.now,
       speed: this.speed,
+      wildSalt: this.wildSalt,
       mapId: p.mapId || 'world',
       mapDiffs: this.mapDiffs(),
       mapStates: this.mapStates(),
@@ -841,7 +846,15 @@ class Game {
     if ((p.gold || 0) < CASTLE_REINFORCE_COST_GOLD) {
       return { ok: false, error: 'Il faut ' + CASTLE_REINFORCE_COST_GOLD + ' 🪙.' };
     }
+    const recipe = CASTLE_REINFORCE_RESOURCES[c.level + 1];
+    const resType = CASTLE_TERRAIN_RESOURCE[terrain];
+    const resKey = stackKey(resType, recipe.tier);
+    if ((p.inventory[resKey] || 0) < recipe.qty) {
+      return { ok: false, error: 'Il faut ' + recipe.qty + '× ' + resourceLabel(resType, recipe.tier) + '.' };
+    }
     p.gold -= CASTLE_REINFORCE_COST_GOLD;
+    p.inventory[resKey] -= recipe.qty;
+    if (p.inventory[resKey] <= 0) delete p.inventory[resKey];
     c.level += 1;
     c.hpMax += CASTLE_HP_PER_LEVEL;
     c.hp = Math.min(c.hpMax, c.hp + CASTLE_HP_PER_LEVEL);
@@ -857,15 +870,31 @@ class Game {
     if (c.ownerGuildId !== p.guildId) return { ok: false, error: 'Vous ne pouvez réparer que le château de votre guilde.' };
     if (!this.atCastle(p, terrain)) return { ok: false, error: 'Vous devez être au château pour le réparer.' };
     if (c.hp >= c.hpMax) return { ok: false, error: 'Déjà à pleine structure.' };
-    const budget = Math.max(0, Math.min(Math.floor(Number(amountGold) || 0), p.gold || 0));
-    const healed = Math.min(c.hpMax - c.hp, Math.floor(budget / CASTLE_REPAIR_GOLD_PER_HP));
-    if (healed <= 0) return { ok: false, error: 'Pas assez d’or (' + CASTLE_REPAIR_GOLD_PER_HP + ' 🪙 par point de structure).' };
+    const resType = CASTLE_TERRAIN_RESOURCE[terrain];
+    const resKey = stackKey(resType, CASTLE_REPAIR_RESOURCE_TIER);
+    const goldBudget = Math.max(0, Math.min(Math.floor(Number(amountGold) || 0), p.gold || 0));
+    const resourceStock = p.inventory[resKey] || 0;
+    const healed = Math.min(
+      c.hpMax - c.hp,
+      Math.floor(goldBudget / CASTLE_REPAIR_GOLD_PER_HP),
+      resourceStock * CASTLE_REPAIR_HP_PER_RESOURCE
+    );
+    if (healed <= 0) {
+      return {
+        ok: false,
+        error: 'Pas assez d’or (' + CASTLE_REPAIR_GOLD_PER_HP + ' 🪙/PS) ou de ' + resourceLabel(resType, CASTLE_REPAIR_RESOURCE_TIER) +
+          ' (' + CASTLE_REPAIR_HP_PER_RESOURCE + ' PS par unité).',
+      };
+    }
     const cost = healed * CASTLE_REPAIR_GOLD_PER_HP;
+    const resourceCost = Math.ceil(healed / CASTLE_REPAIR_HP_PER_RESOURCE);
     p.gold -= cost;
+    p.inventory[resKey] -= resourceCost;
+    if (p.inventory[resKey] <= 0) delete p.inventory[resKey];
     c.hp += healed;
     this.pushSelf(p);
     this.onGuildsDirty();
-    return { ok: true, healed, cost, hp: c.hp, hpMax: c.hpMax };
+    return { ok: true, healed, cost, resourceCost, resourceType: resType, resourceTier: CASTLE_REPAIR_RESOURCE_TIER, hp: c.hp, hpMax: c.hpMax };
   }
 
   /* Lance (ou rejoint) un siège : un lobby de 30 s s'ouvre, comme pour un raid
@@ -1139,6 +1168,20 @@ class Game {
       }
     }
     return out;
+  }
+
+  // Redistribution nocturne : ressources ET monstres sauvages rejoués à une
+  // nouvelle disposition (jamais les villages/donjons/château/capitale — voir
+  // applyWildLayer). Les clients connectés rejouent la même fonction pure de
+  // leur côté dès qu'ils reçoivent le nouveau salt (aucune carte à
+  // transmettre sur le réseau).
+  redistributeWildlife() {
+    this.wildSalt++;
+    applyWildLayer(this.worldMap.tiles, this.seed, this.wildSalt);
+    this.broadcast('world:wildSalt', { salt: this.wildSalt });
+    this.broadcast('toast', { text: '🌱 La faune sauvage (ressources et monstres) a été redistribuée cette nuit.' });
+    this.log('🌱 La faune sauvage (ressources et monstres) a été redistribuée cette nuit.');
+    return { ok: true, salt: this.wildSalt };
   }
 
   worldDiffs() {
@@ -1706,6 +1749,7 @@ class Game {
       this.speed = Math.max(1, Number(action.speed) || 1);
       return { ok: true };
     }
+    if (action && action.wildReset) return this.redistributeWildlife();
     return { ok: false, error: 'Action dev inconnue.' };
   }
 
@@ -1911,6 +1955,7 @@ class Game {
       mapDiffs: this.mapDiffs(),
       mapStates: this.mapStates(),
       worldDiffs: this.worldDiffs(),
+      wildSalt: this.wildSalt,
       savedAt: Date.now(),
     };
   }
@@ -1980,6 +2025,11 @@ class Game {
       const bossTile = map.tiles.get(map.dungeon.bossTileKey);
       if (bossTile) bossTile.content = map.dungeon.bossAlive ? { ...map.dungeon.bossTemplate } : null;
     }
+    // Rejoue la redistribution nocturne de la faune sauvage déjà survenue
+    // avant ce redémarrage (avant les diffs d'inactiveUntil ci-dessous, qui
+    // doivent s'appliquer sur la disposition à jour, pas sur celle d'origine).
+    this.wildSalt = Number(data.wildSalt) || 0;
+    if (this.wildSalt > 0) applyWildLayer(this.worldMap.tiles, this.seed, this.wildSalt);
     if (data.mapDiffs) {
       for (const [mapId, diffs] of Object.entries(data.mapDiffs || {})) {
         const map = this.mapOf(mapId);
