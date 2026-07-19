@@ -158,6 +158,9 @@ function placeBiomePois(tiles, seed) {
       const tangent = Math.round((hash2(i, terrains.indexOf(terrain), seed, 93) - 0.5) * 18);
       tryPlacePoi(tiles, seed, terrain, 'dungeon', i, radius, tangent);
     }
+
+    // Un château par biome — territoire de guilde, proche du donjon T6 de la zone.
+    tryPlacePoi(tiles, seed, terrain, 'castle', 0, 24, -14);
   }
 }
 
@@ -420,7 +423,8 @@ function isWalkable(tiles, x, y) {
     || t.content.kind === 'dungeon'
     || t.content.kind === 'portal'
     || t.content.kind === 'resource'
-    || t.content.kind === 'monster';
+    || t.content.kind === 'monster'
+    || t.content.kind === 'castle';
 }
 
 if (typeof module !== 'undefined' && module.exports) {

@@ -12,6 +12,28 @@ Object.assign(globalThis, require('../js/world.js'));
 
 const MAX_GUILD_MEMBERS = 20;
 const CHAT_LOG_MAX = 300;
+
+/* Territoire de guilde : un château par biome (cf. js/world.js). Le siège
+ * réutilise le combat probabiliste existant (winChance/teamPowerOf) contre
+ * une « force de défense » dérivée du niveau de renfort et des PS restants
+ * (même logique de facteur de blessure que pour un joueur : un château
+ * entamé se défend moins bien). Pas de lobby dédié : les attaquants sont
+ * tous les membres de la guilde assaillante physiquement sur la tuile au
+ * moment de l'assaut — la coordination passe par le chat de guilde.
+ * Simplification assumée pour un premier jet : le coût de fondation/
+ * renfort/réparation est payé en or par la personne qui agit (pas de
+ * banque de guilde partagée) — plusieurs membres doivent donc contribuer
+ * tour à tour pour financer un château, ce qui recrée l'effort collectif
+ * sans construire tout un système de trésorerie. */
+const CASTLE_TERRAINS = ['FORET', 'PLAINE', 'MONTAGNE', 'MARECAGE'];
+const CASTLE_BASE_HP = 400;
+const CASTLE_HP_PER_LEVEL = 200;
+const CASTLE_MAX_LEVEL = 5;
+const CASTLE_CLAIM_COST_GOLD = 500;
+const CASTLE_REINFORCE_COST_GOLD = 400;
+const CASTLE_REPAIR_GOLD_PER_HP = 2;
+const CASTLE_DAMAGE_PER_ASSAULT = 150;
+const CASTLE_ZONE_GOLD_BONUS = 1.15;
 const BOT_NAMES = ['Kaelith', 'Brumm', 'Sylvane', 'Orzo', 'Nyra', 'Fenwick', 'Malko', 'Isha', 'Torvald', 'Lupa'];
 const BOT_CHAT = [
   'quelqu’un pour le Basilic au nord ?',
@@ -41,6 +63,7 @@ class Game {
     this.trades = new Map();
     this.duelInvites = new Map();
     this.guilds = new Map();
+    this.castles = new Map();   // terrain -> { terrain, ownerGuildId, hp, hpMax, level }
     this.chatLog = [];   // historique borné : reprend vie à la reconnexion (coordination async)
     this.pendingReplies = [];
     this.send = () => {};
@@ -741,6 +764,164 @@ class Game {
     };
   }
 
+  /* ---------- Châteaux de guilde (territoire) ---------- */
+  castleOf(terrain) {
+    let c = this.castles.get(terrain);
+    if (!c) {
+      c = { terrain, ownerGuildId: null, hp: 0, hpMax: 0, level: 0 };
+      this.castles.set(terrain, c);
+    }
+    return c;
+  }
+
+  castleTileFor(terrain) {
+    for (const tile of this.worldMap.tiles.values()) {
+      if (tile.content && tile.content.kind === 'castle' && tile.terrain === terrain) return tile;
+    }
+    return null;
+  }
+
+  atCastle(p, terrain) {
+    if ((p.mapId || 'world') !== 'world') return false;
+    const tile = this.castleTileFor(terrain);
+    return !!tile && p.pos.x === tile.x && p.pos.y === tile.y;
+  }
+
+  castleDefenseForce(c) {
+    const base = 300 + c.level * 150;
+    const ratio = c.hpMax ? Math.max(0, Math.min(1, c.hp / c.hpMax)) : 0;
+    const woundFactor = CONFIG.COMBAT.WOUND_FLOOR + (1 - CONFIG.COMBAT.WOUND_FLOOR) * ratio;
+    return base * woundFactor;
+  }
+
+  castlesInfo(p) {
+    return CASTLE_TERRAINS.map((terrain) => {
+      const c = this.castleOf(terrain);
+      const guild = c.ownerGuildId ? this.guilds.get(c.ownerGuildId) : null;
+      const tile = this.castleTileFor(terrain);
+      return {
+        terrain,
+        x: tile ? tile.x : 0,
+        y: tile ? tile.y : 0,
+        ownerGuildId: c.ownerGuildId,
+        ownerGuildName: guild ? guild.name : null,
+        hp: c.hp,
+        hpMax: c.hpMax,
+        level: c.level,
+        maxLevel: CASTLE_MAX_LEVEL,
+        isOwnGuild: !!(p.guildId && c.ownerGuildId === p.guildId),
+      };
+    });
+  }
+
+  claimCastle(p, terrain) {
+    if (!CASTLE_TERRAINS.includes(terrain)) return { ok: false, error: 'Zone invalide.' };
+    if (!p.guildId) return { ok: false, error: 'Vous devez être dans une guilde.' };
+    if (!this.atCastle(p, terrain)) return { ok: false, error: 'Vous devez être au château pour le revendiquer.' };
+    const c = this.castleOf(terrain);
+    if (c.ownerGuildId) return { ok: false, error: 'Ce château appartient déjà à une guilde.' };
+    if ((p.gold || 0) < CASTLE_CLAIM_COST_GOLD) {
+      return { ok: false, error: 'Il faut ' + CASTLE_CLAIM_COST_GOLD + ' 🪙 (contribution personnelle) pour fonder.' };
+    }
+    p.gold -= CASTLE_CLAIM_COST_GOLD;
+    c.ownerGuildId = p.guildId;
+    c.level = 1;
+    c.hpMax = CASTLE_BASE_HP;
+    c.hp = c.hpMax;
+    this.pushSelf(p);
+    this.onGuildsDirty();
+    const guild = this.guilds.get(p.guildId);
+    this.log('🏰 La guilde « ' + guild.name + ' » a fondé un château en ' + terrain + '.');
+    return { ok: true };
+  }
+
+  reinforceCastle(p, terrain) {
+    if (!CASTLE_TERRAINS.includes(terrain)) return { ok: false, error: 'Zone invalide.' };
+    const c = this.castleOf(terrain);
+    if (!c.ownerGuildId) return { ok: false, error: 'Ce château n’a pas encore été fondé.' };
+    if (c.ownerGuildId !== p.guildId) return { ok: false, error: 'Vous ne pouvez renforcer que le château de votre guilde.' };
+    if (!this.atCastle(p, terrain)) return { ok: false, error: 'Vous devez être au château pour le renforcer.' };
+    if (c.level >= CASTLE_MAX_LEVEL) return { ok: false, error: 'Niveau de renfort maximum atteint.' };
+    if ((p.gold || 0) < CASTLE_REINFORCE_COST_GOLD) {
+      return { ok: false, error: 'Il faut ' + CASTLE_REINFORCE_COST_GOLD + ' 🪙.' };
+    }
+    p.gold -= CASTLE_REINFORCE_COST_GOLD;
+    c.level += 1;
+    c.hpMax += CASTLE_HP_PER_LEVEL;
+    c.hp = Math.min(c.hpMax, c.hp + CASTLE_HP_PER_LEVEL);
+    this.pushSelf(p);
+    this.onGuildsDirty();
+    return { ok: true, level: c.level, hpMax: c.hpMax };
+  }
+
+  repairCastle(p, terrain, amountGold) {
+    if (!CASTLE_TERRAINS.includes(terrain)) return { ok: false, error: 'Zone invalide.' };
+    const c = this.castleOf(terrain);
+    if (!c.ownerGuildId) return { ok: false, error: 'Ce château n’a pas encore été fondé.' };
+    if (c.ownerGuildId !== p.guildId) return { ok: false, error: 'Vous ne pouvez réparer que le château de votre guilde.' };
+    if (!this.atCastle(p, terrain)) return { ok: false, error: 'Vous devez être au château pour le réparer.' };
+    if (c.hp >= c.hpMax) return { ok: false, error: 'Déjà à pleine structure.' };
+    const budget = Math.max(0, Math.min(Math.floor(Number(amountGold) || 0), p.gold || 0));
+    const healed = Math.min(c.hpMax - c.hp, Math.floor(budget / CASTLE_REPAIR_GOLD_PER_HP));
+    if (healed <= 0) return { ok: false, error: 'Pas assez d’or (' + CASTLE_REPAIR_GOLD_PER_HP + ' 🪙 par point de structure).' };
+    const cost = healed * CASTLE_REPAIR_GOLD_PER_HP;
+    p.gold -= cost;
+    c.hp += healed;
+    this.pushSelf(p);
+    this.onGuildsDirty();
+    return { ok: true, healed, cost, hp: c.hp, hpMax: c.hpMax };
+  }
+
+  assaultCastle(p, terrain) {
+    if (!CASTLE_TERRAINS.includes(terrain)) return { ok: false, error: 'Zone invalide.' };
+    if (!p.guildId) return { ok: false, error: 'Vous devez être dans une guilde.' };
+    const c = this.castleOf(terrain);
+    if (!c.ownerGuildId) return { ok: false, error: 'Ce château n’appartient à personne — revendiquez-le plutôt.' };
+    if (c.ownerGuildId === p.guildId) return { ok: false, error: 'Vous ne pouvez pas assiéger le château de votre propre guilde.' };
+    if (!this.atCastle(p, terrain)) return { ok: false, error: 'Vous devez être au château pour lancer l’assaut.' };
+    if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
+    if (p.pa < CONFIG.COSTS.RAID) return { ok: false, error: 'Pas assez de PA (' + CONFIG.COSTS.RAID + ' requis).' };
+
+    const tile = this.castleTileFor(terrain);
+    const attackers = [...this.players.values()].filter((m) =>
+      !m.bot && m.guildId === p.guildId && m.status === 'IDLE' && m.pa >= CONFIG.COSTS.RAID &&
+      (m.mapId || 'world') === 'world' && m.pos.x === tile.x && m.pos.y === tile.y
+    );
+    for (const a of attackers) a.pa -= CONFIG.COSTS.RAID;
+
+    const force = teamPowerOf(attackers);
+    const defense = this.castleDefenseForce(c);
+    const chance = winChance(force, defense);
+    const victory = this.rng() < chance;
+    const guildAtk = this.guilds.get(p.guildId);
+    const guildDef = this.guilds.get(c.ownerGuildId);
+
+    if (!victory) {
+      for (const a of attackers) {
+        a.hp = Math.max(1, Math.ceil(maxHp(a) * CONFIG.COMBAT.DEATH_HP_PCT));
+        a.mapId = 'world';
+        a.pos = { x: 0, y: 0 };
+        this.pushSelf(a);
+      }
+      this.log('🏰 L’assaut de « ' + guildAtk.name + ' » contre le château (' + terrain + ') de « ' + guildDef.name + ' » a échoué.');
+      return { ok: true, victory: false, captured: false, chance: Math.round(chance * 100) };
+    }
+
+    c.hp = Math.max(0, c.hp - CASTLE_DAMAGE_PER_ASSAULT);
+    let captured = false;
+    if (c.hp <= 0) {
+      captured = true;
+      c.ownerGuildId = p.guildId;
+      c.hp = Math.round(c.hpMax * 0.5);
+      this.log('🏰 « ' + guildAtk.name + ' » a pris le château (' + terrain + ') à « ' + guildDef.name + ' » !');
+    } else {
+      this.log('🏰 « ' + guildAtk.name + ' » entame le château (' + terrain + ') de « ' + guildDef.name + ' » (' + c.hp + '/' + c.hpMax + ' PS restants).');
+    }
+    for (const a of attackers) this.pushSelf(a);
+    this.onGuildsDirty();
+    return { ok: true, victory: true, captured, chance: Math.round(chance * 100), hp: c.hp, hpMax: c.hpMax };
+  }
+
   /* ---------- Amis ---------- */
   sendFriendRequest(p, targetUsername) {
     const target = this.findAccountByUsername(targetUsername);
@@ -1114,7 +1295,10 @@ class Game {
         p.weaponXp += xp;
         // Chapardeur (Renard Voleur) : +50 % d'or pour lui
         const lootMult = p.speciesClass === 'RENARD_VOLEUR' ? 1.5 : 1;
-        const gold = Math.ceil(rollGoldLoot(monster.tier) * lootMult);
+        // Territoire : la guilde propriétaire du château de la zone bonifie l'or de ses membres
+        const zoneMult = (p.guildId && tile.terrain && this.castleOf(tile.terrain).ownerGuildId === p.guildId)
+          ? CASTLE_ZONE_GOLD_BONUS : 1;
+        const gold = Math.ceil(rollGoldLoot(monster.tier) * lootMult * zoneMult);
         p.gold = (p.gold || 0) + gold;
         let food = null;
         if (this.rng() < CONFIG.FOOD_DROP_CHANCE) {
@@ -1601,6 +1785,7 @@ class Game {
       players: [...this.players.values()],
       credentials,
       guilds: [...this.guilds.values()],
+      castles: [...this.castles.values()],
       chatLog: this.chatLog,
       mapDiffs: this.mapDiffs(),
       mapStates: this.mapStates(),
@@ -1647,6 +1832,9 @@ class Game {
     for (const [id, cred] of Object.entries(data.credentials || {})) this.credentials.set(id, cred);
     for (const g of data.guilds || []) {
       if (g && g.id) this.guilds.set(g.id, g);
+    }
+    for (const c of data.castles || []) {
+      if (c && c.terrain) this.castles.set(c.terrain, c);
     }
     if (Array.isArray(data.chatLog)) this.chatLog = data.chatLog.slice(-CHAT_LOG_MAX);
     // Migration d'une base existante sans rôles : le compte le plus ancien

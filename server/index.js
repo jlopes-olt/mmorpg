@@ -50,6 +50,7 @@ if (store.countAccounts() === 0 && seed === null && fs.existsSync(LEGACY_STATE_F
     players: [],
     credentials: {},
     guilds: store.getMeta('guilds', []),
+    castles: store.getMeta('castles', []),
     chatLog: store.getMeta('chatLog', []),
     worldDiffs: store.loadDiffs(),
   };
@@ -83,6 +84,7 @@ function saveWorld() {
       store.setMeta('seed', game.seed);
       store.setMeta('now', game.now);
       store.setMeta('guilds', [...game.guilds.values()]);
+      store.setMeta('castles', [...game.castles.values()]);
       store.setMeta('chatLog', game.chatLog);
       store.setMeta('savedAt', Date.now());
     });
@@ -260,6 +262,15 @@ io.on('connection', (socket) => {
     if (!player || !game.players.has(player.id)) return ack({ ok: false, error: 'Non authentifié.' });
     ack({ ok: true, list: game.friendsList(player) });
   });
+  socket.on('castle:info', (payload, ack) => {
+    if (typeof ack !== 'function') ack = () => {};
+    if (!player || !game.players.has(player.id)) return ack({ ok: false, error: 'Non authentifié.' });
+    ack({ ok: true, list: game.castlesInfo(player) });
+  });
+  socket.on('castle:claim', act((d) => game.claimCastle(player, String(d.terrain))));
+  socket.on('castle:reinforce', act((d) => game.reinforceCastle(player, String(d.terrain))));
+  socket.on('castle:repair', act((d) => game.repairCastle(player, String(d.terrain), Number(d.gold))));
+  socket.on('castle:assault', act((d) => game.assaultCastle(player, String(d.terrain))));
 
   socket.on('disconnect', () => {
     if (!player) return;

@@ -156,6 +156,7 @@ function contentSpriteSize(kind, type, tier) {
   if (kind === 'capital') return { w: 96, h: 100, groundOffset: 16, shadowW: 24, shadowH: 7 };
   if (kind === 'village') return { w: 98, h: 82, groundOffset: 14, shadowW: 22, shadowH: 7 };
   if (kind === 'dungeon') return { w: 84, h: 76, groundOffset: 12, shadowW: 20, shadowH: 6 };
+  if (kind === 'castle') return { w: 90, h: 84, groundOffset: 13, shadowW: 22, shadowH: 7 };
   if (kind === 'monster') return { w: 66 + tier * 2, h: 52 + tier * 2, groundOffset: 10, shadowW: 18 + tier * 2, shadowH: 7 + tier * 0.4 };
   if (type === 'BOIS' || type === 'BOIS_ANCIEN') return { w: 62 + tier * 3, h: 74 + tier * 3, groundOffset: 8, shadowW: 16 + tier * 2, shadowH: 6 + tier * 0.5 };
   if (type === 'MINERAI' || type === 'MINERAI_RUNIQUE') return { w: 50 + tier * 2, h: 42 + tier * 2, groundOffset: 8, shadowW: 15 + tier * 1.5, shadowH: 5 + tier * 0.4 };
@@ -729,7 +730,7 @@ class Renderer {
         const tile = s.tiles.get(key);
         // Repères permanents : visibles même à travers le brouillard
         const landmark = tile.content &&
-          (tile.content.kind === 'capital' || tile.content.kind === 'village' || tile.content.kind === 'dungeon');
+          (tile.content.kind === 'capital' || tile.content.kind === 'village' || tile.content.kind === 'dungeon' || tile.content.kind === 'castle');
         const known = visible || this.explored.has(key);
         // Donjon : zones vides (non praticables) en noir profond, dessinées
         // même sous brouillard — on lit la silhouette des couloirs d'un
@@ -795,7 +796,7 @@ class Renderer {
     const ctx = this.ctx, c = tile.content, s = this.server;
 
     // Repère aperçu à travers le brouillard : rendu fantôme
-    const isLandmark = c.kind === 'capital' || c.kind === 'village' || c.kind === 'dungeon';
+    const isLandmark = c.kind === 'capital' || c.kind === 'village' || c.kind === 'dungeon' || c.kind === 'castle';
     if (isLandmark && fogged) ctx.globalAlpha = 0.62;
 
     if (c.kind === 'capital') {
@@ -874,6 +875,34 @@ if (c.kind === 'dungeon') {
         size.shadowH
       );
       this.label(cx, cy + TH2 + 12, 'DONJON', '#b8d8e6', 9);
+      ctx.globalAlpha = 1;
+      return;
+    }
+
+    if (c.kind === 'castle') {
+      const size = contentSpriteSize('castle');
+      this.drawPoiBase(cx, cy, {
+        fill: 'rgba(211, 106, 82, 0.16)',
+        stroke: 'rgba(211, 106, 82, 0.5)',
+        glow: 'rgba(211, 106, 82, 0.22)',
+      });
+      const sprite = this.worldIcons.castle;
+      const drawn = sprite && this.drawWorldSprite(
+        sprite,
+        cx,
+        cy + size.groundOffset,
+        size.w,
+        size.h,
+        size.shadowW,
+        size.shadowH
+      );
+      if (!drawn) {
+        ctx.font = '30px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🏰', cx, cy - 2);
+      }
+      this.label(cx, cy + TH2 + 12, 'CHÂTEAU', '#e8a48f', 9);
       ctx.globalAlpha = 1;
       return;
     }
@@ -1172,6 +1201,20 @@ if (c.kind === 'dungeon') {
       ctx.lineWidth = 1.25;
       ctx.fillRect(x - size * 0.75, y - size * 0.75, size * 1.5, size * 1.5);
       ctx.strokeRect(x - size * 0.75, y - size * 0.75, size * 1.5, size * 1.5);
+      return;
+    }
+
+    if (kind === 'castle') {
+      ctx.fillStyle = '#d36a52';
+      ctx.strokeStyle = 'rgba(20,24,29,0.9)';
+      ctx.lineWidth = 1.25;
+      ctx.beginPath();
+      ctx.moveTo(x, y - size * 1.1);
+      ctx.lineTo(x + size * 0.95, y + size * 0.6);
+      ctx.lineTo(x - size * 0.95, y + size * 0.6);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
     }
   }
 
@@ -1225,7 +1268,7 @@ if (c.kind === 'dungeon') {
 
     // Repères permanents : cartographiés sur tout le monde, brouillard compris
     for (const tile of this.server.tiles.values()) {
-      if (tile.content && (tile.content.kind === 'capital' || tile.content.kind === 'village' || tile.content.kind === 'dungeon' || tile.content.kind === 'portal')) {
+      if (tile.content && (tile.content.kind === 'capital' || tile.content.kind === 'village' || tile.content.kind === 'dungeon' || tile.content.kind === 'portal' || tile.content.kind === 'castle')) {
         markers.push({
           kind: tile.content.kind === 'portal' ? 'capital' : tile.content.kind,
           x: toPx(tile.x) + scale / 2,

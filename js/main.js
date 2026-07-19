@@ -192,7 +192,7 @@
     const c = tile.content;
     // Hors brouillard : inerte — sauf les repères permanents (capitale,
     // villages, donjons), visibles et ciblables à travers le brouillard.
-    const landmark = c && (c.kind === 'capital' || c.kind === 'village' || c.kind === 'dungeon');
+    const landmark = c && (c.kind === 'capital' || c.kind === 'village' || c.kind === 'dungeon' || c.kind === 'castle');
     if (!explored.has(key) && !visible && !landmark) return;
     const adjacent = server.chebyshev(me.pos, tile) <= 1;
     moveQueue = [];
@@ -232,6 +232,16 @@
         mediaSrc: ui.getSpriteSrc(renderer.worldIcons.dungeon[tile.terrain]),
         mediaClass: 'structure',
         badge: 'Donjon',
+      });
+      return;
+    }
+
+    if (c && c.kind === 'castle') {
+      if (me.pos.x === tx && me.pos.y === ty) ui.showCastlePopup(tile);
+      else confirmWalk(tx, ty, {
+        title: 'Aller au château ?',
+        kicker: 'Territoire',
+        badge: 'Château (' + tile.terrain + ')',
       });
       return;
     }
