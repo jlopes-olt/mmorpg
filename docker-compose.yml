@@ -13,6 +13,11 @@ services:
       DB_FILE: /app/server/data/wildrift.db
       # Ancien format JSON : encore lu une fois pour la migration automatique
       STATE_FILE: /app/server/data/state.json
+      # Filet de secours admin (pseudos séparés par des virgules) : sans cette
+      # ligne, une variable ADMIN_USERNAMES positionnée dans Portainer/.env
+      # n'atteint jamais le conteneur — Compose ne relaie que ce qui est listé
+      # ici, il ne transmet pas automatiquement les variables de la stack.
+      ADMIN_USERNAMES: ${ADMIN_USERNAMES:-}
     volumes:
       - mmorpg_state:/app/server/data
     restart: unless-stopped
