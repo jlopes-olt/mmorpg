@@ -13,7 +13,7 @@
 
 (function () {
   const remote = typeof io !== 'undefined' && location.protocol.indexOf('http') === 0;
-  const SHELL_REV = '20260718-skins-reset-1';
+  const SHELL_REV = '20260719-siege-pwa-update-1';
 
   // PWA : service worker (cache + installation sur l'écran d'accueil).
   // Échec silencieux en file:// / artifact.
@@ -27,9 +27,84 @@
       : Promise.resolve();
     resetCaches.finally(() => {
       localStorage.setItem('feralia_shell_rev', SHELL_REV);
-      navigator.serviceWorker.register('/sw.js?v=' + SHELL_REV).catch(() => { /* indisponible */ });
+      navigator.serviceWorker.register('/sw.js?v=' + SHELL_REV)
+        .then((reg) => {
+          // Une app installée est souvent « reprise » depuis l'arrière-plan par
+          // l'OS plutôt que rechargée — ça ne redéclenche pas de requête réseau
+          // pour sw.js. On vérifie donc activement une nouvelle version à
+          // chaque lancement/retour au premier plan.
+          reg.update().catch(() => {});
+          document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') reg.update().catch(() => {});
+          });
+        })
+        .catch(() => { /* indisponible */ });
+    });
+
+    // Dès qu'un nouveau service worker prend le contrôle (skipWaiting + claim
+    // dans sw.js), on recharge la page pour exécuter le code à jour tout de
+    // suite — sinon l'onglet/l'app déjà ouvert(e) continue de tourner avec
+    // l'ancien JS jusqu'à la prochaine fermeture complète.
+    let swRefreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (swRefreshing) return;
+      swRefreshing = true;
+      location.reload();
     });
   }
+
+  // --- Bannière d'installation PWA (Android : invite native ; iOS : instructions
+  // manuelles, Safari ne propose pas d'API programmatique d'installation). ---
+  (function setupInstallBanner() {
+    const banner = document.getElementById('installBanner');
+    if (!banner) return;
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+    if (isStandalone) return;   // déjà installée : rien à proposer
+
+    const DISMISS_KEY = 'feralia_install_dismissed_at';
+    const DISMISS_COOLDOWN_MS = 14 * 24 * 60 * 60 * 1000;
+    const dismissedAt = Number(localStorage.getItem(DISMISS_KEY) || 0);
+    if (Date.now() - dismissedAt < DISMISS_COOLDOWN_MS) return;
+
+    const textEl = document.getElementById('installBannerText');
+    const actionBtn = document.getElementById('installBannerAction');
+    const closeBtn = document.getElementById('installBannerClose');
+    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
+    let deferredPrompt = null;
+
+    const show = () => banner.classList.remove('hidden');
+    const hide = () => banner.classList.add('hidden');
+    const dismiss = () => { localStorage.setItem(DISMISS_KEY, String(Date.now())); hide(); };
+    closeBtn.addEventListener('click', dismiss);
+
+    if (isIOS) {
+      textEl.textContent = 'Appuyez sur Partager (📤) puis « Sur l’écran d’accueil » pour l’installer.';
+      show();
+      return;
+    }
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      textEl.textContent = 'Accès plus rapide, plein écran, jouable même hors ligne.';
+      actionBtn.classList.remove('hidden');
+      show();
+    });
+
+    actionBtn.addEventListener('click', async () => {
+      if (!deferredPrompt) return;
+      hide();
+      deferredPrompt.prompt();
+      await deferredPrompt.userChoice.catch(() => null);
+      deferredPrompt = null;
+    });
+
+    window.addEventListener('appinstalled', () => {
+      localStorage.setItem(DISMISS_KEY, String(Date.now()));
+      hide();
+    });
+  })();
+
   const server = remote ? new RemoteServer() : new ServerSim(CONFIG.WORLD.SEED);
   const canvas = document.getElementById('map');
   const splash = document.getElementById('splash');

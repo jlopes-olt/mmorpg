@@ -166,6 +166,62 @@ html, body {
   pointer-events: none;
 }
 
+/* ---------- Bannière d'installation PWA (haut du HUD) ---------- */
+#installBanner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(69, 48, 28, 0.96), rgba(38, 28, 18, 0.94));
+  border: 1px solid rgba(214, 178, 102, 0.38);
+  box-shadow:
+    0 10px 22px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 236, 196, 0.14);
+  pointer-events: auto;
+}
+#installBannerIcon {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+.install-banner-copy { flex: 1; min-width: 0; }
+.install-banner-title {
+  color: #f2e5c2;
+  font-size: 12.5px;
+  font-weight: 800;
+  line-height: 1.25;
+  text-shadow: 0 1px 0 rgba(39, 22, 8, 0.75);
+}
+.install-banner-text {
+  color: #d8c9a3;
+  font-size: 11px;
+  line-height: 1.32;
+  margin-top: 1px;
+}
+#installBannerAction {
+  flex: none;
+  min-height: 34px;
+  padding: 0 14px;
+  font-size: 12.5px;
+}
+#installBannerClose {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #efdbb0;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
 /* ---------- % de victoire (popups + bannière de lobby) ---------- */
 .chance-good { color: #3e9a4e; }
 .chance-mid { color: #c9871a; }

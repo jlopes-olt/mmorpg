@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v4-brand-icon-refresh';
+const VERSION = 'wildrift-v5-siege-pwa-update';
 
 const CORE = [
   '/',
