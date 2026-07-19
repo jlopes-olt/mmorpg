@@ -12,28 +12,9 @@ Object.assign(globalThis, require('../js/world.js'));
 
 const MAX_GUILD_MEMBERS = 20;
 const CHAT_LOG_MAX = 300;
-
-/* Territoire de guilde : un château par biome (cf. js/world.js). Le siège
- * réutilise le combat probabiliste existant (winChance/teamPowerOf) contre
- * une « force de défense » dérivée du niveau de renfort et des PS restants
- * (même logique de facteur de blessure que pour un joueur : un château
- * entamé se défend moins bien). Pas de lobby dédié : les attaquants sont
- * tous les membres de la guilde assaillante physiquement sur la tuile au
- * moment de l'assaut — la coordination passe par le chat de guilde.
- * Simplification assumée pour un premier jet : le coût de fondation/
- * renfort/réparation est payé en or par la personne qui agit (pas de
- * banque de guilde partagée) — plusieurs membres doivent donc contribuer
- * tour à tour pour financer un château, ce qui recrée l'effort collectif
- * sans construire tout un système de trésorerie. */
-const CASTLE_TERRAINS = ['FORET', 'PLAINE', 'MONTAGNE', 'MARECAGE'];
-const CASTLE_BASE_HP = 400;
-const CASTLE_HP_PER_LEVEL = 200;
-const CASTLE_MAX_LEVEL = 5;
-const CASTLE_CLAIM_COST_GOLD = 500;
-const CASTLE_REINFORCE_COST_GOLD = 400;
-const CASTLE_REPAIR_GOLD_PER_HP = 2;
-const CASTLE_DAMAGE_PER_ASSAULT = 150;
-const CASTLE_ZONE_GOLD_BONUS = 1.15;
+// Constantes de château (CASTLE_*) : partagées via js/config.js (Object.assign
+// ci-dessous), au même titre que CLASSES/RESOURCES — l'UI en a besoin pour
+// afficher les coûts, donc elles ne peuvent pas rester locales à ce fichier.
 const BOT_NAMES = ['Kaelith', 'Brumm', 'Sylvane', 'Orzo', 'Nyra', 'Fenwick', 'Malko', 'Isha', 'Torvald', 'Lupa'];
 const BOT_CHAT = [
   'quelqu’un pour le Basilic au nord ?',

@@ -9,6 +9,9 @@ const { Game, CHAT_LOG_MAX } = require('./game.js');
 const {
   CONFIG, CLASSES, MAX_CHAR_SLOTS, MONSTER_FORCE, playerForce, maxHp,
   combatPower, teamPowerOf, winChance, BUFF_COMBATS,
+  CASTLE_TERRAINS, CASTLE_BASE_HP, CASTLE_HP_PER_LEVEL, CASTLE_MAX_LEVEL,
+  CASTLE_CLAIM_COST_GOLD, CASTLE_REINFORCE_COST_GOLD, CASTLE_REPAIR_GOLD_PER_HP,
+  CASTLE_DAMAGE_PER_ASSAULT, CASTLE_ZONE_GOLD_BONUS,
 } = require('../js/config.js');
 
 const g = new Game(CONFIG.WORLD.SEED, null);
@@ -570,6 +573,103 @@ for (let i = 0; i < CHAT_LOG_MAX + 10; i++) g.say(bob, 'spam ' + i, 'general');
 assert.ok(g.chatLog.length <= CHAT_LOG_MAX, 'l’historique reste borné (plafond ' + CHAT_LOG_MAX + ')');
 assert.ok(g.chatLog.length > busyBefore, 'les nouveaux messages remplacent bien les plus anciens');
 console.log('Historique : filtrage par destinataire ✔, plafond respecté ✔');
+
+// --- Châteaux de guilde : territoire, renfort/réparation, siège, bonus de zone ---
+// À ce stade : Bob et Carl sont dans « Faucons » (Carl chef) ; Alice n'est dans aucune guilde.
+const foretCastleTile = g.castleTileFor('FORET');
+assert.ok(foretCastleTile, 'un château existe bien en Forêt');
+
+bob.mapId = 'world'; bob.gold = 999999; bob.status = 'IDLE'; bob.pa = 50;
+bob.pos = { x: foretCastleTile.x - 1, y: foretCastleTile.y };
+assert.ok(!g.claimCastle(bob, 'FORET').ok, 'revendication refusée hors de la tuile du château');
+
+bob.pos = { x: foretCastleTile.x, y: foretCastleTile.y };
+const goldBeforeClaim = bob.gold;
+assert.ok(g.claimCastle(bob, 'FORET').ok, 'revendication acceptée sur place, par un simple membre');
+assert.strictEqual(bob.gold, goldBeforeClaim - CASTLE_CLAIM_COST_GOLD, 'coût de fondation prélevé');
+let foretCastle = g.castleOf('FORET');
+assert.strictEqual(foretCastle.ownerGuildId, bob.guildId, 'le château appartient à la guilde de Bob (Faucons)');
+assert.strictEqual(foretCastle.level, 1, 'niveau 1 à la fondation');
+assert.strictEqual(foretCastle.hp, CASTLE_BASE_HP, 'PS pleins à la fondation');
+assert.ok(!g.claimCastle(bob, 'FORET').ok, 'un château déjà fondé ne peut pas l’être deux fois');
+
+assert.ok(!g.reinforceCastle(alice, 'FORET').ok, 'un non-membre ne peut pas renforcer le château des Faucons');
+assert.ok(!g.repairCastle(alice, 'FORET', 999).ok, 'un non-membre ne peut pas le réparer non plus');
+
+const goldBeforeReinforce = bob.gold;
+assert.ok(g.reinforceCastle(bob, 'FORET').ok, 'renfort par un membre');
+foretCastle = g.castleOf('FORET');
+assert.strictEqual(foretCastle.level, 2, 'niveau augmenté');
+assert.strictEqual(foretCastle.hpMax, CASTLE_BASE_HP + CASTLE_HP_PER_LEVEL, 'PS max augmentés');
+assert.strictEqual(bob.gold, goldBeforeReinforce - CASTLE_REINFORCE_COST_GOLD, 'coût de renfort prélevé');
+
+foretCastle.hp -= 120;   // simule des dégâts subis précédemment
+const goldBeforeRepair = bob.gold;
+const repairRes = g.repairCastle(bob, 'FORET', 999999);
+assert.ok(repairRes.ok && repairRes.healed === 120, 'réparation jusqu’à pleine structure');
+assert.strictEqual(g.castleOf('FORET').hp, g.castleOf('FORET').hpMax, 'structure pleinement restaurée');
+assert.strictEqual(bob.gold, goldBeforeRepair - repairRes.cost, 'coût de réparation proportionnel prélevé');
+assert.ok(!g.repairCastle(bob, 'FORET', 999999).ok, 'réparer une structure déjà pleine échoue');
+
+// --- Siège : Alice fonde sa propre guilde et assiège le château des Faucons ---
+assert.ok(g.createGuild(alice, 'Loups').ok, 'Alice fonde sa propre guilde pour assiéger');
+alice.mapId = 'world'; alice.status = 'IDLE';
+alice.pos = { x: foretCastleTile.x, y: foretCastleTile.y };
+
+assert.ok(!g.assaultCastle(bob, 'FORET').ok, 'impossible d’assiéger le château de sa propre guilde');
+
+alice.pa = 50; alice.hp = maxHp(alice);
+g.rng = () => 0.999;   // assaut repoussé à coup sûr
+const beforeFailHp = g.castleOf('FORET').hp;
+const failedAssault = g.assaultCastle(alice, 'FORET');
+assert.ok(failedAssault.ok && !failedAssault.victory, 'assaut repoussé');
+assert.strictEqual(g.castleOf('FORET').hp, beforeFailHp, 'PS inchangés après un assaut repoussé');
+assert.strictEqual(alice.hp, Math.ceil(maxHp(alice) * CONFIG.COMBAT.DEATH_HP_PCT), 'attaquants repoussés = rapatriés à 25 % des PV');
+assert.deepStrictEqual(alice.pos, { x: 0, y: 0 }, 'rapatriement à la Capitale après un assaut repoussé');
+
+alice.pos = { x: foretCastleTile.x, y: foretCastleTile.y };
+alice.pa = 50; alice.hp = maxHp(alice);
+g.rng = () => 0;   // assaut réussi à coup sûr
+const beforeHitHp = g.castleOf('FORET').hp;
+const hitAssault = g.assaultCastle(alice, 'FORET');
+assert.ok(hitAssault.ok && hitAssault.victory && !hitAssault.captured, 'assaut réussi mais château pas encore pris');
+assert.strictEqual(g.castleOf('FORET').hp, beforeHitHp - CASTLE_DAMAGE_PER_ASSAULT, 'PS réduits du montant par assaut');
+
+// Assauts répétés jusqu'à la capture complète
+let guard = 0;
+while (g.castleOf('FORET').ownerGuildId !== alice.guildId && guard < 20) {
+  alice.pos = { x: foretCastleTile.x, y: foretCastleTile.y };
+  alice.pa = 50; alice.hp = maxHp(alice); alice.status = 'IDLE';
+  g.assaultCastle(alice, 'FORET');
+  guard++;
+}
+assert.strictEqual(g.castleOf('FORET').ownerGuildId, alice.guildId, 'château finalement conquis par les Loups');
+assert.ok(g.castleOf('FORET').hp > 0, 'le château conquis conserve une partie de sa structure (pas remis à 0)');
+g.rng = Math.random;
+console.log('Châteaux : fondation/renfort/réparation ✔, siège ✔, conquête ✔');
+
+// --- Bonus de zone : l'or looté en Forêt est bonifié pour la guilde propriétaire ---
+let foretMob = null;
+for (const t of g.tiles.values()) {
+  if (t.terrain === 'FORET' && t.content && t.content.kind === 'monster' &&
+      t.content.inactiveUntil <= g.now && Math.hypot(t.x, t.y) > CONFIG.SAFE_RADIUS + 1) { foretMob = t; break; }
+}
+assert.ok(foretMob, 'un monstre de Forêt est disponible pour vérifier le bonus de zone');
+alice.pos = { x: foretMob.x - 1, y: foretMob.y };
+alice.pa = 50; alice.hp = maxHp(alice); alice.status = 'IDLE';
+const savedRandom = Math.random;
+Math.random = () => 0;   // rollGoldLoot déterministe (minimum de la fourchette)
+sent.length = 0;
+g.rng = () => 0;   // victoire garantie
+assert.ok(g.createRaid(alice, foretMob.x, foretMob.y).ok, 'raid forêt pour vérifier le bonus de zone');
+assert.ok(g.startRaidNow(alice, foretMob.x + ',' + foretMob.y).ok);
+g.tick(300);
+g.rng = Math.random;
+Math.random = savedRandom;
+const zoneResult = sent.filter((m) => m.ev === 'result' && m.id === alice.id).map((m) => m.data)[0];
+const expectedGold = Math.ceil((3 + foretMob.content.tier * 4) * CASTLE_ZONE_GOLD_BONUS);
+assert.strictEqual(zoneResult.gold, expectedGold, 'or bonifié de +' + Math.round((CASTLE_ZONE_GOLD_BONUS - 1) * 100) + ' % pour la guilde propriétaire de la zone');
+console.log('Bonus de zone : or bonifié pour la guilde propriétaire ✔');
 
 // --- Persistance aller-retour (token, état ET mot de passe) ---
 const snap = JSON.parse(JSON.stringify(g.serialize()));

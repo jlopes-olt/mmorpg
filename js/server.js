@@ -182,6 +182,11 @@ class ServerSim {
   respondFriendRequest(fromId, accept) { return { ok: false, error: 'Amis disponibles en multijoueur réel.' }; }
   removeFriend(username) { return { ok: false, error: 'Amis disponibles en multijoueur réel.' }; }
   friendsList() { return { ok: true, list: [] }; }
+  castlesInfo() { return { ok: true, list: [] }; }
+  claimCastle(terrain) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
+  reinforceCastle(terrain) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
+  repairCastle(terrain, gold) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
+  assaultCastle(terrain) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
 
   mapStates() {
     const out = {};

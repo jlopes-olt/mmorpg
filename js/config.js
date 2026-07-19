@@ -106,6 +106,24 @@ const CLASSES = {
  * achetés/offerts. */
 const MAX_CHAR_SLOTS = Object.keys(CLASSES).length;
 
+/* Territoire de guilde : un château par biome. Le siège réutilise le combat
+ * probabiliste existant (winChance/teamPowerOf) contre une force de défense
+ * dérivée du niveau de renfort et des PS restants (même wound factor que
+ * pour un joueur : un château entamé se défend moins bien). Simplification
+ * assumée pour un premier jet : fondation/renfort/réparation sont payés en
+ * or par la personne qui agit (pas de banque de guilde partagée) — l'effort
+ * collectif vient du fait que plusieurs membres doivent contribuer tour à
+ * tour, pas d'une trésorerie commune. */
+const CASTLE_TERRAINS = ['FORET', 'PLAINE', 'MONTAGNE', 'MARECAGE'];
+const CASTLE_BASE_HP = 400;
+const CASTLE_HP_PER_LEVEL = 200;
+const CASTLE_MAX_LEVEL = 5;
+const CASTLE_CLAIM_COST_GOLD = 500;
+const CASTLE_REINFORCE_COST_GOLD = 400;
+const CASTLE_REPAIR_GOLD_PER_HP = 2;
+const CASTLE_DAMAGE_PER_ASSAULT = 150;
+const CASTLE_ZONE_GOLD_BONUS = 1.15;
+
 const PREMIUM_CURRENCY = {
   key: 'moonstones',
   label: 'Lunaires',
@@ -529,6 +547,9 @@ const MONSTER_EMOJI = { 1: '🐺', 2: '🐻', 3: '👻', 4: '🦎', 5: '🐉', 6
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     CONFIG, CLASSES, CLASS_GEAR, MAX_CHAR_SLOTS, RESOURCES, MONSTERS, MONSTER_FORCE,
+    CASTLE_TERRAINS, CASTLE_BASE_HP, CASTLE_HP_PER_LEVEL, CASTLE_MAX_LEVEL,
+    CASTLE_CLAIM_COST_GOLD, CASTLE_REINFORCE_COST_GOLD, CASTLE_REPAIR_GOLD_PER_HP,
+    CASTLE_DAMAGE_PER_ASSAULT, CASTLE_ZONE_GOLD_BONUS,
     TERRAINS, TIER_COLORS, XP_LEVELS, UPGRADE_RECIPES, SPRITE_CELLS,
     RESOURCE_EMOJI, MONSTER_EMOJI, CHARACTER_FIELDS,
     PREMIUM_CURRENCY, SKIN_SHOP_ITEMS, SKIN_BY_ID, SKIN_ASSET_REV, CLASS_SKIN_SCALE, CLASS_BASE_SKINS,

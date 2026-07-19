@@ -338,6 +338,76 @@ showDungeonPopup(tile, onEnter) {
     );
   }
 
+  async showCastlePopup(tile) {
+    const me = this.server.me;
+    const terrain = tile.terrain;
+    const terrainName = this.terrainLabel(terrain);
+    this.popup('Château — ' + terrainName, '<p class="dim">Chargement…</p>', [{ label: 'Fermer' }], { mode: 'castle' });
+    const res = await Promise.resolve(this.server.castlesInfo());
+    if (this.popupMode !== 'castle') return;   // fermé entre-temps
+    const list = (res && res.ok) ? res.list : [];
+    const c = list.find((x) => x.terrain === terrain) ||
+      { terrain, ownerGuildId: null, ownerGuildName: null, hp: 0, hpMax: 0, level: 0, maxLevel: CASTLE_MAX_LEVEL, isOwnGuild: false };
+
+    const pct = c.hpMax ? Math.max(0, Math.min(100, Math.round(100 * c.hp / c.hpMax))) : 0;
+    const bonusPct = Math.round((CASTLE_ZONE_GOLD_BONUS - 1) * 100);
+    const bodyHtml =
+      (c.ownerGuildName
+        ? '<p>Tenu par <b>' + esc(c.ownerGuildName) + '</b> — niveau ' + c.level + ' / ' + c.maxLevel + '</p>' +
+          '<div class="xp-track"><div class="xp-fill" style="width:' + pct + '%"></div></div>' +
+          '<p class="dim small">' + c.hp + ' / ' + c.hpMax + ' points de structure</p>'
+        : '<p class="dim">Libre — aucune guilde ne le tient.</p>') +
+      '<p class="dim small">Le tenir offre à la guilde +' + bonusPct + ' % d’or sur toute la zone ' + terrainName + '.</p>' +
+      (!me.guildId ? '<p class="hp-c small">Rejoignez une guilde pour revendiquer, renforcer ou assiéger un château.</p>'
+        : !c.ownerGuildId ? '<p class="dim small">Fondation : ' + CASTLE_CLAIM_COST_GOLD + ' 🪙 (contribution personnelle).</p>'
+        : c.isOwnGuild ? '<p class="dim small">Renfort : ' + CASTLE_REINFORCE_COST_GOLD + ' 🪙 · Réparation : ' + CASTLE_REPAIR_GOLD_PER_HP + ' 🪙/PS.</p>'
+        : '');
+
+    const actions = [{ label: 'Fermer' }];
+    if (me.guildId && !c.ownerGuildId) {
+      actions.unshift({
+        label: 'Revendiquer',
+        primary: true,
+        cb: async () => {
+          const r = await Promise.resolve(this.server.claimCastle(terrain));
+          this.toast(r.ok ? 'Château fondé !' : r.error);
+        },
+      });
+    } else if (me.guildId && c.isOwnGuild) {
+      actions.unshift({
+        label: 'Réparer',
+        cb: async () => {
+          const r = await Promise.resolve(this.server.repairCastle(terrain, me.gold));
+          this.toast(r.ok ? ('Réparé de ' + r.healed + ' PS pour ' + r.cost + ' 🪙.') : r.error);
+        },
+      });
+      if (c.level < c.maxLevel) {
+        actions.unshift({
+          label: 'Renforcer',
+          primary: true,
+          cb: async () => {
+            const r = await Promise.resolve(this.server.reinforceCastle(terrain));
+            this.toast(r.ok ? ('Château renforcé (niveau ' + r.level + ').') : r.error);
+          },
+        });
+      }
+    } else if (me.guildId && c.ownerGuildId && !c.isOwnGuild) {
+      actions.unshift({
+        label: '⚔ Assaut',
+        primary: true,
+        cb: async () => {
+          const r = await Promise.resolve(this.server.assaultCastle(terrain));
+          if (!r.ok) { this.toast(r.error); return; }
+          if (!r.victory) this.toast('Assaut repoussé (' + r.chance + ' % de chances) — repli à la Capitale.');
+          else if (r.captured) this.toast('🏰 Château conquis !');
+          else this.toast('Assaut réussi (' + r.chance + ' % de chances) — ' + r.hp + ' / ' + r.hpMax + ' PS restants.');
+        },
+      });
+    }
+
+    this.popup('Château — ' + terrainName, bodyHtml, actions, { mode: 'castle' });
+  }
+
   playerSummaryHtml(player) {
     const cls = CLASSES[player.speciesClass] || { label: player.classLabel || player.speciesClass, role: player.role || '' };
     return (

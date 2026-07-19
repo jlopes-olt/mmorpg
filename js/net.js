@@ -212,4 +212,9 @@ class RemoteServer {
   respondFriendRequest(fromId, accept) { return this.req('friend:respond', { fromId, accept }); }
   removeFriend(username) { return this.req('friend:remove', { username }); }
   friendsList() { return this.req('friend:list', {}); }
+  castlesInfo() { return this.req('castle:info', {}); }
+  claimCastle(terrain) { return this.req('castle:claim', { terrain }); }
+  reinforceCastle(terrain) { return this.req('castle:reinforce', { terrain }); }
+  repairCastle(terrain, gold) { return this.req('castle:repair', { terrain, gold }); }
+  assaultCastle(terrain) { return this.req('castle:assault', { terrain }); }
 }

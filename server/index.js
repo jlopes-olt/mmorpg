@@ -115,6 +115,26 @@ if (store.countAccounts() === 0 && initialState && initialState.savedAt) {
     console.log('Migration terminée — state.json archivé en state.json.imported');
   } catch (e) { /* déjà archivé ou inaccessible */ }
 }
+
+// Filet de secours admin : si ADMIN_USERNAMES est défini (pseudos séparés par
+// des virgules), ces comptes sont (re)promus admin à chaque démarrage — utile
+// pour se garantir l'accès même si la promotion automatique du compte le plus
+// ancien (cf. Game.load) a déjà trouvé un autre titulaire, ou pour se
+// redonner l'accès après un incident. Sans effet si la variable est absente.
+const forcedAdmins = (process.env.ADMIN_USERNAMES || '')
+  .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+for (const username of forcedAdmins) {
+  const p = game.players.get('p_' + username);
+  if (p) { p.role = 'admin'; console.log('Admin forcé via ADMIN_USERNAMES : ' + p.username); }
+  else console.log('ADMIN_USERNAMES : compte introuvable pour « ' + username + ' »');
+}
+
+// Toujours écrire l'état des comptes une fois au démarrage : une migration
+// en mémoire (ex. promotion admin dans Game.load, ADMIN_USERNAMES ci-dessus)
+// ne doit pas rester lettre morte si le compte concerné ne se reconnecte
+// pas tout de suite — sans ça elle ne survit qu'en RAM jusqu'au prochain
+// redémarrage, qui la refait sans jamais l'écrire sur disque.
+for (const p of game.players.values()) saveAccountOf(p);
 saveWorld();   // fige seed + horloge dès le démarrage
 
 /* ---------- HTTP + Socket.io ---------- */
