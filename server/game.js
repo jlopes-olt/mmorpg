@@ -239,6 +239,10 @@ class Game {
       activeChar: 0,
       charSlots: CONFIG.FREE_CHAR_SLOTS,
       visitedVillages: [],
+      // Brouillard de guerre du monde (tuiles découvertes) : côté compte, pas
+      // localStorage, pour retrouver la même carte explorée quel que soit
+      // l'appareil/navigateur (site web, PWA installée…).
+      exploredWorld: [],
       // Le tout premier compte créé sur une base vierge devient administrateur ;
       // ADMIN_USERNAMES force le rôle admin pour les pseudos listés, même hors
       // de ce cas (ex. compte créé après coup, base déjà peuplée).
@@ -1241,6 +1245,20 @@ class Game {
     return { ok: true };
   }
 
+  // Brouillard de guerre : le client pousse par lots les tuiles du MONDE
+  // (donjons exclus, non partagés entre appareils) qu'il vient de découvrir,
+  // pour retrouver la même carte explorée sur n'importe quel navigateur/PWA.
+  exploreTiles(p, keys) {
+    if (!Array.isArray(keys) || !keys.length) return { ok: true, added: 0 };
+    const set = new Set(p.exploredWorld);
+    const before = set.size;
+    for (const k of keys) {
+      if (typeof k === 'string' && k.length <= 16 && /^-?\d{1,3},-?\d{1,3}$/.test(k)) set.add(k);
+    }
+    if (set.size !== before) p.exploredWorld = [...set];
+    return { ok: true, added: set.size - before };
+  }
+
   harvest(p, x, y) {
     const tile = this.tilesOf(p).get(tileKey(x, y));
     const node = tile && tile.content;
@@ -1919,6 +1937,7 @@ class Game {
       if (typeof p[PREMIUM_CURRENCY.key] !== 'number') p[PREMIUM_CURRENCY.key] = 0;
       if (!Array.isArray(p.ownedSkins)) p.ownedSkins = [];
       if (!Array.isArray(p.visitedVillages)) p.visitedVillages = [];
+      if (!Array.isArray(p.exploredWorld)) p.exploredWorld = [];
       if (p.role !== 'admin' && p.role !== 'user') p.role = 'user';
       if (!p.duels || typeof p.duels.wins !== 'number') p.duels = { wins: 0, losses: 0 };
       if (typeof p.guildId !== 'string') p.guildId = null;

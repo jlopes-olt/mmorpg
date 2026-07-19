@@ -168,6 +168,7 @@ class RemoteServer {
   }
 
   move(dx, dy) { return this.req('move', { dx, dy }); }
+  exploreTiles(keys) { return this.req('explore', { keys }); }
   harvest(x, y) { return this.req('harvest', { x, y }); }
   createRaid(x, y) { return this.req('raid:create', { x, y }); }
   joinRaid(key) { return this.req('raid:join', { key }); }

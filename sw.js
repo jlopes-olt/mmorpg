@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v6-castle-defense';
+const VERSION = 'wildrift-v7-explore-sync';
 
 const CORE = [
   '/',

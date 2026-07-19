@@ -213,6 +213,7 @@ io.on('connection', (socket) => {
   };
 
   socket.on('move', act((d) => game.move(player, d.dx, d.dy)));
+  socket.on('explore', act((d) => game.exploreTiles(player, d.keys)));
   socket.on('harvest', act((d) => game.harvest(player, Number(d.x), Number(d.y))));
   socket.on('raid:create', act((d) => game.createRaid(player, Number(d.x), Number(d.y))));
   socket.on('raid:join', act((d) => game.joinRaid(player, String(d.key))));

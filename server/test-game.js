@@ -739,6 +739,20 @@ const expectedGold = Math.ceil((3 + foretMob.content.tier * 4) * CASTLE_ZONE_GOL
 assert.strictEqual(zoneResult.gold, expectedGold, 'or bonifié de +' + Math.round((CASTLE_ZONE_GOLD_BONUS - 1) * 100) + ' % pour la guilde propriétaire de la zone');
 console.log('Bonus de zone : or bonifié pour la guilde propriétaire ✔');
 
+// --- Brouillard de guerre (compte) : même carte explorée quel que soit l'appareil ---
+assert.deepStrictEqual(alice.exploredWorld, [], 'aucune tuile explorée par défaut');
+let expRes = g.exploreTiles(alice, ['3,4', '-12,7']);
+assert.ok(expRes.ok && expRes.added === 2, 'deux nouvelles tuiles ajoutées');
+assert.strictEqual(alice.exploredWorld.length, 2, 'les tuiles sont bien mémorisées sur le compte');
+expRes = g.exploreTiles(alice, ['3,4', '9,9']);
+assert.strictEqual(expRes.added, 1, 'les doublons ne comptent pas, seule la nouveauté est ajoutée');
+assert.strictEqual(alice.exploredWorld.length, 3, 'pas de doublon stocké');
+expRes = g.exploreTiles(alice, ['<script>', 'foo', '', null, 42, '999,999,1']);
+assert.strictEqual(expRes.added, 0, 'entrées invalides ignorées sans erreur');
+assert.strictEqual(alice.exploredWorld.length, 3, 'aucune entrée invalide n’a été stockée');
+assert.deepStrictEqual(g.exploreTiles(alice, []), { ok: true, added: 0 }, 'liste vide sans effet');
+console.log('Brouillard de guerre : ajout ✔, déduplication ✔, entrées invalides filtrées ✔');
+
 // --- Persistance aller-retour (token, état ET mot de passe) ---
 const snap = JSON.parse(JSON.stringify(g.serialize()));
 const g2 = new Game(snap.seed, snap);
@@ -747,6 +761,8 @@ const rTok = g2.authToken(alice.token);
 assert.ok(rTok.ok && rTok.player.weapon.tier === 1, 'état restauré via token');
 assert.strictEqual(rTok.player.characters.length, 2, 'les deux formes survivent à la persistance');
 assert.strictEqual(rTok.player.characters[1].speciesClass, 'CERF_DRUIDE', 'forme secondaire intacte');
+assert.deepStrictEqual(rTok.player.exploredWorld.slice().sort(), alice.exploredWorld.slice().sort(),
+  'brouillard de guerre du compte restauré après redémarrage (même carte sur tout appareil)');
 assert.ok(g2.login({ username: 'Alice', password: 'secret1' }).ok, 'mot de passe conservé après restauration');
 assert.ok(!g2.login({ username: 'Alice', password: 'faux' }).ok, 'mauvais mot de passe refusé après restauration');
 

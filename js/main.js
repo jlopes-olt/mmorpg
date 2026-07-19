@@ -13,7 +13,7 @@
 
 (function () {
   const remote = typeof io !== 'undefined' && location.protocol.indexOf('http') === 0;
-  const SHELL_REV = '20260719-castle-defense-1';
+  const SHELL_REV = '20260719-explore-sync-1';
 
   // PWA : service worker (cache + installation sur l'écran d'accueil).
   // Échec silencieux en file:// / artifact.
@@ -151,18 +151,33 @@
   }
 
   /* ---------- Brouillard de guerre : mémoire d'exploration ---------- */
+  // Tuiles du monde découvertes depuis le dernier envoi au serveur (brouillard
+  // de guerre partagé entre appareils — voir flushExploreSync).
+  const pendingExploreSync = new Set();
+
   function updateExploredAt(x, y) {
     const R = CONFIG.VIEW_RADIUS;
+    const onWorld = (server.currentMapId || 'world') === 'world';
     for (let dy = -R; dy <= R; dy++) {
       for (let dx = -R; dx <= R; dx++) {
         if (Math.hypot(dx, dy) <= R + 0.5 && inBounds(x + dx, y + dy, server.tiles)) {
-          explored.add(tileKey(x + dx, y + dy));
+          const k = tileKey(x + dx, y + dy);
+          if (!explored.has(k)) {
+            explored.add(k);
+            if (remote && onWorld) pendingExploreSync.add(k);
+          }
         }
       }
     }
   }
   function updateExplored() {
     if (server.me) updateExploredAt(server.me.pos.x, server.me.pos.y);
+  }
+  function flushExploreSync() {
+    if (!remote || !pendingExploreSync.size) return;
+    const keys = [...pendingExploreSync];
+    pendingExploreSync.clear();
+    Promise.resolve(server.exploreTiles(keys)).catch(() => {});
   }
 
   /* ---------- Pathfinding BFS (8 directions, cases traversables) ---------- */
@@ -530,6 +545,9 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
       const exp = JSON.parse(localStorage.getItem(exploredKey()) || '[]');
       for (const k of exp) explored.add(k);
     } catch (e) { /* ignore */ }
+    if ((server.currentMapId || 'world') === 'world') {
+      for (const k of ((server.me && server.me.exploredWorld) || [])) explored.add(k);
+    }
     updateExplored();
   });
 
@@ -587,8 +605,8 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
       }
     } catch (e) { /* stockage indisponible (iframe privée…) : on joue sans save */ }
   }
-  window.addEventListener('pagehide', save);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
+  window.addEventListener('pagehide', () => { save(); flushExploreSync(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) { save(); flushExploreSync(); } });
 
   function loadSave() {
     try {
@@ -629,7 +647,7 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
         const mini = document.getElementById('minimap');
         if (mini) renderer.drawMinimap(mini);
       }
-      if (t - lastSave > 5000) { lastSave = t; save(); }
+      if (t - lastSave > 5000) { lastSave = t; save(); flushExploreSync(); }
     }
     requestAnimationFrame(frame);
   }
@@ -656,6 +674,10 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
         const exp = JSON.parse(localStorage.getItem(exploredKey()) || '[]');
         for (const k of exp) explored.add(k);
       } catch (e) { /* stockage indisponible */ }
+      // Brouillard de guerre du compte (côté serveur) : fusionné avec la copie
+      // locale pour retrouver la même carte explorée depuis un autre
+      // navigateur/appareil (ex. site web ↔ PWA installée).
+      for (const k of ((server.me && server.me.exploredWorld) || [])) explored.add(k);
       updateExplored();
     });
     let token = null;

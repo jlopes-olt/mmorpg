@@ -491,6 +491,10 @@ class ServerSim {
     return { ok: true };
   }
 
+  // Sans compte serveur, le brouillard de guerre est déjà entièrement
+  // sauvegardé dans la sauvegarde locale (exploredByMap) — rien à synchroniser.
+  exploreTiles() { return { ok: true, added: 0 }; }
+
   harvest(x, y) {
     const me = this.me;
     const tile = this.tilesOf(me).get(tileKey(x, y));
