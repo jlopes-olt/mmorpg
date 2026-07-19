@@ -614,6 +614,9 @@ assert.ok(!g.repairCastle(bob, 'FORET', 999999).ok, 'réparer une structure déj
 // --- Siège : Alice fonde sa propre guilde et assiège le château des Faucons ---
 // Depuis ce fix, l'assaut ouvre un lobby de 30 s (comme un raid de monstre)
 // au lieu de résoudre instantanément un combat 1 contre le château.
+// Bob s'écarte de la tuile : cette séquence teste un château non défendu
+// (la défense active est testée séparément plus bas, sur un autre château).
+bob.pos = { x: foretCastleTile.x - 1, y: foretCastleTile.y };
 assert.ok(g.createGuild(alice, 'Loups').ok, 'Alice fonde sa propre guilde pour assiéger');
 alice.mapId = 'world'; alice.status = 'IDLE';
 alice.pos = { x: foretCastleTile.x, y: foretCastleTile.y };
@@ -669,6 +672,49 @@ assert.strictEqual(g.castleOf('FORET').ownerGuildId, alice.guildId, 'château fi
 assert.ok(g.castleOf('FORET').hp > 0, 'le château conquis conserve une partie de sa structure (pas remis à 0)');
 g.rng = Math.random;
 console.log('Châteaux : fondation/renfort/réparation ✔, siège (lobby 30 s, comme un raid) ✔, conquête ✔');
+
+// --- Défense active : des défenseurs présents renforcent la garnison ---
+// Faucons (Carl, Bob) fondent le château de Plaine ; Loups (Alice) l'assiège
+// pendant que Bob se tient sur la tuile et que Carl reste en ligne ailleurs.
+const plaineCastleTile = g.castleTileFor('PLAINE');
+assert.ok(plaineCastleTile, 'un château existe bien en Plaine');
+carl.gold = 999999; carl.online = true;
+carl.mapId = 'world'; carl.pos = { x: plaineCastleTile.x, y: plaineCastleTile.y }; carl.status = 'IDLE';
+assert.ok(g.claimCastle(carl, 'PLAINE').ok, 'Carl (chef des Faucons) fonde le château de Plaine');
+
+bob.mapId = 'world'; bob.pos = { x: plaineCastleTile.x, y: plaineCastleTile.y }; bob.status = 'IDLE'; bob.pa = 50;
+carl.pos = { x: plaineCastleTile.x - 1, y: plaineCastleTile.y };   // Carl : en ligne, mais absent de la tuile
+
+alice.mapId = 'world'; alice.pos = { x: plaineCastleTile.x, y: plaineCastleTile.y }; alice.pa = 50; alice.hp = maxHp(alice); alice.status = 'IDLE';
+sent.length = 0;
+const plaineSiegeKey = 'siege:PLAINE';
+assert.ok(g.createSiege(alice, 'PLAINE').ok, 'Loups assiège le château de Plaine');
+const siegeAlerts = sent.filter((m) => m.ev === 'toast' && /assiégé/i.test(m.data.text));
+assert.ok(siegeAlerts.some((m) => m.id === bob.id) && siegeAlerts.some((m) => m.id === carl.id),
+  'les deux membres en ligne des Faucons sont alertés de l’assaut, présents ou non');
+
+const garrisonAlone = g.castleDefenseForce(g.castleOf('PLAINE'));
+g.rng = () => 0.999;   // assaut repoussé à coup sûr (issue forcée, seule la puissance de défense nous intéresse ici)
+sent.length = 0;
+assert.ok(g.startRaidNow(alice, plaineSiegeKey).ok);
+g.tick(300);
+const bobReportEntry = sent.find((m) => m.ev === 'siegeResult' && m.id === bob.id);
+assert.ok(bobReportEntry, 'Bob (présent sur la tuile) reçoit un rapport de siège');
+assert.strictEqual(bobReportEntry.data.role, 'defender', 'le rapport de Bob est bien du point de vue défenseur');
+assert.ok(bobReportEntry.data.defenseBonus > 0, 'la présence de Bob apporte un bonus de défense non nul');
+assert.strictEqual(bobReportEntry.data.garrison, Math.round(garrisonAlone), 'la garnison seule correspond à castleDefenseForce');
+assert.strictEqual(bobReportEntry.data.defenseForce, bobReportEntry.data.garrison + bobReportEntry.data.defenseBonus,
+  'la défense totale = garnison + bonus des défenseurs présents');
+assert.ok(!bobReportEntry.data.victory, 'assaut repoussé (forcé)');
+assert.ok(!sent.find((m) => m.ev === 'siegeResult' && m.id === carl.id),
+  'Carl (en ligne mais absent de la tuile) ne reçoit pas de rapport détaillé');
+const carlToastAfter = sent.find((m) => m.ev === 'toast' && m.id === carl.id);
+assert.ok(carlToastAfter, 'Carl reçoit malgré tout un message d’issue simple');
+const aliceReportEntry = sent.find((m) => m.ev === 'siegeResult' && m.id === alice.id);
+assert.strictEqual(aliceReportEntry.data.role, 'attacker', 'Alice reçoit le rapport côté assaillante');
+assert.strictEqual(aliceReportEntry.data.defenseForce, bobReportEntry.data.defenseForce, 'les deux rapports reflètent la même force de défense');
+g.rng = Math.random;
+console.log('Défense active : alerte des défenseurs ✔, bonus de présence ✔, rapport différencié attaquant/défenseur ✔');
 
 // --- Bonus de zone : l'or looté en Forêt est bonifié pour la guilde propriétaire ---
 let foretMob = null;

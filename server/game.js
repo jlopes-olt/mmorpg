@@ -12,6 +12,15 @@ Object.assign(globalThis, require('../js/world.js'));
 
 const MAX_GUILD_MEMBERS = 20;
 const CHAT_LOG_MAX = 300;
+
+// ADMIN_USERNAMES (variable d'environnement, pseudos séparés par des virgules) :
+// filet de secours pour garantir l'accès admin. Vérifié ici à l'inscription
+// (pas seulement au démarrage dans index.js) — sinon, un compte créé APRÈS
+// avoir positionné la variable ne serait promu qu'au redémarrage suivant.
+function isForcedAdminUsername(username) {
+  const list = (process.env.ADMIN_USERNAMES || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  return list.includes(String(username || '').toLowerCase());
+}
 // Constantes de château (CASTLE_*) : partagées via js/config.js (Object.assign
 // ci-dessous), au même titre que CLASSES/RESOURCES — l'UI en a besoin pour
 // afficher les coûts, donc elles ne peuvent pas rester locales à ce fichier.
@@ -230,8 +239,10 @@ class Game {
       activeChar: 0,
       charSlots: CONFIG.FREE_CHAR_SLOTS,
       visitedVillages: [],
-      // Le tout premier compte créé sur une base vierge devient administrateur.
-      role: this.players.size === 0 ? 'admin' : 'user',
+      // Le tout premier compte créé sur une base vierge devient administrateur ;
+      // ADMIN_USERNAMES force le rôle admin pour les pseudos listés, même hors
+      // de ce cas (ex. compte créé après coup, base déjà peuplée).
+      role: (this.players.size === 0 || isForcedAdminUsername(username)) ? 'admin' : 'user',
     };
     this.skinStateOf(p);
     applyCharacter(p, 0);
@@ -886,21 +897,32 @@ class Game {
       defenderGuildId: c.ownerGuildId,
       endsAt: this.now + CONFIG.LOBBY_MS,
     });
+
+    // Alerte la guilde défenseuse : elle a les 30 s du lobby pour se masser
+    // sur la tuile du château et renforcer la garnison (voir resolveSiege).
+    const guildAtk = this.guilds.get(p.guildId);
+    const terrainLabel = TERRAINS[terrain] ? TERRAINS[terrain].label : terrain;
+    for (const m of this.players.values()) {
+      if (!m.bot && m.online && m.guildId === c.ownerGuildId) {
+        this.toast(m, '🏰 Votre château (' + terrainLabel + ') est assiégé par « ' + guildAtk.name + ' » — accourez pour le défendre (30 s) !');
+      }
+    }
     return { ok: true };
   }
 
   resolveSiege(key, raid) {
     this.raids.delete(key);
     const c = this.castleOf(raid.terrain);
+    const defenderGuildId = c.ownerGuildId;
     const members = raid.participants.map((id) => this.memberById(id)).filter(Boolean);
     const attackers = members.filter((m) => m.guildId === raid.attackerGuildId);
     for (const a of attackers) { a.status = 'IDLE'; a.raidKey = null; }
     const guildAtk = this.guilds.get(raid.attackerGuildId);
-    const guildDef = c.ownerGuildId ? this.guilds.get(c.ownerGuildId) : null;
+    const guildDef = defenderGuildId ? this.guilds.get(defenderGuildId) : null;
 
     // Le château peut ne plus avoir de propriétaire valide (guilde dissoute
     // pendant le siège) ou appartenir déjà aux assaillants : on annule sans dégâts.
-    if (!guildDef || c.ownerGuildId === raid.attackerGuildId) {
+    if (!guildDef || defenderGuildId === raid.attackerGuildId) {
       if (!guildDef) c.ownerGuildId = null;
       for (const a of attackers) {
         if (a.bot) continue;
@@ -910,8 +932,19 @@ class Game {
       return;
     }
 
+    // Défense active : tout membre de la guilde propriétaire physiquement
+    // présent sur la tuile du château à la résolution renforce la garnison —
+    // se rallier à temps pendant les 30 s du lobby change l'issue du combat.
+    const tile = this.castleTileFor(raid.terrain);
+    const defenders = [...this.players.values()].filter((m) =>
+      !m.bot && m.guildId === defenderGuildId && (m.mapId || 'world') === 'world' &&
+      tile && m.pos.x === tile.x && m.pos.y === tile.y
+    );
+    const garrison = this.castleDefenseForce(c);
+    const defenseBonus = teamPowerOf(defenders);
+    const defense = garrison + defenseBonus;
+
     const force = teamPowerOf(attackers);
-    const defense = this.castleDefenseForce(c);
     const chance = winChance(force, defense);
     const victory = this.rng() < chance;
     let captured = false;
@@ -922,7 +955,8 @@ class Game {
         a.mapId = 'world';
         a.pos = { x: 0, y: 0 };
       }
-      this.log('🏰 L’assaut de « ' + guildAtk.name + ' » contre le château (' + raid.terrain + ') de « ' + guildDef.name + ' » a échoué.');
+      this.log('🏰 L’assaut de « ' + guildAtk.name + ' » contre le château (' + raid.terrain + ') de « ' + guildDef.name + ' » a échoué' +
+        (defenders.length ? (' — ' + defenders.length + ' défenseur(s) mobilisé(s)') : '') + '.');
     } else {
       c.hp = Math.max(0, c.hp - CASTLE_DAMAGE_PER_ASSAULT);
       if (c.hp <= 0) {
@@ -940,6 +974,7 @@ class Game {
       if (a.bot) continue;
       this.pushSelf(a);
       this.send(a.id, 'siegeResult', {
+        role: 'attacker',
         victory, captured, chance,
         terrain: raid.terrain,
         label: raid.label,
@@ -951,6 +986,35 @@ class Game {
         defenderGuildName: guildDef.name,
         participants: attackers.map((m) => m.username),
       });
+    }
+
+    for (const d of defenders) {
+      this.pushSelf(d);
+      this.send(d.id, 'siegeResult', {
+        role: 'defender',
+        victory, captured, chance,
+        terrain: raid.terrain,
+        label: raid.label,
+        teamForce: Math.round(force),
+        defenseForce: Math.round(defense),
+        garrison: Math.round(garrison),
+        defenseBonus: Math.round(defenseBonus),
+        hp: c.hp,
+        hpMax: c.hpMax,
+        attackerGuildName: guildAtk.name,
+        defenderGuildName: guildDef.name,
+        participants: defenders.map((m) => m.username),
+      });
+    }
+
+    // Les autres membres en ligne de la guilde défenseuse (absents de la tuile)
+    // reçoivent un simple message d'issue, sans rapport détaillé.
+    const defenderIds = new Set(defenders.map((m) => m.id));
+    for (const m of this.players.values()) {
+      if (m.bot || !m.online || m.guildId !== defenderGuildId || defenderIds.has(m.id)) continue;
+      this.toast(m, victory
+        ? ('🏰 Le château (' + raid.terrain + ') est tombé aux mains de « ' + guildAtk.name + ' ».')
+        : ('🏰 L’assaut de « ' + guildAtk.name + ' » contre votre château (' + raid.terrain + ') a été repoussé.'));
     }
   }
 

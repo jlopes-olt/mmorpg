@@ -13,7 +13,7 @@
 
 (function () {
   const remote = typeof io !== 'undefined' && location.protocol.indexOf('http') === 0;
-  const SHELL_REV = '20260719-siege-pwa-update-1';
+  const SHELL_REV = '20260719-castle-defense-1';
 
   // PWA : service worker (cache + installation sur l'écran d'accueil).
   // Échec silencieux en file:// / artifact.
@@ -472,7 +472,15 @@
     const rect = canvas.getBoundingClientRect();
     const localX = e.clientX - rect.left;
     const localY = e.clientY - rect.top;
-    const players = renderer.pickPlayersAtScreen(localX, localY).filter((p) => p.id !== server.me.id);
+    // Sur sa propre case, un repère (château, village…) prime sur la présence
+    // d'autres joueurs — sinon un château défendu ne serait jamais cliquable
+    // (le clic tomberait toujours sur le popup du défenseur posté dessus).
+    const tappedTile = renderer.screenToTile(localX, localY);
+    const ownTileContent = server.tiles.get(tileKey(tappedTile.x, tappedTile.y));
+    const onOwnLandmark = server.me.pos.x === tappedTile.x && server.me.pos.y === tappedTile.y &&
+      ownTileContent && ownTileContent.content &&
+      ['castle', 'village', 'capital', 'dungeon', 'portal'].includes(ownTileContent.content.kind);
+    const players = onOwnLandmark ? [] : renderer.pickPlayersAtScreen(localX, localY).filter((p) => p.id !== server.me.id);
     if (players.length === 1) {
       ui.showPlayerInteraction(players[0]);
       return;
@@ -489,8 +497,7 @@
       });
       return;
     }
-    const t = renderer.screenToTile(localX, localY);
-    handleTap(t.x, t.y);
+    handleTap(tappedTile.x, tappedTile.y);
   });
   window.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;

@@ -356,7 +356,7 @@ showDungeonPopup(tile, onEnter) {
     const pct = c.hpMax ? Math.max(0, Math.min(100, Math.round(100 * c.hp / c.hpMax))) : 0;
     const bonusPct = Math.round((CASTLE_ZONE_GOLD_BONUS - 1) * 100);
     const siegeKey = 'siege:' + terrain;
-    const activeSiege = (me.guildId && c.ownerGuildId && !c.isOwnGuild) ? this.server.raids.get(siegeKey) : null;
+    const activeSiege = (me.guildId && c.ownerGuildId) ? this.server.raids.get(siegeKey) : null;
     const alreadyInSiege = !!(activeSiege && me.raidKey === siegeKey);
     const bodyHtml =
       (c.ownerGuildName
@@ -369,11 +369,14 @@ showDungeonPopup(tile, onEnter) {
         : !c.ownerGuildId ? '<p class="dim small">Fondation : ' + CASTLE_CLAIM_COST_GOLD + ' 🪙 (contribution personnelle).</p>'
         : c.isOwnGuild ? '<p class="dim small">Renfort : ' + CASTLE_REINFORCE_COST_GOLD + ' 🪙 · Réparation : ' + CASTLE_REPAIR_GOLD_PER_HP + ' 🪙/PS.</p>'
         : '');
-    const siegeHtml = activeSiege
-      ? '<p class="dim small">' + (alreadyInSiege ? 'Vous participez au siège en cours' : 'Siège en cours') + ' — ' +
+    const secsLeftSiege = activeSiege ? Math.max(0, Math.ceil((activeSiege.endsAt - this.server.now) / 1000)) : 0;
+    const siegeHtml = !activeSiege ? '' : c.isOwnGuild
+      ? '<p class="hp-c small"><b>🛡 Vous êtes assiégés !</b> ' + activeSiege.participants.length + ' assaillant(s) — ' +
+        this.chanceHtml(1 - this.server.raidChance(activeSiege)) + ' de chances de tenir — résolution dans ' + secsLeftSiege + ' s. ' +
+        'Restez sur la tuile du château pour renforcer la défense.</p>'
+      : '<p class="dim small">' + (alreadyInSiege ? 'Vous participez au siège en cours' : 'Siège en cours') + ' — ' +
         activeSiege.participants.length + ' assaillant(s) — ' + this.chanceHtml(this.server.raidChance(activeSiege)) + ' de victoire — résolution dans ' +
-        Math.max(0, Math.ceil((activeSiege.endsAt - this.server.now) / 1000)) + ' s.</p>'
-      : '';
+        secsLeftSiege + ' s.</p>';
 
     const actions = [{ label: 'Fermer' }];
     if (me.guildId && !c.ownerGuildId) {
@@ -1244,26 +1247,37 @@ showDungeonPopup(tile, onEnter) {
       this.toast(esc(r.label) + ' — le siège a été annulé (château sans propriétaire valide).');
       return;
     }
-    await this.playCombatClash({ victory: r.victory, label: r.label });
+    const isDefender = r.role === 'defender';
+    const won = isDefender ? !r.victory : r.victory;   // du point de vue du joueur qui reçoit ce rapport
+    await this.playCombatClash({ victory: won, label: r.label });
     const lines = [
       '<div class="vs battle-vs"><span>' + esc(r.attackerGuildName) + ' <b>' + r.teamForce + '</b></span>' +
         '<span class="vs-x">contre</span><span><b>' + r.defenseForce + '</b> ' + esc(r.defenderGuildName) + '</span></div>',
-      '<p><span class="battle-label">Assaillants</span> ' + r.participants.map(esc).join(', ') + '</p>',
-      '<p><span class="battle-label">Chances</span> ' + this.chanceHtml(r.chance) + ' de victoire — le sort a ' + (r.victory ? 'souri' : 'tranché') + '.</p>',
     ];
-    if (!r.victory) {
-      lines.push('<p class="hp-c"><b>☠ Assaut repoussé.</b> Rapatriement à la Capitale — reposez-vous à la fontaine avant de repartir.</p>');
+    if (isDefender && typeof r.garrison === 'number') {
+      lines.push('<p class="dim small">Garnison ' + r.garrison + ' + défenseurs présents ' + r.defenseBonus + '</p>');
+    }
+    lines.push('<p><span class="battle-label">' + (isDefender ? 'Défenseurs présents' : 'Assaillants') + '</span> ' +
+      (r.participants.length ? r.participants.map(esc).join(', ') : '—') + '</p>');
+    lines.push('<p><span class="battle-label">Chances</span> ' + this.chanceHtml(isDefender ? 1 - r.chance : r.chance) +
+      ' de victoire — le sort a ' + (won ? 'souri' : 'tranché') + '.</p>');
+    if (!won) {
+      lines.push(isDefender
+        ? '<p class="hp-c"><b>🏰 Château perdu.</b> ' + esc(r.label) + ' appartient désormais à ' + esc(r.attackerGuildName) + '.</p>'
+        : '<p class="hp-c"><b>☠ Assaut repoussé.</b> Rapatriement à la Capitale — reposez-vous à la fontaine avant de repartir.</p>');
     } else if (r.captured) {
       lines.push('<p class="ok-c"><b>🏰 Château conquis !</b> ' + esc(r.label) + ' appartient désormais à ' + esc(r.attackerGuildName) + '.</p>');
+    } else if (isDefender) {
+      lines.push('<p class="ok-c"><b>🛡 Assaut repoussé !</b> ' + r.hp + ' / ' + r.hpMax + ' PS restants.</p>');
     } else {
       lines.push('<p><span class="battle-label">Structure</span> ' + r.hp + ' / ' + r.hpMax + ' PS restants.</p>');
     }
     this.popup(
-      r.victory ? (r.captured ? 'Château conquis' : 'Assaut réussi') : 'Assaut repoussé',
+      won ? (isDefender ? 'Défense réussie' : (r.captured ? 'Château conquis' : 'Assaut réussi')) : (isDefender ? 'Château perdu' : 'Assaut repoussé'),
       lines.join(''),
       [{ label: 'Continuer', primary: true }],
       {
-        className: 'popup-card action-popup result-popup tone-' + (r.victory ? 'harvest' : 'danger'),
+        className: 'popup-card action-popup result-popup tone-' + (won ? 'harvest' : 'danger'),
         kicker: 'Rapport de siège',
       }
     );

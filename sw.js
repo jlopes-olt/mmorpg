@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v5-siege-pwa-update';
+const VERSION = 'wildrift-v6-castle-defense';
 
 const CORE = [
   '/',
