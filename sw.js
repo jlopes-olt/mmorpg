@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v37-pan-fog';
+const VERSION = 'wildrift-v38-hauts-faits';
 
 const CORE = [
   '/',

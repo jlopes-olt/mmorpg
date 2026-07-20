@@ -16,6 +16,7 @@ const {
   CASTLE_FORTIFY_COST_GOLD, CASTLE_FORTIFY_BONUS_PER_LEVEL, stackKey,
   PREMIUM_CURRENCY, GOLD_PACKS, PA_SCROLL_COST_MOONSTONES, PA_SCROLL_COOLDOWN_MS,
 } = require('../js/config.js');
+const { ACHIEVEMENTS } = require('../js/achievements.js');
 
 const g = new Game(CONFIG.WORLD.SEED, null);
 const sent = [];
@@ -468,7 +469,11 @@ assert.strictEqual(bobResult.opponent, 'Carl', 'adversaire de Bob correctement i
 assert.strictEqual(carlResult.opponent, 'Bob', 'adversaire de Carl correctement identifié');
 assert.strictEqual(bob.duels.wins, bobWinsBefore + 1, 'victoire comptabilisée');
 assert.strictEqual(carl.duels.losses, carlLossesBefore + 1, 'défaite comptabilisée');
-assert.strictEqual(bob.gold, bobGoldBefore, 'duel amical : aucun or gagné/perdu');
+// Le duel lui-même n'accorde aucun or — mais la première victoire débloque
+// le haut fait « Gagner 1 duel », qui lui accorde une petite récompense.
+const duelWin1Gold = (ACHIEVEMENTS.find((a) => a.id === 'duel_win_1') || {}).reward.gold || 0;
+const bobDuelAchBonus = bob.unlockedAchievements.includes('duel_win_1') ? duelWin1Gold : 0;
+assert.strictEqual(bob.gold, bobGoldBefore + bobDuelAchBonus, 'duel amical : aucun or de l’enjeu (hors haut fait)');
 assert.strictEqual(carl.gold, carlGoldBefore, 'duel amical : aucun or gagné/perdu');
 assert.strictEqual(bob.hp, bobHpBefore, 'duel amical : aucun PV perdu (vainqueur)');
 assert.strictEqual(carl.hp, carlHpBefore, 'duel amical : aucun PV perdu (perdant)');

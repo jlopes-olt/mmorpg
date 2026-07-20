@@ -194,6 +194,7 @@ class Renderer {
 
     this.worldIcons = { resource: {}, monster: {}, capital: null, village: {}, dungeon: {}, castle: {} };
     this.castleLevels = {};
+    this.castleOwners = {};
     this.playerSkins = {};
     this.terrainTiles = {};
     this.playerHitboxes = [];
@@ -248,6 +249,7 @@ class Renderer {
       const active = castle && castle.ownerGuildId && Number(castle.hp) > 0;
       const level = active ? Number(castle.level) || 1 : 0;
       this.castleLevels[castle.terrain] = Math.max(0, Math.min(5, level));
+      this.castleOwners[castle.terrain] = (castle.ownerGuildId && castle.ownerGuildName) || null;
     }
   }
 
@@ -950,6 +952,8 @@ if (c.kind === 'dungeon') {
         ctx.fillText('🏰', cx, cy - 2);
       }
       this.label(cx, cy + TH2 + 12, 'CHÂTEAU', '#e8a48f', 9);
+      const owner = this.castleOwners[c.terrain || tile.terrain];
+      if (owner) this.label(cx, cy + TH2 + 23, '<' + owner + '>', '#f1e1ad', 9);
       ctx.globalAlpha = 1;
       return;
     }
@@ -1251,6 +1255,9 @@ if (c.kind === 'dungeon') {
     if (inRaidTag) {
       const inRaid = p.raidKey && this.server.raids.get(p.raidKey);
       this.label(cx, topY - 18, (inRaid && inRaid.siege) ? 'SIÈGE' : 'RAID', '#ff7b6b', 11);
+    } else {
+      const tag = [p.activeTitle, p.guildName ? ('<' + p.guildName + '>') : null].filter(Boolean).join(' ');
+      if (tag) this.label(cx, topY - 17, tag, isMe ? '#c9b98a' : '#9aa5b1', 8);
     }
 
     const bubble = this.chatBubbles.get(p.username);

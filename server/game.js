@@ -8,6 +8,7 @@
 const crypto = require('crypto');
 
 Object.assign(globalThis, require('../js/config.js'));
+Object.assign(globalThis, require('../js/achievements.js'));
 Object.assign(globalThis, require('../js/world.js'));
 
 const MAX_GUILD_MEMBERS = 20;
@@ -100,6 +101,18 @@ class Game {
   plog(p, text) { this.send(p.id, 'chat', { from: null, text, type: 'event' }); }
   toast(p, text) { this.send(p.id, 'toast', { text }); }
   pushSelf(p) { this.send(p.id, 'self', p); this.onDirty(p); }
+  notifyAchievements(p, list) {
+    for (const a of list) {
+      this.send(p.id, 'achievementUnlocked', { id: a.id, label: a.label, category: a.category, reward: a.reward || {} });
+    }
+  }
+  setActiveTitle(p, title) {
+    const t = title ? String(title).slice(0, 40) : null;
+    if (t && !p.titles.includes(t)) return { ok: false, error: 'Titre non débloqué.' };
+    p.activeTitle = t;
+    this.pushSelf(p);
+    return { ok: true };
+  }
   pushMap(p) {
     this.send(p.id, 'map', {
       mapId: p.mapId || 'world',
@@ -193,6 +206,7 @@ class Game {
     p.lastSeen = Date.now();
     p.pushPaFullAt = null;
     p.pushPaFullSent = false;
+    this.notifyAchievements(p, checkAchievements(p, ['Social']));
   }
 
   // Programme (à la déconnexion) l'instant réel où l'Endurance hors ligne
@@ -267,6 +281,7 @@ class Game {
       tradeId: null,
       duels: { wins: 0, losses: 0 },
       guildId: null,
+      guildName: null,
       guildInvite: null,
       friends: [],
       friendRequests: [],
@@ -283,6 +298,7 @@ class Game {
       // de ce cas (ex. compte créé après coup, base déjà peuplée).
       role: (this.players.size === 0 || isForcedAdminUsername(username)) ? 'admin' : 'user',
     };
+    ensureAchievementState(p);
     this.skinStateOf(p);
     applyCharacter(p, 0);
     p.hp = maxHp(p);
@@ -358,6 +374,8 @@ class Game {
       weaponType: p.weapon ? p.weapon.type : '',
       armorType: p.armor ? p.armor.type : '',
       skinId: p.skinId || null,
+      activeTitle: p.activeTitle || null,
+      guildName: p.guildName || null,
     };
   }
 
@@ -641,6 +659,10 @@ class Game {
       a.inventory[key] = (a.inventory[key] || 0) + qty;
     }
 
+    a.stats.trades = (a.stats.trades || 0) + 1;
+    b.stats.trades = (b.stats.trades || 0) + 1;
+    this.notifyAchievements(a, checkAchievements(a, ['Commerce']));
+    this.notifyAchievements(b, checkAchievements(b, ['Commerce']));
     this.closeTrade(trade, 'Échange terminé.');
     return { ok: true, done: true };
   }
@@ -694,6 +716,11 @@ class Game {
     const loser = aWins ? b : a;
     winner.duels.wins += 1;
     loser.duels.losses += 1;
+    winner.stats.duelStreak = (winner.stats.duelStreak || 0) + 1;
+    winner.stats.bestDuelStreak = Math.max(winner.stats.bestDuelStreak || 0, winner.stats.duelStreak);
+    loser.stats.duelStreak = 0;
+    this.notifyAchievements(winner, checkAchievements(winner, ['Duels']));
+    this.notifyAchievements(loser, checkAchievements(loser, ['Duels']));
     this.send(a.id, 'duelResult', {
       opponent: b.username, won: aWins,
       chance: Math.round(chance * 100), yourPower: Math.round(powerA), opponentPower: Math.round(powerB),
@@ -742,6 +769,9 @@ class Game {
     const guild = { id, name, leaderId: p.id, members: [p.id], createdAt: this.now };
     this.guilds.set(id, guild);
     p.guildId = id;
+    p.guildName = name;
+    p.stats.guildFounded = true;
+    this.notifyAchievements(p, checkAchievements(p, ['Guilde']));
     this.pushSelf(p);
     this.onGuildsDirty();
     this.log('🏰 La guilde « ' + name + ' » a été fondée par ' + p.username + '.');
@@ -786,6 +816,16 @@ class Game {
     }
     guild.members.push(p.id);
     p.guildId = guild.id;
+    p.guildName = guild.name;
+    this.notifyAchievements(p, checkAchievements(p, ['Guilde']));
+    if (guild.members.length >= MAX_GUILD_MEMBERS) {
+      const leader = this.players.get(guild.leaderId);
+      if (leader) {
+        leader.stats.guildReachedMax = true;
+        this.notifyAchievements(leader, checkAchievements(leader, ['Guilde']));
+        this.pushSelf(leader);
+      }
+    }
     this.pushSelf(p);
     this.onGuildsDirty();
     this.log('🏰 ' + p.username + ' a rejoint la guilde « ' + guild.name + ' ».');
@@ -797,6 +837,7 @@ class Game {
     if (!guild) return { ok: false, error: 'Vous n’êtes pas dans une guilde.' };
     guild.members = guild.members.filter((id) => id !== p.id);
     p.guildId = null;
+    p.guildName = null;
     if (!guild.members.length) {
       this.guilds.delete(guild.id);
       this.log('🏰 La guilde « ' + guild.name + ' » a été dissoute (plus aucun membre).');
@@ -820,6 +861,7 @@ class Game {
     if (target.id === p.id) return { ok: false, error: 'Vous ne pouvez pas vous exclure vous-même (quittez la guilde).' };
     guild.members = guild.members.filter((id) => id !== target.id);
     target.guildId = null;
+    target.guildName = null;
     this.pushSelf(target);
     this.onGuildsDirty();
     this.toast(p, target.username + ' a été exclu de la guilde.');
@@ -1147,6 +1189,9 @@ class Game {
 
     for (const a of attackers) {
       if (a.bot) continue;
+      a.stats.siegeParticipations = (a.stats.siegeParticipations || 0) + 1;
+      if (captured) a.stats.siegeWins = (a.stats.siegeWins || 0) + 1;
+      this.notifyAchievements(a, checkAchievements(a, ['Château']));
       this.pushSelf(a);
       this.send(a.id, 'siegeResult', {
         role: 'attacker',
@@ -1165,6 +1210,8 @@ class Game {
     }
 
     for (const d of defenders) {
+      d.stats.siegeParticipations = (d.stats.siegeParticipations || 0) + 1;
+      this.notifyAchievements(d, checkAchievements(d, ['Château']));
       this.pushSelf(d);
       this.send(d.id, 'siegeResult', {
         role: 'defender',
@@ -1225,6 +1272,8 @@ class Game {
       p.friendRequests.splice(reciprocalIdx, 1);
       p.friends.push(target.id);
       target.friends.push(p.id);
+      this.notifyAchievements(p, checkAchievements(p, ['Social']));
+      this.notifyAchievements(target, checkAchievements(target, ['Social']));
       this.pushSelf(p);
       this.pushSelf(target);
       this.toast(p, target.username + ' est maintenant votre ami.');
@@ -1256,6 +1305,8 @@ class Game {
     }
     p.friends.push(from.id);
     from.friends.push(p.id);
+    this.notifyAchievements(p, checkAchievements(p, ['Social']));
+    this.notifyAchievements(from, checkAchievements(from, ['Social']));
     this.pushSelf(p);
     this.pushSelf(from);
     this.toast(from, p.username + ' a accepté votre demande d’ami.');
@@ -1498,6 +1549,8 @@ class Game {
     this.broadcast('world', { mapId: mapId || p.mapId || 'world', key, inactiveUntil: node.inactiveUntil });
     p.harvestXp += 8 + Math.min(6, node.tier) * 6;
     this.checkLevelUp(p, 'harvest');
+    p.stats.harvest[node.type] = (p.stats.harvest[node.type] || 0) + qty;
+    this.notifyAchievements(p, checkAchievements(p, ['Récolte']));
     this.pushSelf(p);
   }
 
@@ -1639,6 +1692,10 @@ class Game {
         }
         rewards.set(p.id, { gold, xp, food });
         this.checkLevelUp(p, 'weapon');
+        p.stats.monsterKills = (p.stats.monsterKills || 0) + 1;
+        p.stats.kills[monster.type] = (p.stats.kills[monster.type] || 0) + 1;
+        if (monster.boss) p.stats.bossKills = (p.stats.bossKills || 0) + 1;
+        this.notifyAchievements(p, checkAchievements(p, ['Combat', 'Équipement', 'Commerce']));
       }
       if (!p.bot) this.pushSelf(p);
     }
@@ -1780,6 +1837,7 @@ class Game {
     p.pa -= paCost;
     item.tier = target;
     if (slot === 'armor') p.hp = Math.min(maxHp(p), p.hp + 15);
+    this.notifyAchievements(p, checkAchievements(p, ['Équipement']));
     this.pushSelf(p);
     return { ok: true };
   }
@@ -2207,9 +2265,11 @@ class Game {
       if (p.role !== 'admin' && p.role !== 'user') p.role = 'user';
       if (!p.duels || typeof p.duels.wins !== 'number') p.duels = { wins: 0, losses: 0 };
       if (typeof p.guildId !== 'string') p.guildId = null;
+      if (typeof p.guildName !== 'string') p.guildName = null;
       if (!p.guildInvite || typeof p.guildInvite !== 'object') p.guildInvite = null;
       if (!Array.isArray(p.friends)) p.friends = [];
       if (!Array.isArray(p.friendRequests)) p.friendRequests = [];
+      ensureAchievementState(p);
       // Rééquilibrage des PV par classe : évite qu'un compte existant se
       // retrouve avec plus de PV affichés que son nouveau maximum.
       p.hp = Math.min(p.hp, maxHp(p));
@@ -2220,6 +2280,13 @@ class Game {
     for (const [id, cred] of Object.entries(data.credentials || {})) this.credentials.set(id, cred);
     for (const g of data.guilds || []) {
       if (g && g.id) this.guilds.set(g.id, g);
+    }
+    // Rattrapage : comptes de guilde créés avant l'ajout de guildName.
+    for (const p of this.players.values()) {
+      if (!p.guildName && p.guildId) {
+        const g = this.guilds.get(p.guildId);
+        if (g) p.guildName = g.name;
+      }
     }
     for (const c of data.castles || []) {
       if (c && c.terrain) this.castles.set(c.terrain, c);

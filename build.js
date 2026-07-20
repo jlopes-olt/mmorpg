@@ -16,7 +16,7 @@ const body = html
   .replace(/[ \t]*<script src=[^>]+><\/script>\s*/g, '');
 
 // net.js exclu : pas de réseau dans l'artifact (mode simulation locale)
-const js = ['config', 'world', 'server', 'render', 'ui', 'main']
+const js = ['config', 'achievements', 'world', 'server', 'render', 'ui', 'main']
   .map((n) => fs.readFileSync(path.join(root, 'js', n + '.js'), 'utf8'))
   .join('\n');
 

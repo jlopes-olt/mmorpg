@@ -155,6 +155,7 @@ class UI {
     server.on('tradeInvite', (invite) => this.showTradeInvite(invite));
     server.on('duelInvite', (invite) => this.showDuelInvite(invite));
     server.on('duelResult', (r) => this.showDuelResult(r));
+    server.on('achievementUnlocked', (a) => this.showAchievementUnlocked(a));
     server.on('trade', (trade) => {
       if (trade) {
         this.tradeDraft = {
@@ -636,7 +637,7 @@ showDungeonPopup(tile, onEnter) {
       '<div class="player-peek">' +
         this.spriteAvatar(player.speciesClass, 'small', player.skinId) +
         '<div class="player-peek-copy">' +
-          '<div class="player-peek-name">' + esc(player.username) + '</div>' +
+          '<div class="player-peek-name">' + esc(player.username) + this.titleGuildTag(player) + '</div>' +
           '<div class="player-peek-class">' + esc(cls.label) + (cls.role ? ' · ' + esc(cls.role) : '') + '</div>' +
           '<div class="player-peek-gear">Arme T' + (player.weaponTier || 0) + ' · Armure T' + (player.armorTier || 0) + '</div>' +
         '</div>' +
@@ -837,6 +838,24 @@ showDungeonPopup(tile, onEnter) {
       '<p class="dim small">Duel amical : aucune perte de PV ni d’or.</p>',
       [{ label: 'Fermer', primary: true }]
     );
+  }
+
+  showAchievementUnlocked(a) {
+    if (!a) return;
+    const reward = a.reward || {};
+    const bits = [];
+    if (reward.gold) bits.push('+' + reward.gold + ' or');
+    if (reward.moonstones) bits.push('+' + reward.moonstones + ' ' + PREMIUM_CURRENCY.label.toLowerCase());
+    if (reward.title) bits.push('titre « ' + reward.title + ' »');
+    this.toast('Haut fait débloqué : ' + a.label + (bits.length ? ' (' + bits.join(', ') + ')' : ''));
+  }
+
+  /* Texte "«Titre» <Guilde>" affiché sous un pseudo, quand présent. */
+  titleGuildTag(p) {
+    let html = '';
+    if (p && p.activeTitle) html += ' <span class="hero-title">« ' + esc(p.activeTitle) + ' »</span>';
+    if (p && p.guildName) html += ' <span class="hero-guild">&lt;' + esc(p.guildName) + '&gt;</span>';
+    return html;
   }
 
   tradeOfferSummaryHtml(offer) {
@@ -1473,6 +1492,7 @@ showDungeonPopup(tile, onEnter) {
 
   /* ---------- Résultat de siège de château ---------- */
   async showSiegeResult(r) {
+    if (this.renderer) this.renderer.refreshCastleLevels();
     if (r.cancelled) {
       this.toast(esc(r.label) + ' — le siège a été annulé (château sans propriétaire valide).');
       return;
@@ -1649,7 +1669,7 @@ showDungeonPopup(tile, onEnter) {
       '<div class="desktop-hero-summary">' +
         this.spriteAvatar(me.speciesClass, 'hero', me.skinId) +
         '<div class="desktop-hero-copy">' +
-          '<div class="hero-name">' + esc(me.username) + '</div>' +
+          '<div class="hero-name">' + esc(me.username) + this.titleGuildTag(me) + '</div>' +
           '<div class="hero-class">' + esc(cls.label) + ' · ' + esc(cls.role) + '</div>' +
           '<div class="desktop-skin-name">' + esc((skin && skin.label) || 'Tenue de base') + '</div>' +
         '</div>' +
@@ -2041,7 +2061,7 @@ showDungeonPopup(tile, onEnter) {
       // En-tête façon fiche d'aventurier : portrait cerclé d'or, nom, devise
       '<div class="profile-hero">' +
         this.spriteAvatar(me.speciesClass, 'hero', me.skinId) +
-        '<div class="hero-name">' + esc(me.username) + '</div>' +
+        '<div class="hero-name">' + esc(me.username) + this.titleGuildTag(me) + '</div>' +
         '<div class="hero-class">' + cls.label + ' <span class="role-chip">' + cls.role + '</span></div>' +
         '<p class="hero-bonus">« ' + cls.bonus + ' »</p>' +
       '</div>' +
@@ -2065,6 +2085,9 @@ showDungeonPopup(tile, onEnter) {
       '<div class="gear-line"><span class="gear-ico">✨</span><span class="gear-name">Apparence ' + esc((skinFor(me.skinId) || {}).label || 'Tenue de base') + '</span><span class="tier">Actuelle</span></div>' +
       '<button id="profileSkinBtn" class="btn wide">Changer d’apparence</button>' +
       '<p class="dim small profile-hint">Unique et évolutif — chez le Forgeron de la Capitale.</p>' +
+
+      '<div class="section-divider">✦</div>' +
+      this.buildAchievementsSectionHtml(me) +
 
       '<div class="section-divider">✦</div>' +
       this.buildCharactersSection(me) +
@@ -2120,6 +2143,15 @@ showDungeonPopup(tile, onEnter) {
     if (isAdmin) {
       $('openAdminBtn').addEventListener('click', () => this.showSheet('admin'));
     }
+    body.querySelectorAll('[data-title]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const title = btn.dataset.title || null;
+        const r = await Promise.resolve(this.server.setActiveTitle(title));
+        if (!r.ok) this.toast(r.error);
+      });
+    });
+    const achDetails = body.querySelector('.ach-details');
+    if (achDetails) achDetails.addEventListener('toggle', (e) => { this.achievementsOpen = e.target.open; });
     if (this.pushSupported) {
       $('pushToggleBtn').addEventListener('click', () => this.togglePushNotifications());
     }
@@ -2381,6 +2413,52 @@ showDungeonPopup(tile, onEnter) {
   }
 
   /* ---------- Personnages multiples (formes) ---------- */
+
+  /* ---------- Hauts faits ---------- */
+  buildAchievementsSectionHtml(me) {
+    const unlockedSet = new Set(me.unlockedAchievements || []);
+    const totalCount = ACHIEVEMENTS.length;
+    const unlockedCount = unlockedSet.size;
+
+    const byCategory = {};
+    for (const a of ACHIEVEMENTS) {
+      (byCategory[a.category] = byCategory[a.category] || []).push(a);
+    }
+    const rows = Object.entries(byCategory).map(([cat, list]) => {
+      const items = list.map((a) => {
+        const done = unlockedSet.has(a.id);
+        const reward = a.reward || {};
+        const bits = [];
+        if (reward.gold) bits.push(reward.gold + ' or');
+        if (reward.moonstones) bits.push(reward.moonstones + ' ' + PREMIUM_CURRENCY.label.toLowerCase());
+        if (reward.title) bits.push('titre « ' + reward.title + ' »');
+        return '<div class="ach-item' + (done ? ' unlocked' : '') + '">' +
+          '<span class="ach-status">' + (done ? '✓' : '—') + '</span>' +
+          '<span class="ach-copy"><b>' + esc(a.label) + '</b>' +
+          (bits.length ? '<small>' + esc(bits.join(' · ')) + '</small>' : '') +
+          '</span>' +
+        '</div>';
+      }).join('');
+      return '<div class="ach-cat">' + esc(cat) + '</div><div class="ach-list">' + items + '</div>';
+    }).join('');
+
+    const titles = me.titles || [];
+    const titlePicker = titles.length ?
+      '<p class="dim small">Titre affiché sous votre pseudo :</p>' +
+      '<div class="title-picker">' +
+        '<button class="btn title-chip' + (!me.activeTitle ? ' active' : '') + '" data-title="">Aucun</button>' +
+        titles.map((t) => '<button class="btn title-chip' + (me.activeTitle === t ? ' active' : '') +
+          '" data-title="' + esc(t) + '">' + esc(t) + '</button>').join('') +
+      '</div>'
+      : '<p class="dim small">Débloquez des hauts faits pour gagner des titres à afficher sous votre pseudo.</p>';
+
+    return '<div class="profile-sec-title">Hauts faits <span class="sec-count">' + unlockedCount + ' / ' + totalCount + '</span></div>' +
+      titlePicker +
+      '<details class="ach-details"' + (this.achievementsOpen ? ' open' : '') + '>' +
+        '<summary>Voir la liste des hauts faits</summary>' +
+        rows +
+      '</details>';
+  }
 
   buildCharactersSection(me) {
     if (!Array.isArray(me.characters)) return '';

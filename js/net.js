@@ -129,6 +129,7 @@ class RemoteServer {
     });
     s.on('duelInvite', (d) => this.emit('duelInvite', d));
     s.on('duelResult', (d) => this.emit('duelResult', d));
+    s.on('achievementUnlocked', (d) => this.emit('achievementUnlocked', d));
   }
 
   onInit(d) {
@@ -226,6 +227,7 @@ class RemoteServer {
   leaveGuild() { return this.req('guild:leave', {}); }
   kickFromGuild(username) { return this.req('guild:kick', { username }); }
   guildInfo() { return this.req('guild:info', {}); }
+  setActiveTitle(title) { return this.req('title:set', { title }); }
   sendFriendRequest(username) { return this.req('friend:request', { username }); }
   respondFriendRequest(fromId, accept) { return this.req('friend:respond', { fromId, accept }); }
   removeFriend(username) { return this.req('friend:remove', { username }); }

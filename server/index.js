@@ -370,6 +370,7 @@ io.on('connection', (socket) => {
     if (!player || !game.players.has(player.id)) return ack({ ok: false, error: 'Non authentifié.' });
     ack(game.guildInfo(player));
   });
+  socket.on('title:set', act((d) => game.setActiveTitle(player, d.title ? String(d.title) : null)));
   socket.on('friend:request', act((d) => game.sendFriendRequest(player, String(d.username))));
   socket.on('friend:respond', act((d) => game.respondFriendRequest(player, String(d.fromId), !!d.accept)));
   socket.on('friend:remove', act((d) => game.removeFriend(player, String(d.username))));

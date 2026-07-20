@@ -266,6 +266,7 @@ class ServerSim {
       charSlots: CONFIG.FREE_CHAR_SLOTS,
       visitedVillages: [],
     };
+    ensureAchievementState(p);
     this.skinStateOf(p);
     applyCharacter(p, 0);
     p.hp = maxHp(p);
@@ -312,6 +313,15 @@ class ServerSim {
     }
     me[walletKey] = balance - item.price;
     me.ownedSkins.push(item.id);
+    this.emit('self', me);
+    return { ok: true };
+  }
+
+  setActiveTitle(title) {
+    const me = this.me;
+    const t = title ? String(title).slice(0, 40) : null;
+    if (t && !me.titles.includes(t)) return { ok: false, error: 'Titre non débloqué.' };
+    me.activeTitle = t;
     this.emit('self', me);
     return { ok: true };
   }
@@ -580,6 +590,8 @@ class ServerSim {
     me.harvestXp += xp;
     this.log('+' + qty + ' ' + resourceLabel(node.type, node.tier) + ' (+' + xp + ' XP récolte)');
     this.checkLevelUp(me, 'harvest');
+    me.stats.harvest[node.type] = (me.stats.harvest[node.type] || 0) + qty;
+    for (const a of checkAchievements(me, ['Récolte'])) this.emit('achievementUnlocked', { id: a.id, label: a.label, category: a.category, reward: a.reward || {} });
     this.emit('self', me);
   }
 
@@ -710,6 +722,10 @@ class ServerSim {
         myXp = xp;
         myGold = gold;
         this.checkLevelUp(p, 'weapon');
+        p.stats.monsterKills = (p.stats.monsterKills || 0) + 1;
+        p.stats.kills[monster.type] = (p.stats.kills[monster.type] || 0) + 1;
+        if (monster.boss) p.stats.bossKills = (p.stats.bossKills || 0) + 1;
+        for (const a of checkAchievements(p, ['Combat', 'Équipement', 'Commerce'])) this.emit('achievementUnlocked', { id: a.id, label: a.label, category: a.category, reward: a.reward || {} });
       }
     }
 
@@ -795,6 +811,7 @@ class ServerSim {
     me.pa -= paCost;
     item.tier = target;
     if (slot === 'armor') me.hp = Math.min(maxHp(me), me.hp + 15);
+    for (const a of checkAchievements(me, ['Équipement'])) this.emit('achievementUnlocked', { id: a.id, label: a.label, category: a.category, reward: a.reward || {} });
     this.emit('self', me);
     return { ok: true };
   }
@@ -974,6 +991,7 @@ class ServerSim {
     if (!p.guildInvite || typeof p.guildInvite !== 'object') p.guildInvite = null;
     if (!Array.isArray(p.friends)) p.friends = [];
     if (!Array.isArray(p.friendRequests)) p.friendRequests = [];
+    ensureAchievementState(p);
     const away = Math.max(0, Date.now() - (data.savedAt || Date.now()));
     p.pa = Math.min(CONFIG.PA.MAX, p.pa + Math.floor(away / CONFIG.PA.REGEN_MS));
     p.hp = Math.min(maxHp(p), p.hp + Math.floor(away / CONFIG.HP.REGEN_MS));
