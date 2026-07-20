@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v30-scroll-cooldown';
+const VERSION = 'wildrift-v31-push-camera';
 
 const CORE = [
   '/',
@@ -44,6 +44,29 @@ self.addEventListener('activate', (e) => {
     caches.keys()
       .then((keys) => Promise.all(keys.filter((k) => k !== VERSION).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
+  );
+});
+
+/* ---------- Notifications push (Endurance pleine, siège résolu, ami, MP) ---------- */
+self.addEventListener('push', (e) => {
+  let data = {};
+  try { data = e.data ? e.data.json() : {}; } catch (err) { data = { body: e.data ? e.data.text() : '' }; }
+  const title = data.title || 'FERALIA Online';
+  e.waitUntil(self.registration.showNotification(title, {
+    body: data.body || '',
+    icon: '/assets/icons/icon-192.png',
+    badge: '/assets/icons/icon-192.png',
+    tag: 'feralia-' + title,
+  }));
+});
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientsList) => {
+      for (const c of clientsList) { if ('focus' in c) return c.focus(); }
+      if (self.clients.openWindow) return self.clients.openWindow('/');
+    })
   );
 });
 

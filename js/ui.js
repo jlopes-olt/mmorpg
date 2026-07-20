@@ -13,6 +13,17 @@ function esc(s) {
   ));
 }
 
+// Conversion standard clé VAPID (base64url) -> Uint8Array attendu par
+// PushManager.subscribe({ applicationServerKey: ... }).
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i++) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+
 class UI {
   constructor(server, renderer) {
     this.server = server;
@@ -28,6 +39,9 @@ class UI {
     this.lastSeenGuildInviteKey = null;
     this.seenFriendRequestKeys = new Set();
     this.onAdminReset = null;
+    this.pushSupported = false;   // calculé de façon asynchrone, voir checkPushSupport()
+    this.pushSubscribed = false;
+    this.checkPushSupport();
     this.combatSwordSrc = 'assets/combat_sword.png';
     this.modalAssetSrc = {
       frame: 'assets/modal_frame_raw.png',
@@ -201,6 +215,50 @@ class UI {
         }
       }
     });
+  }
+
+  /* ---------- Notifications push (Endurance pleine, siège, ami, MP) ---------- */
+  async checkPushSupport() {
+    this.pushSupported = !!(this.server.remote && typeof Notification !== 'undefined' &&
+      'serviceWorker' in navigator && 'PushManager' in window);
+    if (!this.pushSupported) return;
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      this.pushSubscribed = !!sub;
+    } catch (e) { this.pushSubscribed = false; }
+    if (this.openSheet === 'profile') this.showSheet('profile');
+  }
+
+  async togglePushNotifications() {
+    if (!this.pushSupported) return;
+    try {
+      if (this.pushSubscribed) {
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        if (sub) {
+          await Promise.resolve(this.server.unsubscribePush(sub.endpoint));
+          await sub.unsubscribe();
+        }
+        this.pushSubscribed = false;
+        this.toast('🔕 Notifications désactivées.');
+      } else {
+        const perm = await Notification.requestPermission();
+        if (perm !== 'granted') { this.toast('Permission refusée par le navigateur.'); return; }
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+        });
+        const r = await Promise.resolve(this.server.subscribePush(sub.toJSON()));
+        if (!r.ok) { this.toast(r.error || 'Erreur serveur.'); return; }
+        this.pushSubscribed = true;
+        this.toast('🔔 Notifications activées.');
+      }
+    } catch (e) {
+      this.toast('Impossible de modifier les notifications.');
+    }
+    if (this.openSheet === 'profile') this.showSheet('profile');
   }
 
   /* ---------- % de victoire : classes de couleur + rendu ---------- */
@@ -2050,9 +2108,20 @@ showDungeonPopup(tile, onEnter) {
           '<button id="profileResetBtn" class="btn danger wide">Réinitialiser le personnage</button>' +
         '</details>'
         : '') +
+      (this.pushSupported ?
+        '<div class="section-divider">✦</div>' +
+        '<div class="profile-sec-title">Notifications</div>' +
+        '<p class="dim small">Endurance pleine, résultat de siège, demande d’ami, message privé — même app fermée.</p>' +
+        '<button id="pushToggleBtn" class="btn wide">' +
+          (this.pushSubscribed ? '🔕 Désactiver les notifications' : '🔔 Activer les notifications') +
+        '</button>'
+        : '') +
       (this.server.remote ? '<button id="logoutBtn" class="btn wide logout-btn">🚪 Se déconnecter</button>' : '');
     if (isAdmin) {
       $('openAdminBtn').addEventListener('click', () => this.showSheet('admin'));
+    }
+    if (this.pushSupported) {
+      $('pushToggleBtn').addEventListener('click', () => this.togglePushNotifications());
     }
     if (showCheats) {
       body.querySelectorAll('[data-admin-tier]').forEach((btn) => {

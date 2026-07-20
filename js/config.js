@@ -197,6 +197,11 @@ const PREMIUM_CURRENCY = {
   icon: '✦',
 };
 
+// Notifications push (Web Push) : la clé publique VAPID est sans danger à
+// exposer côté client (c'est son rôle) — la clé privée reste exclusivement
+// côté serveur (variable d'environnement VAPID_PRIVATE_KEY, voir server/index.js).
+const VAPID_PUBLIC_KEY = 'BOoTgOebS-o98p-oW-BLV1ajB-Ur69-aBNubtBWFRLilwOc_BY0IJCxGSLDs_F2qOKdCZcP2feJd4X6V9r5wh78';
+
 // Packs achetables en argent réel (Stripe) — prix/quantités fixés ici pour
 // que le client puisse afficher les cartes ; les liens de paiement et clés
 // Stripe restent eux exclusivement côté serveur (variables d'environnement).
@@ -689,7 +694,7 @@ if (typeof module !== 'undefined' && module.exports) {
     CASTLE_MAX_FORT_LEVEL, CASTLE_FORTIFY_COST_GOLD, CASTLE_FORTIFY_BONUS_PER_LEVEL, CASTLE_FORTIFY_RESOURCES,
     TERRAINS, TIER_COLORS, XP_LEVELS, UPGRADE_RECIPES, SPRITE_CELLS,
     RESOURCE_EMOJI, MONSTER_EMOJI, CHARACTER_FIELDS,
-    PREMIUM_CURRENCY, MOONSTONE_PACKS, GOLD_PACKS, PA_SCROLL_COST_MOONSTONES, PA_SCROLL_COOLDOWN_MS,
+    PREMIUM_CURRENCY, MOONSTONE_PACKS, GOLD_PACKS, PA_SCROLL_COST_MOONSTONES, PA_SCROLL_COOLDOWN_MS, VAPID_PUBLIC_KEY,
     SKIN_SHOP_ITEMS, SKIN_BY_ID, SKIN_ASSET_REV, CLASS_SKIN_SCALE, CLASS_BASE_SKINS,
     skinFor, skinAssetUrl, classSkinScale, baseSkinAsset, equipmentAsset,
     levelFromXp, playerForce, maxHp, hpLossReduction, stackKey, parseStackKey, resourceFamily,

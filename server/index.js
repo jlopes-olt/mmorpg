@@ -21,7 +21,34 @@ const express = require('express');
 const { Server } = require('socket.io');
 const { Game } = require('./game.js');
 const { Store } = require('./store.js');
-const { CONFIG, syncActiveCharacter, MOONSTONE_PACKS } = require('../js/config.js');
+const { CONFIG, syncActiveCharacter, MOONSTONE_PACKS, VAPID_PUBLIC_KEY } = require('../js/config.js');
+
+// Notifications push (Web Push) : la clé publique est partagée avec le
+// client via js/config.js (VAPID_PUBLIC_KEY, sans danger à exposer) ; la clé
+// privée reste ici, remplaçable en prod via la variable d'environnement
+// VAPID_PRIVATE_KEY (valeur par défaut = la clé générée pour ce prototype).
+const webpush = require('web-push');
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'xNsjhBY9fO_BEr4SGpblft5XEInrBtmK1iK63kgcXI0';
+webpush.setVapidDetails('mailto:contact@feralia-online.app', VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+
+// Envoie une notif push à TOUS les abonnements enregistrés d'un compte (peut
+// avoir plusieurs appareils) ; retire silencieusement les abonnements que le
+// navigateur a révoqués (404/410 — l'utilisateur a désinstallé/désactivé).
+function sendPushToAccount(accountId, title, body) {
+  const player = game.players.get(String(accountId || ''));
+  if (!player || !Array.isArray(player.pushSubscriptions) || !player.pushSubscriptions.length) return;
+  const payload = JSON.stringify({ title, body });
+  for (const sub of [...player.pushSubscriptions]) {
+    webpush.sendNotification(sub, payload).catch((err) => {
+      if (err && (err.statusCode === 404 || err.statusCode === 410)) {
+        player.pushSubscriptions = player.pushSubscriptions.filter((s) => s.endpoint !== sub.endpoint);
+        saveAccountOf(player);
+      } else {
+        console.error('Erreur envoi push :', err && err.message);
+      }
+    });
+  }
+}
 
 // Achat d'Écailles Lunaires (Stripe) : clé secrète + liens de paiement par
 // pack, fournis plus tard via variables d'environnement. Tant qu'ils sont
@@ -130,6 +157,7 @@ game.onGuildsDirty = () => saveWorld();
 // Chaque message (général/guilde/MP) → écriture immédiate, pour survivre à un redémarrage
 // entre l'envoi et la prochaine connexion du destinataire (coordination asynchrone).
 game.onChatDirty = () => saveWorld();
+game.sendPush = sendPushToAccount;
 
 // Migration : on fige tout de suite l'état importé, puis on archive le JSON
 if (store.countAccounts() === 0 && initialState && initialState.savedAt) {
@@ -280,6 +308,20 @@ io.on('connection', (socket) => {
   socket.on('shop:buyPaScroll', act(() => game.buyPaScroll(player)));
   socket.on('shop:buyGoldPack', act((d) => game.buyGoldPack(player, String(d.packId || ''))));
   socket.on('shop:checkoutLink', act((d) => buildCheckoutLink(player, String(d.packId || ''))));
+  socket.on('push:subscribe', act((d) => {
+    const sub = d && d.subscription;
+    if (!sub || typeof sub.endpoint !== 'string' || !sub.keys) return { ok: false, error: 'Abonnement invalide.' };
+    if (!Array.isArray(player.pushSubscriptions)) player.pushSubscriptions = [];
+    if (!player.pushSubscriptions.some((s) => s.endpoint === sub.endpoint)) player.pushSubscriptions.push(sub);
+    return { ok: true };
+  }));
+  socket.on('push:unsubscribe', act((d) => {
+    const endpoint = String((d && d.endpoint) || '');
+    if (Array.isArray(player.pushSubscriptions)) {
+      player.pushSubscriptions = player.pushSubscriptions.filter((s) => s.endpoint !== endpoint);
+    }
+    return { ok: true };
+  }));
   socket.on('cook', act((d) => game.cook(player, String(d.item), Number(d.tier))));
   socket.on('consume', act((d) => game.consume(player, String(d.key))));
   socket.on('trade:request', act((d) => game.requestTrade(player, String(d.targetId))));
@@ -361,12 +403,17 @@ io.on('connection', (socket) => {
     sockets.delete(player.id);
     player.online = false;
     player.lastSeen = Date.now();
+    game.schedulePaFullNotify(player);
     if (game.players.has(player.id)) saveAccountOf(player);
   });
 });
 
 /* ---------- Boucles serveur ---------- */
 setInterval(() => game.tick(TICK_MS), TICK_MS);
+// Notifs push « Endurance pleine » : vérifiées indépendamment de la boucle de
+// jeu (qui ne fait progresser les PA que des comptes en ligne) — 30 s suffit,
+// ce n'est pas une action sensible au timing comme le reste du jeu.
+setInterval(() => game.checkPaFullNotifications(), 30000);
 setInterval(() => io.emit('players', game.publicPlayers()), 500);
 setInterval(() => io.emit('raids', game.raidsPayload()), 500);
 setInterval(() => io.emit('time', { now: game.now, speed: game.speed }), 2000);

@@ -13,7 +13,7 @@
 
 (function () {
   const remote = typeof io !== 'undefined' && location.protocol.indexOf('http') === 0;
-  const SHELL_REV = '20260720-scroll-cooldown-1';
+  const SHELL_REV = '20260720-push-camera-1';
 
   // PWA : service worker (cache + installation sur l'écran d'accueil).
   // Échec silencieux en file:// / artifact.
@@ -666,7 +666,7 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
       }
 
       ui.updateHud();
-      renderer.draw();
+      renderer.draw(dt);
 
       if (t - lastMini > 600 && (ui.openSheet === 'map' || ui.desktopPanelsActive())) {
         lastMini = t;

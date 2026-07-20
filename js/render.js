@@ -740,7 +740,7 @@ class Renderer {
     return hits.map((h) => h.player);
   }
 
-  draw() {
+  draw(dt) {
     const s = this.server, me = s.me, ctx = this.ctx;
     if (!me) return;
 
@@ -751,8 +751,16 @@ class Renderer {
       this.cam.y = ty;
       this.camInit = true;
     }
-    this.cam.x += (tx - this.cam.x) * 0.15;
-    this.cam.y += (ty - this.cam.y) * 0.15;
+    // Lissage indépendant du taux de rafraîchissement : l'ancien facteur fixe
+    // (*0.15/frame) donnait un rattrapage plus LENT et irrégulier dès que le
+    // frame rate baisse ou varie (mobile, rendu plus coûteux qu'un laptop) —
+    // perçu comme un déplacement saccadé. La décroissance exponentielle ici
+    // converge à la même VITESSE RÉELLE quel que soit le frame rate (calibrée
+    // pour ressembler à l'ancien rendu à 60 fps stable : 103 ms de constante
+    // de temps ≈ 0.85 restant après 16,7 ms, comme *0.15 par frame à 60 fps).
+    const smoothing = 1 - Math.exp(-(dt || 16.7) / 103);
+    this.cam.x += (tx - this.cam.x) * smoothing;
+    this.cam.y += (ty - this.cam.y) * smoothing;
 
     ctx.fillStyle = '#101318';
     ctx.fillRect(0, 0, this.w, this.h);

@@ -345,6 +345,9 @@ class ServerSim {
     return { ok: false, error: 'Achats en argent réel disponibles en multijoueur réel.' };
   }
 
+  subscribePush() { return { ok: false, error: 'Notifications disponibles en multijoueur réel.' }; }
+  unsubscribePush() { return { ok: true }; }
+
   equipSkin(skinId) {
     const me = this.me;
     this.skinStateOf(me);

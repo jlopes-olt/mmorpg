@@ -65,6 +65,7 @@ class Game {
     this.onDirty = () => {};
     this.onGuildsDirty = () => {};
     this.onChatDirty = () => {};
+    this.sendPush = () => {};   // notif push (accountId, title, body) — câblé dans index.js
     this.rng = Math.random;   // injectable pour des tests déterministes
     if (persisted) this.load(persisted);
     this.spawnBots();
@@ -190,6 +191,32 @@ class Game {
     p.pa = Math.min(CONFIG.PA.MAX, p.pa + Math.floor(away / CONFIG.PA.REGEN_MS));
     p.hp = Math.min(maxHp(p), p.hp + Math.floor(away / CONFIG.HP.REGEN_MS));
     p.lastSeen = Date.now();
+    p.pushPaFullAt = null;
+    p.pushPaFullSent = false;
+  }
+
+  // Programme (à la déconnexion) l'instant réel où l'Endurance hors ligne
+  // atteindra son plafond, pour la notification push — même hypothèse que
+  // resumePlayer() (temps réel écoulé / REGEN_MS, sans le multiplicateur
+  // SPEED de dev, qui ne vaut de toute façon que 1 en production).
+  schedulePaFullNotify(p) {
+    if (p.pa >= CONFIG.PA.MAX) { p.pushPaFullAt = null; p.pushPaFullSent = false; return; }
+    const paNeeded = CONFIG.PA.MAX - p.pa;
+    p.pushPaFullAt = Date.now() + paNeeded * CONFIG.PA.REGEN_MS;
+    p.pushPaFullSent = false;
+  }
+
+  // Balayage périodique (voir index.js) : prévient les comptes hors ligne
+  // dont le réservoir vient de se remplir depuis la dernière vérification.
+  checkPaFullNotifications() {
+    const now = Date.now();
+    for (const p of this.players.values()) {
+      if (p.bot || p.online || !p.pushPaFullAt || p.pushPaFullSent) continue;
+      if (now >= p.pushPaFullAt) {
+        p.pushPaFullSent = true;
+        this.sendPush(p.id, '⚡ Endurance pleine', 'Votre réservoir d’Endurance est plein — prêt à repartir à l’aventure !');
+      }
+    }
   }
 
   authToken(token) {
@@ -230,6 +257,9 @@ class Game {
       gold: 0,
       [PREMIUM_CURRENCY.key]: 0,
       lastPaScrollAt: -PA_SCROLL_COOLDOWN_MS,   // « jamais utilisé » : disponible dès la création
+      pushSubscriptions: [],
+      pushPaFullAt: null,
+      pushPaFullSent: false,
       ownedSkins: [],
       status: 'IDLE',
       harvestKey: null, harvestEndsAt: 0,
@@ -1163,6 +1193,23 @@ class Game {
         ? ('🏰 Le château (' + raid.terrain + ') est tombé aux mains de « ' + guildAtk.name + ' ».')
         : ('🏰 L’assaut de « ' + guildAtk.name + ' » contre votre château (' + raid.terrain + ') a été repoussé.'));
     }
+
+    // Notification push : seulement pour ceux qui n'étaient PAS connectés
+    // pour voir le résultat en direct (les autres l'ont déjà via toast/popup
+    // ci-dessus) — on prévient d'un siège qu'on ne pouvait de toute façon
+    // pas rejoindre à temps, juste son issue.
+    for (const m of this.players.values()) {
+      if (m.bot || m.online || m.guildId !== defenderGuildId) continue;
+      this.sendPush(m.id, '🏰 Siège terminé', victory
+        ? ('Le château (' + raid.terrain + ') est tombé aux mains de « ' + guildAtk.name + ' ».')
+        : ('L’assaut de « ' + guildAtk.name + ' » contre votre château (' + raid.terrain + ') a été repoussé.'));
+    }
+    for (const a of attackers) {
+      if (a.bot || a.online) continue;
+      this.sendPush(a.id, '⚔ Résultat du siège', victory
+        ? ('Victoire ! Le château (' + raid.terrain + ') de « ' + guildDef.name + ' » est conquis.')
+        : ('L’assaut contre le château (' + raid.terrain + ') de « ' + guildDef.name + ' » a échoué.'));
+    }
   }
 
   /* ---------- Amis ---------- */
@@ -1182,11 +1229,13 @@ class Game {
       this.pushSelf(target);
       this.toast(p, target.username + ' est maintenant votre ami.');
       this.toast(target, p.username + ' est maintenant votre ami.');
+      if (!target.online) this.sendPush(target.id, '👥 Nouvel ami', 'Vous êtes maintenant ami avec ' + p.username + '.');
       return { ok: true, addedDirectly: true };
     }
     target.friendRequests.push({ fromId: p.id, fromUsername: p.username, at: this.now });
     this.pushSelf(target);
     this.toast(p, 'Demande d’ami envoyée à ' + target.username + '.');
+    if (!target.online) this.sendPush(target.id, '👥 Demande d’ami', p.username + ' souhaite devenir votre ami.');
     return { ok: true };
   }
 
@@ -2050,6 +2099,7 @@ class Game {
       this.recordChat({ ...payload, fromId: p.id, toId: target.id });
       this.send(p.id, 'chat', payload);
       if (target.online) this.send(target.id, 'chat', payload);
+      else this.sendPush(target.id, '💬 ' + p.username, text.length > 120 ? text.slice(0, 117) + '…' : text);
       return { ok: true, offline: !target.online };
     }
 
@@ -2148,6 +2198,9 @@ class Game {
       if (typeof p.gold !== 'number') p.gold = 0;
       if (typeof p[PREMIUM_CURRENCY.key] !== 'number') p[PREMIUM_CURRENCY.key] = 0;
       if (typeof p.lastPaScrollAt !== 'number') p.lastPaScrollAt = -PA_SCROLL_COOLDOWN_MS;
+      if (!Array.isArray(p.pushSubscriptions)) p.pushSubscriptions = [];
+      if (typeof p.pushPaFullAt === 'undefined') p.pushPaFullAt = null;
+      if (typeof p.pushPaFullSent !== 'boolean') p.pushPaFullSent = false;
       if (!Array.isArray(p.ownedSkins)) p.ownedSkins = [];
       if (!Array.isArray(p.visitedVillages)) p.visitedVillages = [];
       if (!Array.isArray(p.exploredWorld)) p.exploredWorld = [];

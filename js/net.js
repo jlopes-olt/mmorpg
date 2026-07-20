@@ -196,6 +196,8 @@ class RemoteServer {
   buyPaScroll() { return this.req('shop:buyPaScroll', {}); }
   buyGoldPack(packId) { return this.req('shop:buyGoldPack', { packId }); }
   getCheckoutLink(packId) { return this.req('shop:checkoutLink', { packId }); }
+  subscribePush(subscription) { return this.req('push:subscribe', { subscription }); }
+  unsubscribePush(endpoint) { return this.req('push:unsubscribe', { endpoint }); }
   cook(item, tier) { return this.req('cook', { item, tier }); }
   consume(key) { return this.req('consume', { key }); }
   requestTrade(targetId) { return this.req('trade:request', { targetId }); }

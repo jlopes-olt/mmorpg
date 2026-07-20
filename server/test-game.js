@@ -21,6 +21,8 @@ const g = new Game(CONFIG.WORLD.SEED, null);
 const sent = [];
 g.send = (id, ev, data) => sent.push({ id, ev, data });
 g.broadcast = () => {};
+const pushed = [];
+g.sendPush = (id, title, body) => pushed.push({ id, title, body });
 
 // --- Comptes : inscription / connexion / token ---
 let r = g.register({ username: 'Alice', password: 'secret1', speciesClass: 'LION_PALADIN' });
@@ -694,6 +696,15 @@ carl.gold = 999999; carl.online = true;
 carl.mapId = 'world'; carl.pos = { x: plaineCastleTile.x, y: plaineCastleTile.y }; carl.status = 'IDLE';
 assert.ok(g.claimCastle(carl, 'PLAINE').ok, 'Carl (chef des Faucons) fonde le château de Plaine');
 
+// Un membre des Faucons hors ligne au moment de la résolution — pour vérifier
+// la notification push (Bob et Carl sont en ligne, déjà couverts par
+// toast/rapport détaillé ci-dessous ; seul un membre absent a besoin du push).
+const rDaveOff = g.register({ username: 'DaveOff', password: 'secret1', speciesClass: 'OURS_GUERRIER' });
+const daveOff = rDaveOff.player;
+assert.ok(g.inviteToGuild(carl, 'DaveOff').ok, 'Carl invite DaveOff dans les Faucons');
+assert.ok(g.respondGuildInvite(daveOff, true).ok, 'DaveOff rejoint les Faucons');
+daveOff.online = false;
+
 bob.mapId = 'world'; bob.pos = { x: plaineCastleTile.x, y: plaineCastleTile.y }; bob.status = 'IDLE'; bob.pa = 50;
 carl.pos = { x: plaineCastleTile.x - 1, y: plaineCastleTile.y };   // Carl : en ligne, mais absent de la tuile
 
@@ -708,6 +719,7 @@ assert.ok(siegeAlerts.some((m) => m.id === bob.id) && siegeAlerts.some((m) => m.
 const garrisonAlone = g.castleDefenseForce(g.castleOf('PLAINE'));
 g.rng = () => 0.999;   // assaut repoussé à coup sûr (issue forcée, seule la puissance de défense nous intéresse ici)
 sent.length = 0;
+pushed.length = 0;
 assert.ok(g.startRaidNow(alice, plaineSiegeKey).ok);
 g.tick(300);
 const bobReportEntry = sent.find((m) => m.ev === 'siegeResult' && m.id === bob.id);
@@ -727,6 +739,13 @@ assert.strictEqual(aliceReportEntry.data.role, 'attacker', 'Alice reçoit le rap
 assert.strictEqual(aliceReportEntry.data.defenseForce, bobReportEntry.data.defenseForce, 'les deux rapports reflètent la même force de défense');
 g.rng = Math.random;
 console.log('Défense active : alerte des défenseurs ✔, bonus de présence ✔, rapport différencié attaquant/défenseur ✔');
+
+// Notification push : seul le membre HORS LIGNE des Faucons en reçoit une
+// (Bob et Carl sont en ligne, déjà couverts par toast/rapport ci-dessus).
+assert.strictEqual(pushed.length, 1, 'un seul push envoyé (le membre hors ligne, pas les deux en ligne)');
+assert.strictEqual(pushed[0].id, daveOff.id, 'push adressé au membre hors ligne des Faucons');
+assert.ok(/repoussé/i.test(pushed[0].body), 'le push reflète bien l’issue (assaut repoussé)');
+console.log('Notifications push : siège (membre hors ligne uniquement) ✔');
 
 // --- Fortifications : investissement défensif séparé du renfort, sans joueurs présents ---
 const montagneCastleTile = g.castleTileFor('MONTAGNE');
@@ -902,6 +921,76 @@ assert.ok(!g.creditMoonstones(alice.id, 0).ok, 'montant nul refusé');
 assert.ok(!g.creditMoonstones(alice.id, -5).ok, 'montant négatif refusé');
 alice.online = true;
 console.log('Crédit Stripe (webhook) : appliqué même hors ligne ✔, compte/montant invalides refusés ✔');
+
+// --- Notifications push : demande d'ami + MP, seulement si le destinataire est hors ligne ---
+const rPushE = g.register({ username: 'PushE', password: 'secret1', speciesClass: 'LION_PALADIN' });
+const pushE = rPushE.player;
+const rPushF = g.register({ username: 'PushF', password: 'secret1', speciesClass: 'CHAT_MAGICIEN' });
+const pushF = rPushF.player;
+pushE.online = true;
+pushF.online = false;
+
+pushed.length = 0;
+assert.ok(g.sendFriendRequest(pushE, 'PushF').ok, 'demande d’ami envoyée');
+assert.strictEqual(pushed.length, 1, 'push envoyé pour une demande d’ami reçue hors ligne');
+assert.strictEqual(pushed[0].id, pushF.id, 'push adressé au bon destinataire');
+
+pushE.online = false;   // simule une déconnexion d'Ami E entre-temps
+pushed.length = 0;
+assert.ok(g.sendFriendRequest(pushF, 'PushE').ok, 'PushF (hors ligne) réciproque -> amitié auto-acceptée');
+assert.strictEqual(pushed.length, 1, 'push envoyé pour une amitié auto-acceptée alors que l’autre est hors ligne');
+assert.strictEqual(pushed[0].id, pushE.id, 'push adressé au membre hors ligne au moment de l’auto-acceptation');
+
+pushE.online = true;
+pushF.online = false;
+pushed.length = 0;
+const whisperOffline = g.say(pushE, 'Salut, tu es là ?', 'whisper', 'PushF');
+assert.ok(whisperOffline.ok && whisperOffline.offline, 'MP envoyé, destinataire hors ligne');
+assert.strictEqual(pushed.length, 1, 'push envoyé pour un MP reçu hors ligne');
+assert.strictEqual(pushed[0].id, pushF.id, 'push adressé au destinataire hors ligne');
+assert.ok(pushed[0].body.includes('Salut'), 'le push reprend le texte du message');
+
+pushF.online = true;
+pushed.length = 0;
+const whisperOnline = g.say(pushE, 'Encore là ?', 'whisper', 'PushF');
+assert.ok(whisperOnline.ok && !whisperOnline.offline, 'MP envoyé, destinataire en ligne');
+assert.strictEqual(pushed.length, 0, 'pas de push si le destinataire est déjà en ligne (reçu en direct)');
+console.log('Notifications push : demande d’ami ✔, amitié auto-acceptée ✔, MP hors ligne uniquement ✔');
+
+// --- Notification push « Endurance pleine » : programmée à la déconnexion, ---
+// --- déclenchée une seule fois, seulement une fois vraiment échue ---
+pushF.pa = CONFIG.PA.MAX;
+g.schedulePaFullNotify(pushF);
+assert.strictEqual(pushF.pushPaFullAt, null, 'déjà pleine : rien à programmer');
+
+pushF.pa = CONFIG.PA.MAX - 5;
+const beforeSchedule = Date.now();
+g.schedulePaFullNotify(pushF);
+assert.ok(pushF.pushPaFullAt > beforeSchedule, 'échéance programmée dans le futur');
+assert.strictEqual(pushF.pushPaFullSent, false, 'pas encore envoyé');
+
+pushed.length = 0;
+pushF.online = false;
+g.checkPaFullNotifications();
+assert.strictEqual(pushed.length, 0, 'aucun push avant l’échéance');
+
+pushF.pushPaFullAt = Date.now() - 1;   // simule l'échéance atteinte
+g.checkPaFullNotifications();
+assert.strictEqual(pushed.length, 1, 'push envoyé une fois l’échéance atteinte, compte hors ligne');
+assert.strictEqual(pushed[0].id, pushF.id);
+assert.ok(pushF.pushPaFullSent, 'marqué comme envoyé');
+
+pushed.length = 0;
+g.checkPaFullNotifications();
+assert.strictEqual(pushed.length, 0, 'pas de second envoi (déjà marqué envoyé)');
+
+pushF.pushPaFullAt = Date.now() - 1;   // échéance de nouveau atteinte
+pushF.pushPaFullSent = false;
+pushF.online = true;
+pushed.length = 0;
+g.checkPaFullNotifications();
+assert.strictEqual(pushed.length, 0, 'aucun push pour un compte désormais en ligne, même échéance atteinte');
+console.log('Notifications push : Endurance pleine programmée à la déconnexion ✔, envoyée une seule fois ✔');
 
 // --- Brouillard de guerre (compte) : même carte explorée quel que soit l'appareil ---
 assert.deepStrictEqual(alice.exploredWorld, [], 'aucune tuile explorée par défaut');
