@@ -13,7 +13,7 @@
 
 (function () {
   const remote = typeof io !== 'undefined' && location.protocol.indexOf('http') === 0;
-  const SHELL_REV = '20260719-tile-ux-castle-cost-1';
+  const SHELL_REV = '20260720-scroll-cooldown-1';
 
   // PWA : service worker (cache + installation sur l'écran d'accueil).
   // Échec silencieux en file:// / artifact.
@@ -276,14 +276,9 @@
     if (!me || me.status === 'LOBBY_COMBAT') return;
     if (!inBounds(tx, ty, server.tiles)) return;
     const key = tileKey(tx, ty);
-    const visible = Math.hypot(tx - me.pos.x, ty - me.pos.y) <= CONFIG.VIEW_RADIUS + 0.5;
     const tile = server.tiles.get(key);
     if (!tile || tile.blocked) return;   // vide de donjon : inerte
     const c = tile.content;
-    // Hors brouillard : inerte — sauf les repères permanents (capitale,
-    // villages, donjons), visibles et ciblables à travers le brouillard.
-    const landmark = c && (c.kind === 'capital' || c.kind === 'village' || c.kind === 'dungeon' || c.kind === 'castle');
-    if (!explored.has(key) && !visible && !landmark) return;
     const adjacent = server.chebyshev(me.pos, tile) <= 1;
     moveQueue = [];
 
@@ -673,10 +668,12 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
       ui.updateHud();
       renderer.draw();
 
-      if (ui.openSheet === 'map' && t - lastMini > 600) {
+      if (t - lastMini > 600 && (ui.openSheet === 'map' || ui.desktopPanelsActive())) {
         lastMini = t;
         const mini = document.getElementById('minimap');
         if (mini) renderer.drawMinimap(mini);
+        const desktopMini = document.getElementById('desktopMinimap');
+        if (desktopMini && ui.desktopPanelsActive()) renderer.drawMinimap(desktopMini);
       }
       if (t - lastSave > 5000) { lastSave = t; save(); flushExploreSync(); }
     }
@@ -710,6 +707,13 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
       // navigateur/appareil (ex. site web ↔ PWA installée).
       for (const k of ((server.me && server.me.exploredWorld) || [])) explored.add(k);
       updateExplored();
+      // Retour depuis Stripe après paiement : confirmation immédiate à
+      // l'écran — le crédit réel vient du webhook (asynchrone), donc ce
+      // n'est qu'un accusé de réception, pas la preuve que c'est déjà fait.
+      if (new URLSearchParams(location.search).get('purchase') === 'success') {
+        ui.toast('✦ Paiement reçu — vos Écailles Lunaires arrivent dans quelques instants.');
+        history.replaceState(null, '', location.pathname);
+      }
     });
     let token = null;
     try { token = localStorage.getItem(TOKEN_KEY); } catch (e) { /* ignore */ }

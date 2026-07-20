@@ -229,6 +229,7 @@ class Game {
       inventory: {},
       gold: 0,
       [PREMIUM_CURRENCY.key]: 0,
+      lastPaScrollAt: -PA_SCROLL_COOLDOWN_MS,   // « jamais utilisé » : disponible dès la création
       ownedSkins: [],
       status: 'IDLE',
       harvestKey: null, harvestEndsAt: 0,
@@ -346,6 +347,49 @@ class Game {
     p.ownedSkins.push(item.id);
     this.pushSelf(p);
     return { ok: true };
+  }
+
+  // Achète un Parchemin d'Endurance : payé en monnaie premium, stocké en
+  // inventaire (pas d'effet immédiat) — le joueur l'utilise quand il veut
+  // depuis l'Inventaire (voir consume(), cas 'pa_refill'), où s'applique le
+  // cooldown qui borne l'usage à 1-2 fois par jour. Rien n'empêche d'en
+  // acheter plusieurs d'avance : seule l'UTILISATION est limitée.
+  buyPaScroll(p) {
+    const balance = Number(p[PREMIUM_CURRENCY.key] || 0);
+    if (balance < PA_SCROLL_COST_MOONSTONES) {
+      return { ok: false, error: 'Il faut ' + PA_SCROLL_COST_MOONSTONES + ' ' + PREMIUM_CURRENCY.label + '.' };
+    }
+    p[PREMIUM_CURRENCY.key] = balance - PA_SCROLL_COST_MOONSTONES;
+    const key = stackKey('PARCHEMIN_ENDURANCE', 1);
+    p.inventory[key] = (p.inventory[key] || 0) + 1;
+    this.pushSelf(p);
+    return { ok: true, cost: PA_SCROLL_COST_MOONSTONES };
+  }
+
+  buyGoldPack(p, packId) {
+    const pack = GOLD_PACKS.find((item) => item.id === String(packId || ''));
+    if (!pack) return { ok: false, error: 'Pack d’or inconnu.' };
+    const balance = Number(p[PREMIUM_CURRENCY.key] || 0);
+    if (balance < pack.moonstones) return { ok: false, error: 'Pas assez de ' + PREMIUM_CURRENCY.label.toLowerCase() + '.' };
+    p[PREMIUM_CURRENCY.key] = balance - pack.moonstones;
+    p.gold = Number(p.gold || 0) + pack.gold;
+    this.pushSelf(p);
+    return { ok: true, gold: pack.gold, cost: pack.moonstones };
+  }
+
+  // Crédit de monnaie premium après un paiement Stripe confirmé (webhook) —
+  // fonctionne même hors ligne : game.players contient TOUS les comptes
+  // connus depuis le démarrage (load()), pas seulement les connectés.
+  creditMoonstones(accountId, amount) {
+    const target = this.players.get(String(accountId || ''));
+    if (!target) return { ok: false, error: 'Compte introuvable.' };
+    const n = Math.floor(Number(amount)) || 0;
+    if (n <= 0) return { ok: false, error: 'Montant invalide.' };
+    target[PREMIUM_CURRENCY.key] = (target[PREMIUM_CURRENCY.key] || 0) + n;
+    if (target.online) this.pushSelf(target);
+    else this.onDirty(target);
+    this.log('✦ ' + target.username + ' a reçu ' + n + ' ' + PREMIUM_CURRENCY.label + '.');
+    return { ok: true, total: target[PREMIUM_CURRENCY.key] };
   }
 
   equipSkin(p, skinId) {
@@ -769,9 +813,10 @@ class Game {
   castleOf(terrain) {
     let c = this.castles.get(terrain);
     if (!c) {
-      c = { terrain, ownerGuildId: null, hp: 0, hpMax: 0, level: 0 };
+      c = { terrain, ownerGuildId: null, hp: 0, hpMax: 0, level: 0, fortLevel: 0 };
       this.castles.set(terrain, c);
     }
+    if (typeof c.fortLevel !== 'number') c.fortLevel = 0;
     return c;
   }
 
@@ -789,7 +834,7 @@ class Game {
   }
 
   castleDefenseForce(c) {
-    const base = 300 + c.level * 150;
+    const base = 300 + c.level * 150 + (c.fortLevel || 0) * CASTLE_FORTIFY_BONUS_PER_LEVEL;
     const ratio = c.hpMax ? Math.max(0, Math.min(1, c.hp / c.hpMax)) : 0;
     const woundFactor = CONFIG.COMBAT.WOUND_FLOOR + (1 - CONFIG.COMBAT.WOUND_FLOOR) * ratio;
     return base * woundFactor;
@@ -810,6 +855,8 @@ class Game {
         hpMax: c.hpMax,
         level: c.level,
         maxLevel: CASTLE_MAX_LEVEL,
+        fortLevel: c.fortLevel || 0,
+        maxFortLevel: CASTLE_MAX_FORT_LEVEL,
         isOwnGuild: !!(p.guildId && c.ownerGuildId === p.guildId),
       };
     });
@@ -871,7 +918,8 @@ class Game {
     if (!this.atCastle(p, terrain)) return { ok: false, error: 'Vous devez être au château pour le réparer.' };
     if (c.hp >= c.hpMax) return { ok: false, error: 'Déjà à pleine structure.' };
     const resType = CASTLE_TERRAIN_RESOURCE[terrain];
-    const resKey = stackKey(resType, CASTLE_REPAIR_RESOURCE_TIER);
+    const resTier = castleRepairResourceTier(c.level);
+    const resKey = stackKey(resType, resTier);
     const goldBudget = Math.max(0, Math.min(Math.floor(Number(amountGold) || 0), p.gold || 0));
     const resourceStock = p.inventory[resKey] || 0;
     const healed = Math.min(
@@ -882,7 +930,7 @@ class Game {
     if (healed <= 0) {
       return {
         ok: false,
-        error: 'Pas assez d’or (' + CASTLE_REPAIR_GOLD_PER_HP + ' 🪙/PS) ou de ' + resourceLabel(resType, CASTLE_REPAIR_RESOURCE_TIER) +
+        error: 'Pas assez d’or (' + CASTLE_REPAIR_GOLD_PER_HP + ' 🪙/PS) ou de ' + resourceLabel(resType, resTier) +
           ' (' + CASTLE_REPAIR_HP_PER_RESOURCE + ' PS par unité).',
       };
     }
@@ -894,7 +942,34 @@ class Game {
     c.hp += healed;
     this.pushSelf(p);
     this.onGuildsDirty();
-    return { ok: true, healed, cost, resourceCost, resourceType: resType, resourceTier: CASTLE_REPAIR_RESOURCE_TIER, hp: c.hp, hpMax: c.hpMax };
+    return { ok: true, healed, cost, resourceCost, resourceType: resType, resourceTier: resTier, hp: c.hp, hpMax: c.hpMax };
+  }
+
+  // Fortification : investissement défensif séparé du renfort — augmente la
+  // garnison de base sans nécessiter de joueurs présents (voir castleDefenseForce).
+  fortifyCastle(p, terrain) {
+    if (!CASTLE_TERRAINS.includes(terrain)) return { ok: false, error: 'Zone invalide.' };
+    const c = this.castleOf(terrain);
+    if (!c.ownerGuildId) return { ok: false, error: 'Ce château n’a pas encore été fondé.' };
+    if (c.ownerGuildId !== p.guildId) return { ok: false, error: 'Vous ne pouvez fortifier que le château de votre guilde.' };
+    if (!this.atCastle(p, terrain)) return { ok: false, error: 'Vous devez être au château pour le fortifier.' };
+    if ((c.fortLevel || 0) >= CASTLE_MAX_FORT_LEVEL) return { ok: false, error: 'Niveau de fortification maximum atteint.' };
+    if ((p.gold || 0) < CASTLE_FORTIFY_COST_GOLD) {
+      return { ok: false, error: 'Il faut ' + CASTLE_FORTIFY_COST_GOLD + ' 🪙.' };
+    }
+    const recipe = CASTLE_FORTIFY_RESOURCES[(c.fortLevel || 0) + 1];
+    const resType = CASTLE_TERRAIN_RESOURCE[terrain];
+    const resKey = stackKey(resType, recipe.tier);
+    if ((p.inventory[resKey] || 0) < recipe.qty) {
+      return { ok: false, error: 'Il faut ' + recipe.qty + '× ' + resourceLabel(resType, recipe.tier) + '.' };
+    }
+    p.gold -= CASTLE_FORTIFY_COST_GOLD;
+    p.inventory[resKey] -= recipe.qty;
+    if (p.inventory[resKey] <= 0) delete p.inventory[resKey];
+    c.fortLevel = (c.fortLevel || 0) + 1;
+    this.pushSelf(p);
+    this.onGuildsDirty();
+    return { ok: true, fortLevel: c.fortLevel };
   }
 
   /* Lance (ou rejoint) un siège : un lobby de 30 s s'ouvre, comme pour un raid
@@ -929,6 +1004,7 @@ class Game {
       attackerGuildId: p.guildId,
       defenderGuildId: c.ownerGuildId,
       endsAt: this.now + CONFIG.LOBBY_MS,
+      engines: [],
     });
 
     // Alerte la guilde défenseuse : elle a les 30 s du lobby pour se masser
@@ -941,6 +1017,27 @@ class Game {
       }
     }
     return { ok: true };
+  }
+
+  // Déploie un engin de siège fabriqué à l'avance (Capitale) dans un siège déjà
+  // rejoint — 1 par personne maximum, consommé qu'il fasse gagner l'assaut ou non.
+  deploySiegeEngine(p, key, tier) {
+    key = this.normalizeRaidKey(p, key);
+    const raid = this.raids.get(key);
+    if (!raid || !raid.siege) return { ok: false, error: 'Ce siège n’existe plus.' };
+    if (!raid.participants.includes(p.id)) return { ok: false, error: 'Vous devez d’abord rejoindre le siège.' };
+    if ((raid.engines || []).some((e) => e.by === p.id)) return { ok: false, error: 'Vous avez déjà déployé un engin pour ce siège.' };
+    const t = Math.floor(Number(tier));
+    if (!SIEGE_ENGINE_FORCE[t]) return { ok: false, error: 'Tier d’engin invalide.' };
+    const itemKey = stackKey(SIEGE_ENGINE_ITEM, t);
+    if ((p.inventory[itemKey] || 0) < 1) return { ok: false, error: 'Vous n’avez pas cet engin en stock.' };
+    p.inventory[itemKey] -= 1;
+    if (p.inventory[itemKey] <= 0) delete p.inventory[itemKey];
+    if (!raid.engines) raid.engines = [];
+    raid.engines.push({ by: p.id, tier: t });
+    this.pushSelf(p);
+    this.toast(p, '⚙ Engin de siège T' + t + ' déployé pour ce siège.');
+    return { ok: true, tier: t };
   }
 
   resolveSiege(key, raid) {
@@ -977,7 +1074,15 @@ class Game {
     const defenseBonus = teamPowerOf(defenders);
     const defense = garrison + defenseBonus;
 
-    const force = teamPowerOf(attackers);
+    // Engins de siège : force d'appoint (une fraction d'un joueur, jamais 1
+    // pour 1) ET dégâts de structure garantis, indépendants du jet de combat —
+    // une guilde progresse même en cas d'échec, mais ne peut prendre le
+    // château QUE sur un assaut effectivement gagné (voir plus bas).
+    const engines = raid.engines || [];
+    const engineForce = engines.reduce((sum, e) => sum + (SIEGE_ENGINE_FORCE[e.tier] || 0), 0);
+    const engineDamage = engines.reduce((sum, e) => sum + (SIEGE_ENGINE_DAMAGE[e.tier] || 0), 0);
+
+    const force = teamPowerOf(attackers) + engineForce;
     const chance = winChance(force, defense);
     const victory = this.rng() < chance;
     let captured = false;
@@ -988,14 +1093,21 @@ class Game {
         a.mapId = 'world';
         a.pos = { x: 0, y: 0 };
       }
+      // Le bombardement laisse des traces même en cas d'échec de l'assaut,
+      // mais ne peut jamais faire tomber le château tout seul (plancher à 1 PS) —
+      // il faut une victoire au combat pour le prendre.
+      if (engineDamage > 0) c.hp = Math.max(1, c.hp - engineDamage);
       this.log('🏰 L’assaut de « ' + guildAtk.name + ' » contre le château (' + raid.terrain + ') de « ' + guildDef.name + ' » a échoué' +
-        (defenders.length ? (' — ' + defenders.length + ' défenseur(s) mobilisé(s)') : '') + '.');
+        (defenders.length ? (' — ' + defenders.length + ' défenseur(s) mobilisé(s)') : '') +
+        (engineDamage > 0 ? (' (engins : -' + engineDamage + ' PS malgré tout, ' + c.hp + '/' + c.hpMax + ')') : '') + '.');
     } else {
-      c.hp = Math.max(0, c.hp - CASTLE_DAMAGE_PER_ASSAULT);
+      const totalDamage = CASTLE_DAMAGE_PER_ASSAULT + engineDamage;
+      c.hp = Math.max(0, c.hp - totalDamage);
       if (c.hp <= 0) {
         captured = true;
         c.ownerGuildId = raid.attackerGuildId;
         c.hp = Math.round(c.hpMax * 0.5);
+        c.fortLevel = 0;   // les fortifications de l'ancien propriétaire tombent avec lui
         this.log('🏰 « ' + guildAtk.name + ' » a pris le château (' + raid.terrain + ') à « ' + guildDef.name + ' » !');
       } else {
         this.log('🏰 « ' + guildAtk.name + ' » entame le château (' + raid.terrain + ') de « ' + guildDef.name + ' » (' + c.hp + '/' + c.hpMax + ' PS restants).');
@@ -1013,6 +1125,7 @@ class Game {
         label: raid.label,
         teamForce: Math.round(force),
         defenseForce: Math.round(defense),
+        engineForce, engineDamage, engineCount: engines.length,
         hp: c.hp,
         hpMax: c.hpMax,
         attackerGuildName: guildAtk.name,
@@ -1030,6 +1143,7 @@ class Game {
         label: raid.label,
         teamForce: Math.round(force),
         defenseForce: Math.round(defense),
+        engineForce, engineDamage, engineCount: engines.length,
         garrison: Math.round(garrison),
         defenseBonus: Math.round(defenseBonus),
         hp: c.hp,
@@ -1154,6 +1268,7 @@ class Game {
       endsAt: r.endsAt,
       leaderId: r.leaderId,
       participants: r.participants,
+      engines: r.siege ? (r.engines || []) : undefined,
       teamForce: this.teamForce(r),
       winChance: this.raidChance(r),
     }));
@@ -1309,7 +1424,7 @@ class Game {
     if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
     if (this.chebyshev(p.pos, tile) > 1) return { ok: false, error: 'Trop loin — approchez-vous.' };
     if (this.now < node.inactiveUntil) return { ok: false, error: 'Gisement épuisé.' };
-    const reqTier = Math.min(5, node.tier);
+    const reqTier = Math.min(6, node.tier);
     if (p.harvestLevel < reqTier) return { ok: false, error: 'Niveau de récolte insuffisant (T' + reqTier + ' requis).' };
     if (p.pa < CONFIG.COSTS.HARVEST) return { ok: false, error: 'Pas assez de PA (2 requis).' };
     p.pa -= CONFIG.COSTS.HARVEST;
@@ -1332,7 +1447,7 @@ class Game {
     node.inactiveUntil = this.now + (node.dungeonResource ? CONFIG.RESPAWN_DUNGEON_RESOURCE_MS : CONFIG.RESPAWN_RESOURCE_MS);
     // Sans ce broadcast, les clients ne voient jamais le nœud passer en repousse
     this.broadcast('world', { mapId: mapId || p.mapId || 'world', key, inactiveUntil: node.inactiveUntil });
-    p.harvestXp += 8 + Math.min(5, node.tier) * 6;
+    p.harvestXp += 8 + Math.min(6, node.tier) * 6;
     this.checkLevelUp(p, 'harvest');
     this.pushSelf(p);
   }
@@ -1401,7 +1516,11 @@ class Game {
 
   teamForce(raid) {
     const members = raid.participants.map((id) => this.memberById(id)).filter(Boolean);
-    return teamPowerOf(members);
+    let force = teamPowerOf(members);
+    if (raid.siege && raid.engines && raid.engines.length) {
+      force += raid.engines.reduce((sum, e) => sum + (SIEGE_ENGINE_FORCE[e.tier] || 0), 0);
+    }
+    return force;
   }
 
   raidChance(raid) {
@@ -1455,7 +1574,7 @@ class Game {
       if (victory && !p.bot) {
         // Les monstres lâchent de l'or (+ XP) et, parfois, un ingrédient
         // de cuisine de leur tier — les autres ressources viennent de la récolte.
-        const xp = 15 + Math.min(5, monster.tier) * 15;
+        const xp = 15 + Math.min(6, monster.tier) * 15;
         p.weaponXp += xp;
         // Chapardeur (Renard Voleur) : +50 % d'or pour lui
         const lootMult = p.speciesClass === 'RENARD_VOLEUR' ? 1.5 : 1;
@@ -1597,7 +1716,7 @@ class Game {
     if (p.mapId !== 'world' || p.pos.x !== 0 || p.pos.y !== 0) return { ok: false, error: 'Vous devez être à la Capitale (0,0).' };
     const item = p[slot];
     const target = item.tier + 1;
-    if (target > 5) return { ok: false, error: 'Tier maximum atteint.' };
+    if (target > 6) return { ok: false, error: 'Tier maximum atteint.' };
     if (p.weaponMastery < target) return { ok: false, error: 'Maîtrise d’arme T' + target + ' requise.' };
     const recipe = UPGRADE_RECIPES[slot][target];
     for (const k in recipe) {
@@ -1653,11 +1772,54 @@ class Game {
     return { ok: true };
   }
 
+  /* Ingénierie de siège : fabrication à la Capitale (comme la Forge), avant
+   * de partir en guerre — voir deploySiegeEngine pour l'utilisation en siège. */
+  craftSiegeEngine(p, tier) {
+    tier = Math.floor(Number(tier));
+    const recipe = SIEGE_ENGINE_RECIPES[tier];
+    if (!recipe) return { ok: false, error: 'Tier d’engin invalide.' };
+    if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
+    if (p.mapId !== 'world' || p.pos.x !== 0 || p.pos.y !== 0) return { ok: false, error: 'Les engins de siège se fabriquent à la Capitale.' };
+    for (const [k, n] of Object.entries(recipe)) {
+      if (k === 'gold') {
+        if ((p.gold || 0) < n) return { ok: false, error: 'Pas assez d’or (' + n + ' 🪙 requis).' };
+      } else if ((p.inventory[k] || 0) < n) {
+        const r = parseStackKey(k);
+        return { ok: false, error: 'Il manque : ' + n + '× ' + resourceLabel(r.type, r.tier) + '.' };
+      }
+    }
+    for (const [k, n] of Object.entries(recipe)) {
+      if (k === 'gold') p.gold -= n;
+      else {
+        p.inventory[k] -= n;
+        if (p.inventory[k] <= 0) delete p.inventory[k];
+      }
+    }
+    const key = stackKey(SIEGE_ENGINE_ITEM, tier);
+    p.inventory[key] = (p.inventory[key] || 0) + 1;
+    this.plog(p, '⚙ Engin de siège T' + tier + ' construit !');
+    this.pushSelf(p);
+    return { ok: true };
+  }
+
   consume(p, key) {
     const parsed = parseStackKey(String(key));
     const item = CONSUMABLES[parsed.type];
     if (!item) return { ok: false, error: 'Objet inconnu.' };
     if ((p.inventory[key] || 0) < 1) return { ok: false, error: 'Vous n’en avez plus.' };
+
+    // Le Parchemin d'Endurance peut encore échouer à ce stade (cooldown,
+    // Endurance déjà pleine) — contrairement aux autres consommables, donc
+    // on valide AVANT de retirer l'objet de l'inventaire pour ne pas le
+    // perdre sur un essai refusé.
+    if (item.kind === 'pa_refill') {
+      if (typeof p.lastPaScrollAt !== 'number') p.lastPaScrollAt = -PA_SCROLL_COOLDOWN_MS;
+      const remainingMs = PA_SCROLL_COOLDOWN_MS - (this.now - p.lastPaScrollAt);
+      if (remainingMs > 0) {
+        return { ok: false, error: 'Parchemin en recharge — encore ' + Math.ceil(remainingMs / 60000) + ' min.' };
+      }
+      if (p.pa >= CONFIG.PA.MAX) return { ok: false, error: 'Endurance déjà au maximum.' };
+    }
 
     p.inventory[key] -= 1;
     if (p.inventory[key] <= 0) delete p.inventory[key];
@@ -1666,6 +1828,11 @@ class Game {
       const heal = Math.round(maxHp(p) * CONSUMABLE_EFFECTS[parsed.type][parsed.tier]);
       p.hp = Math.min(maxHp(p), p.hp + heal);
       this.toast(p, item.icon + ' +' + heal + ' PV');
+    } else if (item.kind === 'pa_refill') {
+      p.pa = CONFIG.PA.MAX;
+      p.paMs = 0;
+      p.lastPaScrollAt = this.now;
+      this.toast(p, item.icon + ' Endurance rechargée au maximum !');
     } else {
       p.buff = { type: parsed.type, tier: parsed.tier, combats: BUFF_COMBATS };
       this.toast(p, item.icon + ' ' + item.label + ' T' + parsed.tier + ' actif (' + BUFF_COMBATS + ' combats)');
@@ -1980,6 +2147,7 @@ class Game {
       p.charSlots = Math.min(p.charSlots, MAX_CHAR_SLOTS);
       if (typeof p.gold !== 'number') p.gold = 0;
       if (typeof p[PREMIUM_CURRENCY.key] !== 'number') p[PREMIUM_CURRENCY.key] = 0;
+      if (typeof p.lastPaScrollAt !== 'number') p.lastPaScrollAt = -PA_SCROLL_COOLDOWN_MS;
       if (!Array.isArray(p.ownedSkins)) p.ownedSkins = [];
       if (!Array.isArray(p.visitedVillages)) p.visitedVillages = [];
       if (!Array.isArray(p.exploredWorld)) p.exploredWorld = [];

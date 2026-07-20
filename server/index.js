@@ -21,7 +21,29 @@ const express = require('express');
 const { Server } = require('socket.io');
 const { Game } = require('./game.js');
 const { Store } = require('./store.js');
-const { CONFIG, syncActiveCharacter } = require('../js/config.js');
+const { CONFIG, syncActiveCharacter, MOONSTONE_PACKS } = require('../js/config.js');
+
+// Achat d'Écailles Lunaires (Stripe) : clé secrète + liens de paiement par
+// pack, fournis plus tard via variables d'environnement. Tant qu'ils sont
+// absents, les fonctionnalités correspondantes répondent juste
+// « indisponible » plutôt que de planter au démarrage.
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || '';
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
+const STRIPE_PAYMENT_LINKS = {
+  small: process.env.STRIPE_PAYMENT_LINK_SMALL || '',
+  medium: process.env.STRIPE_PAYMENT_LINK_MEDIUM || '',
+  large: process.env.STRIPE_PAYMENT_LINK_LARGE || '',
+};
+const stripeClient = STRIPE_SECRET_KEY ? require('stripe')(STRIPE_SECRET_KEY) : null;
+
+function buildCheckoutLink(player, packId) {
+  const pack = MOONSTONE_PACKS.find((p) => p.id === packId);
+  if (!pack) return { ok: false, error: 'Pack inconnu.' };
+  const baseUrl = STRIPE_PAYMENT_LINKS[packId];
+  if (!baseUrl) return { ok: false, error: 'Ce pack n’est pas encore disponible à l’achat.' };
+  const url = baseUrl + (baseUrl.includes('?') ? '&' : '?') + 'client_reference_id=' + encodeURIComponent(player.id);
+  return { ok: true, url };
+}
 
 const ROOT = path.join(__dirname, '..');
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'data', 'wildrift.db');
@@ -144,6 +166,32 @@ const app = express();
 app.use(express.static(ROOT));
 app.get('/health', (req, res) => res.json({ ok: true, players: game.players.size, now: game.now }));
 
+// Webhook Stripe : express.raw() car la vérification de signature a besoin
+// du corps BRUT, avant tout parsing JSON (aucun middleware JSON global
+// n'existe ailleurs dans ce fichier, donc pas de conflit d'ordre ici).
+app.post('/stripe/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+  if (!stripeClient || !STRIPE_WEBHOOK_SECRET) return res.status(503).end();
+  let event;
+  try {
+    event = stripeClient.webhooks.constructEvent(req.body, req.headers['stripe-signature'], STRIPE_WEBHOOK_SECRET);
+  } catch (e) {
+    console.error('Signature Stripe invalide :', e.message);
+    return res.status(400).end();
+  }
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    const accountId = session.client_reference_id;
+    const pack = MOONSTONE_PACKS.find((p) => p.priceCents === session.amount_total);
+    if (!accountId || !pack) {
+      console.error('Webhook Stripe : session non reconnue (client_reference_id=' + accountId + ', montant=' + session.amount_total + ').');
+    } else {
+      const r = game.creditMoonstones(accountId, pack.lunaires);
+      if (!r.ok) console.error('Échec crédit Stripe pour ' + accountId + ' :', r.error);
+    }
+  }
+  res.json({ received: true });
+});
+
 const httpServer = http.createServer(app);
 const io = new Server(httpServer);
 
@@ -229,6 +277,9 @@ io.on('connection', (socket) => {
   socket.on('char:switch', act((d) => game.switchCharacter(player, d.index)));
   socket.on('shop:buySkin', act((d) => game.buySkin(player, String(d.skinId))));
   socket.on('shop:equipSkin', act((d) => game.equipSkin(player, d.skinId ? String(d.skinId) : null)));
+  socket.on('shop:buyPaScroll', act(() => game.buyPaScroll(player)));
+  socket.on('shop:buyGoldPack', act((d) => game.buyGoldPack(player, String(d.packId || ''))));
+  socket.on('shop:checkoutLink', act((d) => buildCheckoutLink(player, String(d.packId || ''))));
   socket.on('cook', act((d) => game.cook(player, String(d.item), Number(d.tier))));
   socket.on('consume', act((d) => game.consume(player, String(d.key))));
   socket.on('trade:request', act((d) => game.requestTrade(player, String(d.targetId))));
@@ -293,12 +344,21 @@ io.on('connection', (socket) => {
   socket.on('castle:claim', act((d) => game.claimCastle(player, String(d.terrain))));
   socket.on('castle:reinforce', act((d) => game.reinforceCastle(player, String(d.terrain))));
   socket.on('castle:repair', act((d) => game.repairCastle(player, String(d.terrain), Number(d.gold))));
+  socket.on('castle:fortify', act((d) => game.fortifyCastle(player, String(d.terrain))));
   socket.on('castle:assault', act((d) => game.createSiege(player, String(d.terrain))));
+  socket.on('castle:craftEngine', act((d) => game.craftSiegeEngine(player, Number(d.tier))));
+  socket.on('siege:deployEngine', act((d) => game.deploySiegeEngine(player, String(d.key), Number(d.tier))));
 
   socket.on('disconnect', () => {
     if (!player) return;
     if (player.tradeId) game.cancelTrade(player);
-    if (sockets.get(player.id) === socket) sockets.delete(player.id);
+    // Une reconnexion (rafraîchissement de page, coupure réseau brève) fait
+    // déjà tourner finishAuth() → online=true sur la NOUVELLE socket avant
+    // que Socket.IO ne déclenche cet évènement pour l'ANCIENNE — sans cette
+    // garde, ce handler tardif effaçait online=true juste posé, laissant le
+    // compte figé « hors ligne » aux yeux de ses amis malgré une session active.
+    if (sockets.get(player.id) !== socket) return;
+    sockets.delete(player.id);
     player.online = false;
     player.lastSeen = Date.now();
     if (game.players.has(player.id)) saveAccountOf(player);

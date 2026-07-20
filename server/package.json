@@ -11,7 +11,8 @@
   },
   "dependencies": {
     "express": "^4.21.2",
-    "socket.io": "^4.8.1"
+    "socket.io": "^4.8.1",
+    "stripe": "^22.3.2"
   },
   "devDependencies": {
     "pngjs": "^7.0.0",

@@ -11,6 +11,7 @@ const os = require('os');
 const fs = require('fs');
 const assert = require('assert');
 const ioc = require('socket.io-client');
+const { CONFIG } = require('../js/config.js');
 
 const PORT = 3123;
 const URL = 'http://localhost:' + PORT;
@@ -109,7 +110,7 @@ function phase2() {
 
   socket.on('init', (d) => {
     assert.strictEqual(d.self.username, NAME, 'compte retrouvé');
-    assert.ok(d.self.pa < 100, 'état du personnage restauré');
+    assert.ok(d.self.pa < CONFIG.PA.START, 'état du personnage restauré');
     console.log('→ connexion mot de passe + état restauré ✔');
     clearTimeout(guard);
     socket.close();

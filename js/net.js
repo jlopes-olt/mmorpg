@@ -193,6 +193,9 @@ class RemoteServer {
   switchCharacter(index) { return this.req('char:switch', { index }); }
   buySkin(skinId) { return this.req('shop:buySkin', { skinId }); }
   equipSkin(skinId) { return this.req('shop:equipSkin', { skinId }); }
+  buyPaScroll() { return this.req('shop:buyPaScroll', {}); }
+  buyGoldPack(packId) { return this.req('shop:buyGoldPack', { packId }); }
+  getCheckoutLink(packId) { return this.req('shop:checkoutLink', { packId }); }
   cook(item, tier) { return this.req('cook', { item, tier }); }
   consume(key) { return this.req('consume', { key }); }
   requestTrade(targetId) { return this.req('trade:request', { targetId }); }
@@ -229,5 +232,8 @@ class RemoteServer {
   claimCastle(terrain) { return this.req('castle:claim', { terrain }); }
   reinforceCastle(terrain) { return this.req('castle:reinforce', { terrain }); }
   repairCastle(terrain, gold) { return this.req('castle:repair', { terrain, gold }); }
+  fortifyCastle(terrain) { return this.req('castle:fortify', { terrain }); }
   assaultCastle(terrain) { return this.req('castle:assault', { terrain }); }
+  craftSiegeEngine(tier) { return this.req('castle:craftEngine', { tier }); }
+  deploySiegeEngine(key, tier) { return this.req('siege:deployEngine', { key, tier }); }
 }

@@ -12,6 +12,9 @@ const {
   CASTLE_TERRAINS, CASTLE_BASE_HP, CASTLE_HP_PER_LEVEL, CASTLE_MAX_LEVEL,
   CASTLE_CLAIM_COST_GOLD, CASTLE_REINFORCE_COST_GOLD, CASTLE_REPAIR_GOLD_PER_HP,
   CASTLE_DAMAGE_PER_ASSAULT, CASTLE_ZONE_GOLD_BONUS,
+  SIEGE_ENGINE_ITEM, SIEGE_ENGINE_RECIPES, SIEGE_ENGINE_FORCE, SIEGE_ENGINE_DAMAGE,
+  CASTLE_FORTIFY_COST_GOLD, CASTLE_FORTIFY_BONUS_PER_LEVEL, stackKey,
+  PREMIUM_CURRENCY, GOLD_PACKS, PA_SCROLL_COST_MOONSTONES, PA_SCROLL_COOLDOWN_MS,
 } = require('../js/config.js');
 
 const g = new Game(CONFIG.WORLD.SEED, null);
@@ -597,7 +600,7 @@ assert.ok(!g.reinforceCastle(alice, 'FORET').ok, 'un non-membre ne peut pas renf
 assert.ok(!g.repairCastle(alice, 'FORET', 999).ok, 'un non-membre ne peut pas le réparer non plus');
 
 assert.ok(!g.reinforceCastle(bob, 'FORET').ok, 'renfort refusé sans le bois requis');
-bob.inventory.BOIS_1 = 40;   // Forêt -> BOIS, niveau 2 -> tier 1 × 40 (voir CASTLE_REINFORCE_RESOURCES)
+bob.inventory.BOIS_1 = 60;   // Forêt -> BOIS, niveau 2 -> tier 1 × 60 (voir CASTLE_REINFORCE_RESOURCES)
 const goldBeforeReinforce = bob.gold;
 assert.ok(g.reinforceCastle(bob, 'FORET').ok, 'renfort par un membre (or + ressources)');
 foretCastle = g.castleOf('FORET');
@@ -608,14 +611,16 @@ assert.ok(!bob.inventory.BOIS_1, 'le bois requis est bien consommé');
 
 foretCastle.hp -= 120;   // simule des dégâts subis précédemment
 assert.ok(!g.repairCastle(bob, 'FORET', 999999).ok, 'réparation refusée sans bois en stock');
-bob.inventory.BOIS_1 = 20;   // 120 PS / 10 PS-par-unité (CASTLE_REPAIR_HP_PER_RESOURCE) = 12 unités requises
+// Château niveau 2 : la réparation suit désormais le niveau actuel (T2), pas un tier fixe.
+bob.inventory.BOIS_2 = 20;   // 120 PS / 10 PS-par-unité (CASTLE_REPAIR_HP_PER_RESOURCE) = 12 unités requises
 const goldBeforeRepair = bob.gold;
 const repairRes = g.repairCastle(bob, 'FORET', 999999);
 assert.ok(repairRes.ok && repairRes.healed === 120, 'réparation jusqu’à pleine structure');
 assert.strictEqual(g.castleOf('FORET').hp, g.castleOf('FORET').hpMax, 'structure pleinement restaurée');
 assert.strictEqual(bob.gold, goldBeforeRepair - repairRes.cost, 'coût de réparation en or prélevé');
 assert.strictEqual(repairRes.resourceCost, 12, 'coût en ressources proportionnel aux PS rendus');
-assert.strictEqual(bob.inventory.BOIS_1, 8, 'seul le bois nécessaire est consommé (20 - 12)');
+assert.strictEqual(repairRes.resourceTier, 2, 'le tier de réparation suit le niveau actuel du château (2)');
+assert.strictEqual(bob.inventory.BOIS_2, 8, 'seul le bois du bon tier est consommé (20 - 12)');
 assert.ok(!g.repairCastle(bob, 'FORET', 999999).ok, 'réparer une structure déjà pleine échoue');
 
 // --- Siège : Alice fonde sa propre guilde et assiège le château des Faucons ---
@@ -723,6 +728,91 @@ assert.strictEqual(aliceReportEntry.data.defenseForce, bobReportEntry.data.defen
 g.rng = Math.random;
 console.log('Défense active : alerte des défenseurs ✔, bonus de présence ✔, rapport différencié attaquant/défenseur ✔');
 
+// --- Fortifications : investissement défensif séparé du renfort, sans joueurs présents ---
+const montagneCastleTile = g.castleTileFor('MONTAGNE');
+assert.ok(montagneCastleTile, 'un château existe bien en Montagne');
+bob.gold = 999999;
+bob.mapId = 'world'; bob.pos = { x: montagneCastleTile.x, y: montagneCastleTile.y }; bob.status = 'IDLE';
+assert.ok(g.claimCastle(bob, 'MONTAGNE').ok, 'Bob fonde le château de Montagne');
+
+assert.ok(!g.fortifyCastle(bob, 'MONTAGNE').ok, 'fortification refusée sans minerai en stock');
+bob.inventory.MINERAI_1 = 60;   // Montagne -> MINERAI, fortification niveau 1 -> tier 1 × 60
+const garrisonBeforeFortify = g.castleDefenseForce(g.castleOf('MONTAGNE'));
+const goldBeforeFortify = bob.gold;
+const fortRes = g.fortifyCastle(bob, 'MONTAGNE');
+assert.ok(fortRes.ok && fortRes.fortLevel === 1, 'première fortification acceptée');
+assert.strictEqual(bob.gold, goldBeforeFortify - CASTLE_FORTIFY_COST_GOLD, 'coût en or prélevé');
+assert.ok(!bob.inventory.MINERAI_1, 'le minerai requis est bien consommé');
+const garrisonAfterFortify = g.castleDefenseForce(g.castleOf('MONTAGNE'));
+assert.strictEqual(Math.round(garrisonAfterFortify - garrisonBeforeFortify), CASTLE_FORTIFY_BONUS_PER_LEVEL,
+  'la fortification augmente la garnison sans joueurs présents');
+console.log('Fortifications : coût ressources + or ✔, bonus de garnison passif ✔');
+
+// --- Engins de siège : fabrication à la Capitale, déploiement en siège (1/personne) ---
+alice.gold = 999999;
+alice.mapId = 'world'; alice.pos = { x: 5, y: 5 }; alice.status = 'IDLE';   // pas à la Capitale
+assert.ok(!g.craftSiegeEngine(alice, 1).ok, 'fabrication refusée hors de la Capitale');
+alice.pos = { x: 0, y: 0 };
+assert.ok(!g.craftSiegeEngine(alice, 99).ok, 'tier d’engin invalide refusé');
+assert.ok(!g.craftSiegeEngine(alice, 1).ok, 'fabrication refusée sans les ressources');
+alice.inventory.BOIS_1 = 25; alice.inventory.MINERAI_1 = 15; alice.inventory.PLANTE_1 = 10;
+const goldBeforeCraft = alice.gold;
+const craftRes = g.craftSiegeEngine(alice, 1);
+assert.ok(craftRes.ok, 'engin T1 fabriqué');
+assert.strictEqual(alice.inventory[stackKey(SIEGE_ENGINE_ITEM, 1)], 1, 'engin en inventaire');
+assert.ok(!alice.inventory.BOIS_1 && !alice.inventory.MINERAI_1 && !alice.inventory.PLANTE_1, 'ressources de la recette consommées');
+assert.strictEqual(alice.gold, goldBeforeCraft - SIEGE_ENGINE_RECIPES[1].gold, 'or de la recette débité');
+console.log('Engins de siège : fabrication à la Capitale ✔, recette bois/minerai/plante/or ✔');
+
+const montagneSiegeKey = 'siege:MONTAGNE';
+assert.ok(!g.deploySiegeEngine(carl, montagneSiegeKey, 1).ok, 'déploiement refusé : le siège n’existe pas encore');
+alice.pos = { x: montagneCastleTile.x, y: montagneCastleTile.y }; alice.pa = 50; alice.hp = maxHp(alice); alice.status = 'IDLE';
+assert.ok(g.createSiege(alice, 'MONTAGNE').ok, 'Loups assiège le château (fortifié) de Montagne');
+
+assert.ok(!g.deploySiegeEngine(carl, montagneSiegeKey, 1).ok, 'déploiement refusé : Carl n’a pas rejoint ce siège');
+const forceBeforeEngine = g.teamForce(g.raids.get(montagneSiegeKey));
+const deployRes = g.deploySiegeEngine(alice, montagneSiegeKey, 1);
+assert.ok(deployRes.ok && deployRes.tier === 1, 'engin T1 déployé par Alice');
+assert.ok(!alice.inventory[stackKey(SIEGE_ENGINE_ITEM, 1)], 'l’engin déployé est consommé du stock');
+assert.ok(!g.deploySiegeEngine(alice, montagneSiegeKey, 1).ok, 'un second engin par la même personne est refusé (1/personne max)');
+const forceAfterEngine = g.teamForce(g.raids.get(montagneSiegeKey));
+assert.strictEqual(forceAfterEngine - forceBeforeEngine, SIEGE_ENGINE_FORCE[1], 'l’engin ajoute sa force au calcul en direct (pas 1 pour 1 avec un joueur)');
+console.log('Engins de siège : 1 par personne maximum ✔, force ajoutée au calcul de bataille ✔');
+
+// Résolution perdue : les dégâts d'engin s'appliquent quand même, mais ne peuvent
+// jamais, à eux seuls, faire tomber le château (plancher à 1 PS).
+g.castleOf('MONTAGNE').hp = SIEGE_ENGINE_DAMAGE[1];
+g.rng = () => 0.999;   // assaut repoussé à coup sûr
+sent.length = 0;
+assert.ok(g.startRaidNow(alice, montagneSiegeKey).ok);
+g.tick(300);
+let montagneResult = sent.find((m) => m.ev === 'siegeResult' && m.id === alice.id).data;
+assert.ok(!montagneResult.victory, 'assaut repoussé (forcé)');
+assert.strictEqual(montagneResult.engineCount, 1, 'un engin comptabilisé dans le rapport');
+assert.strictEqual(montagneResult.engineDamage, SIEGE_ENGINE_DAMAGE[1], 'dégâts garantis de l’engin reportés');
+assert.strictEqual(g.castleOf('MONTAGNE').hp, 1, 'dégâts d’engin appliqués malgré l’échec, plancher à 1 PS (jamais 0)');
+assert.strictEqual(g.castleOf('MONTAGNE').ownerGuildId, bob.guildId, 'pas de prise du château sur un échec, même au plancher de PS');
+console.log('Engins de siège : dégâts garantis même en cas d’échec ✔, jamais de prise sans victoire au combat ✔');
+
+// Résolution gagnée : dégâts de combat + engin cumulés, et la prise remet la fortification à 0
+alice.pos = { x: 0, y: 0 }; alice.status = 'IDLE';
+alice.inventory.BOIS_1 = 25; alice.inventory.MINERAI_1 = 15; alice.inventory.PLANTE_1 = 10;
+assert.ok(g.craftSiegeEngine(alice, 1).ok, 'second engin fabriqué à la Capitale');
+alice.pos = { x: montagneCastleTile.x, y: montagneCastleTile.y }; alice.pa = 50; alice.hp = maxHp(alice); alice.status = 'IDLE';
+assert.ok(g.createSiege(alice, 'MONTAGNE').ok, 'second lobby de siège');
+assert.ok(g.deploySiegeEngine(alice, montagneSiegeKey, 1).ok, 'engin redéployé pour ce nouveau siège');
+g.castleOf('MONTAGNE').hp = CASTLE_DAMAGE_PER_ASSAULT + SIEGE_ENGINE_DAMAGE[1];   // pile de quoi tomber à 0
+g.rng = () => 0;   // assaut réussi à coup sûr
+sent.length = 0;
+assert.ok(g.startRaidNow(alice, montagneSiegeKey).ok);
+g.tick(300);
+montagneResult = sent.find((m) => m.ev === 'siegeResult' && m.id === alice.id).data;
+assert.ok(montagneResult.victory && montagneResult.captured, 'assaut gagné : dégâts combat + engin cumulés font tomber le château');
+assert.strictEqual(g.castleOf('MONTAGNE').ownerGuildId, alice.guildId, 'château conquis par les Loups');
+assert.strictEqual(g.castleOf('MONTAGNE').fortLevel, 0, 'les fortifications de l’ancien propriétaire tombent avec lui');
+g.rng = Math.random;
+console.log('Engins de siège : dégâts combat + engin cumulés à la victoire ✔, fortification remise à 0 à la conquête ✔');
+
 // --- Bonus de zone : l'or looté en Forêt est bonifié pour la guilde propriétaire ---
 let foretMob = null;
 for (const t of g.tiles.values()) {
@@ -745,6 +835,73 @@ const zoneResult = sent.filter((m) => m.ev === 'result' && m.id === alice.id).ma
 const expectedGold = Math.ceil((3 + foretMob.content.tier * 4) * CASTLE_ZONE_GOLD_BONUS);
 assert.strictEqual(zoneResult.gold, expectedGold, 'or bonifié de +' + Math.round((CASTLE_ZONE_GOLD_BONUS - 1) * 100) + ' % pour la guilde propriétaire de la zone');
 console.log('Bonus de zone : or bonifié pour la guilde propriétaire ✔');
+
+// --- Parchemin d'Endurance : achat en inventaire (sans limite), utilisation cooldownée 1-2/jour ---
+alice.status = 'IDLE';
+alice.pa = 10;
+alice[PREMIUM_CURRENCY.key] = 2;
+const scrollKey = stackKey('PARCHEMIN_ENDURANCE', 1);
+delete alice.inventory[scrollKey];
+let paScrollRes = g.buyPaScroll(alice);
+assert.ok(!paScrollRes.ok, 'achat refusé sans assez de monnaie premium');
+alice[PREMIUM_CURRENCY.key] = PA_SCROLL_COST_MOONSTONES * 3;
+paScrollRes = g.buyPaScroll(alice);
+assert.ok(paScrollRes.ok, 'achat réussi avec assez de monnaie premium');
+assert.strictEqual(alice.inventory[scrollKey], 1, 'le parchemin est stocké en inventaire, pas utilisé immédiatement');
+assert.strictEqual(alice.pa, 10, 'l’achat seul ne recharge pas l’endurance');
+paScrollRes = g.buyPaScroll(alice);
+assert.ok(paScrollRes.ok && alice.inventory[scrollKey] === 2, 'on peut en acheter plusieurs d’avance, sans limite à l’achat');
+
+alice.lastPaScrollAt = -PA_SCROLL_COOLDOWN_MS;   // hors cooldown, quel que soit g.now
+let useRes = g.consume(alice, scrollKey);
+assert.ok(useRes.ok, 'utilisation réussie hors cooldown');
+assert.strictEqual(alice.pa, CONFIG.PA.MAX, 'endurance rechargée au maximum à l’utilisation');
+assert.strictEqual(alice.inventory[scrollKey], 1, 'un seul parchemin consommé');
+
+alice.pa = 5;   // redescend l'endurance pour isoler le test de cooldown
+useRes = g.consume(alice, scrollKey);
+assert.ok(!useRes.ok, 'refuse en plein cooldown malgré endurance basse et parchemin en stock');
+assert.strictEqual(alice.inventory[scrollKey], 1, 'le parchemin n’est pas consommé sur un essai refusé');
+g.now += PA_SCROLL_COOLDOWN_MS + 1;
+useRes = g.consume(alice, scrollKey);
+assert.ok(useRes.ok, 'de nouveau disponible une fois le cooldown écoulé');
+assert.strictEqual(alice.inventory[scrollKey], undefined, 'dernier parchemin consommé, la pile est retirée de l’inventaire');
+
+g.now += PA_SCROLL_COOLDOWN_MS + 1;
+assert.ok(!g.consume(alice, scrollKey).ok, 'refuse sans parchemin en stock');
+alice[PREMIUM_CURRENCY.key] = PA_SCROLL_COST_MOONSTONES;
+g.buyPaScroll(alice);
+useRes = g.consume(alice, scrollKey);
+assert.ok(!useRes.ok, 'refuse d’utiliser si l’endurance est déjà au maximum');
+assert.strictEqual(alice.inventory[scrollKey], 1, 'le parchemin n’est pas consommé si l’endurance était déjà pleine');
+console.log('Parchemin d’Endurance : achat en inventaire sans limite ✔, utilisation recharge au maximum ✔, cooldown 1-2/jour à l’usage ✔, jamais consommé sur un refus ✔');
+
+// --- Packs d'or : conversion atomique des Écailles Lunaires en or ---
+const goldPack = GOLD_PACKS[1];
+const goldBeforePack = alice.gold;
+alice[PREMIUM_CURRENCY.key] = goldPack.moonstones - 1;
+let goldPackRes = g.buyGoldPack(alice, goldPack.id);
+assert.ok(!goldPackRes.ok, 'pack d’or refusé sans assez d’Écailles Lunaires');
+assert.strictEqual(alice.gold, goldBeforePack, 'aucun or crédité après un refus');
+alice[PREMIUM_CURRENCY.key] = goldPack.moonstones + 4;
+goldPackRes = g.buyGoldPack(alice, goldPack.id);
+assert.ok(goldPackRes.ok, 'pack d’or acheté');
+assert.strictEqual(alice[PREMIUM_CURRENCY.key], 4, 'coût premium débité exactement');
+assert.strictEqual(alice.gold, goldBeforePack + goldPack.gold, 'or crédité immédiatement');
+assert.ok(!g.buyGoldPack(alice, 'pack_inconnu').ok, 'pack d’or inconnu refusé');
+console.log('Packs d’or : débit Écailles Lunaires + crédit or atomiques ✔');
+
+// --- Crédit Stripe (webhook) : appliqué même hors ligne, comptes/montants invalides refusés ---
+alice.online = false;
+const balanceBefore = alice[PREMIUM_CURRENCY.key];
+const creditRes = g.creditMoonstones(alice.id, 45);
+assert.ok(creditRes.ok && creditRes.total === balanceBefore + 45, 'crédit appliqué même hors ligne');
+assert.strictEqual(alice[PREMIUM_CURRENCY.key], balanceBefore + 45, 'solde mis à jour');
+assert.ok(!g.creditMoonstones('p_inconnu', 10).ok, 'compte introuvable refusé');
+assert.ok(!g.creditMoonstones(alice.id, 0).ok, 'montant nul refusé');
+assert.ok(!g.creditMoonstones(alice.id, -5).ok, 'montant négatif refusé');
+alice.online = true;
+console.log('Crédit Stripe (webhook) : appliqué même hors ligne ✔, compte/montant invalides refusés ✔');
 
 // --- Brouillard de guerre (compte) : même carte explorée quel que soit l'appareil ---
 assert.deepStrictEqual(alice.exploredWorld, [], 'aucune tuile explorée par défaut');

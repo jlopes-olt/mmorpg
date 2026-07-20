@@ -16,14 +16,17 @@ const CONFIG = {
   JOIN_RADIUS: 6,      // distance max pour rejoindre un lobby de raid
   SAFE_RADIUS: 3,      // zone sans monstre autour de la Capitale
 
-  PA: { MAX: 100, START: 60, REGEN_MS: 60000 },   // +1 PA / min
+  // Plafond pensé pour 1-3 sessions/jour : un réservoir vide se remplit en
+  // 12h (720 min à +1/min), donc personne n'a besoin de se reconnecter
+  // toutes les 2-3h pour ne pas « perdre » de PA en dépassant le plafond.
+  PA: { MAX: 720, START: 720, REGEN_MS: 60000 },   // +1 PA / min
   HP: { REGEN_MS: 30000 },                         // +1 PV / 30 s
 
   COSTS: {
     MOVE: 1,
     HARVEST: 2,
     RAID: 5,                                       // créer OU rejoindre un lobby
-    UPGRADE: { 1: 5, 2: 10, 3: 25, 4: 50, 5: 100 }, // PA par tier cible
+    UPGRADE: { 1: 5, 2: 10, 3: 25, 4: 50, 5: 100, 6: 280 }, // PA par tier cible
   },
 
   HARVEST_MS: 3000,
@@ -128,22 +131,96 @@ const CASTLE_ZONE_GOLD_BONUS = 1.15;
 // ressource du biome du château (bois en Forêt, minerai en Montagne, etc.),
 // pour ancrer le château dans son terrain plutôt qu'un simple sink d'or.
 const CASTLE_TERRAIN_RESOURCE = { FORET: 'BOIS', PLAINE: 'PLANTE', MONTAGNE: 'MINERAI', MARECAGE: 'INGREDIENT' };
-// Renfort : coût fixe par niveau cible (comme les recettes de forge).
+// Renfort : coût fixe par niveau cible (comme les recettes de forge) — le
+// tier de ressource suit le niveau ACTUEL du château (fort niveau 1 → bois
+// T1, fort niveau 2 → bois T2, etc.).
+// Quantités relevées en même temps que la courbe de progression individuelle
+// (voir UPGRADE_RECIPES) — sinon un château deviendrait relativement trivial
+// à monter au max une fois l'équipement personnel bien plus coûteux. Croissance
+// plus douce que côté solo : c'est un effort de guilde, pas d'un seul joueur.
 const CASTLE_REINFORCE_RESOURCES = {
-  2: { tier: 1, qty: 40 },
-  3: { tier: 2, qty: 50 },
-  4: { tier: 3, qty: 60 },
-  5: { tier: 4, qty: 80 },
+  2: { tier: 1, qty: 60 },
+  3: { tier: 2, qty: 150 },
+  4: { tier: 3, qty: 350 },
+  5: { tier: 4, qty: 800 },
 };
-// Réparation : entretien courant, toujours au tier 1, proportionnel aux PS rendus.
-const CASTLE_REPAIR_RESOURCE_TIER = 1;
+// Réparation : entretien courant, même principe — le tier suit le niveau
+// actuel du château, proportionnel aux PS rendus (1 unité pour 10 PS).
+function castleRepairResourceTier(level) {
+  return Math.max(1, Math.min(CASTLE_MAX_LEVEL, Number(level) || 1));
+}
 const CASTLE_REPAIR_HP_PER_RESOURCE = 10;
+
+/* Engins de siège : objet consommable fabriqué à l'avance (Capitale), déployé
+ * (1 par personne max) en rejoignant un siège. Ajoute de la force au combat —
+ * une fraction du poids d'un joueur du même tier, jamais 1 pour 1 — ET des
+ * dégâts de structure garantis, indépendants du jet de combat (une guilde
+ * progresse même si l'assaut au corps-à-corps échoue). Recette universelle
+ * (bois + minerai + plante), pas liée au château visé : on prépare l'attaque
+ * en amont, on ne la matérialise pas sur place. */
+const SIEGE_ENGINE_ITEM = 'ENGIN_SIEGE';
+const SIEGE_ENGINE_RECIPES = {
+  1: { BOIS_1: 25, MINERAI_1: 15, PLANTE_1: 10, gold: 50 },
+  2: { BOIS_2: 30, MINERAI_2: 20, PLANTE_2: 15, gold: 100 },
+  3: { BOIS_3: 35, MINERAI_3: 25, PLANTE_3: 20, gold: 175 },
+  4: { BOIS_4: 40, MINERAI_4: 30, PLANTE_4: 25, gold: 275 },
+  5: { BOIS_5: 50, MINERAI_5: 35, PLANTE_5: 30, gold: 400 },
+};
+const SIEGE_ENGINE_FORCE = { 1: 20, 2: 32, 3: 44, 4: 56, 5: 70 };
+const SIEGE_ENGINE_DAMAGE = { 1: 40, 2: 60, 3: 80, 4: 100, 5: 130 };
+const SIEGE_ENGINES = {
+  1: { label: 'Bélier léger', asset: 'assets/siege_engines/engin_siege_t1_belier.png' },
+  2: { label: 'Baliste', asset: 'assets/siege_engines/engin_siege_t2_baliste.png' },
+  3: { label: 'Catapulte', asset: 'assets/siege_engines/engin_siege_t3_catapulte.png' },
+  4: { label: 'Tour d’assaut', asset: 'assets/siege_engines/engin_siege_t4_tour_assaut.png' },
+  5: { label: 'Trébuchet royal', asset: 'assets/siege_engines/engin_siege_t5_trebuchet_royal.png' },
+};
+
+/* Fortifications : investissement défensif séparé du renfort (niveau), qui
+ * augmente la garnison de base SANS nécessiter de joueurs présents — une
+ * guilde peut rendre son château dur à prendre même hors ligne. Même
+ * principe de recette que le renfort (ressource du biome, tier = niveau cible). */
+const CASTLE_MAX_FORT_LEVEL = 5;
+const CASTLE_FORTIFY_COST_GOLD = 300;
+const CASTLE_FORTIFY_BONUS_PER_LEVEL = 80;
+const CASTLE_FORTIFY_RESOURCES = {
+  1: { tier: 1, qty: 60 },
+  2: { tier: 2, qty: 150 },
+  3: { tier: 3, qty: 350 },
+  4: { tier: 4, qty: 700 },
+  5: { tier: 5, qty: 1400 },
+};
 
 const PREMIUM_CURRENCY = {
   key: 'moonstones',
-  label: 'Lunaires',
+  label: 'Écailles Lunaires',
   icon: '✦',
 };
+
+// Packs achetables en argent réel (Stripe) — prix/quantités fixés ici pour
+// que le client puisse afficher les cartes ; les liens de paiement et clés
+// Stripe restent eux exclusivement côté serveur (variables d'environnement).
+// Le taux de bonus croît avec la taille du pack (pratique standard des IAP).
+const MOONSTONE_PACKS = [
+  { id: 'small', lunaires: 15, priceCents: 299, priceLabel: '2,99 €', bonusLabel: null },
+  { id: 'medium', lunaires: 45, priceCents: 799, priceLabel: '7,99 €', bonusLabel: '+13 %' },
+  { id: 'large', lunaires: 130, priceCents: 1999, priceLabel: '19,99 €', bonusLabel: '+30 %' },
+];
+
+/* Conversion premium → or. Les gros packs offrent un rendement légèrement
+ * meilleur, sans rendre obsolètes les gains obtenus en jouant. */
+const GOLD_PACKS = [
+  { id: 'pouch', gold: 750, moonstones: 5, bonusLabel: null },
+  { id: 'chest', gold: 2500, moonstones: 15, bonusLabel: '+11 %' },
+  { id: 'hoard', gold: 7500, moonstones: 40, bonusLabel: '+25 %' },
+];
+
+// Parchemin d'Endurance : recharge les PA au maximum instantanément, payé en
+// Écailles Lunaires (monnaie premium plutôt que l'or, pour ne pas dépendre
+// d'une économie d'or qui peut devenir abondante) — un cooldown borne
+// volontairement l'usage à 1-2 fois par jour pour éviter le pay-to-win.
+const PA_SCROLL_COST_MOONSTONES = 5;
+const PA_SCROLL_COOLDOWN_MS = 12 * 60 * 60 * 1000;
 
 const SKIN_ASSET_REV = '20260719b';
 
@@ -174,6 +251,28 @@ const CLASS_GEAR = {
   CERF_DRUIDE:          { weapon: 'Sceptre', armor: 'Cuir' },
   CORBEAU_NECROMANCIEN: { weapon: 'Faux',    armor: 'Étoffe' },
 };
+
+/* Visuels communs au profil et à l'atelier. L'objet reste le même quand son
+ * tier progresse : le badge T0→T6 porte l'information d'évolution. */
+const EQUIPMENT_ASSETS = {
+  weapon: {
+    'Épée': 'assets/equipment/arme_epee_paladin.png',
+    'Hache': 'assets/equipment/arme_hache_guerrier.png',
+    'Dagues': 'assets/equipment/arme_dagues_voleur.png',
+    'Bâton': 'assets/equipment/arme_baton_magicien.png',
+    'Sceptre': 'assets/equipment/arme_sceptre_druide.png',
+    'Faux': 'assets/equipment/arme_faux_necromancien.png',
+  },
+  armor: {
+    'Plaques': 'assets/equipment/armure_plaques.png',
+    'Cuir': 'assets/equipment/armure_cuir.png',
+    'Étoffe': 'assets/equipment/armure_etoffe.png',
+  },
+};
+
+function equipmentAsset(slot, type) {
+  return (EQUIPMENT_ASSETS[slot] && EQUIPMENT_ASSETS[slot][type]) || '';
+}
 
 const SKIN_SHOP_ITEMS = [
   {
@@ -326,6 +425,11 @@ const CONSUMABLES = {
   RAGOUT:      { label: 'Ragoût du chasseur', icon: '🍲', kind: 'buff',    role: 'Offensif' },
   BOUILLON:    { label: 'Bouillon d’écailles', icon: '🛡️', kind: 'buff',    role: 'Défensif' },
   POTION_SEVE: { label: 'Potion de sève',      icon: '❤️', kind: 'instant', role: 'Soin' },
+  // Acheté à la Boutique contre des Écailles Lunaires (pas cuisiné à la
+  // Marmite comme les trois plats ci-dessus) — stocké en inventaire, utilisé
+  // quand on veut. Le cooldown (voir PA_SCROLL_COOLDOWN_MS) s'applique à
+  // l'UTILISATION, pas à l'achat : on peut en garder plusieurs en réserve.
+  PARCHEMIN_ENDURANCE: { label: 'Parchemin d’Endurance', icon: '📜', kind: 'pa_refill', role: 'Recharge PA' },
 };
 
 /* Effets par tier : RAGOUT = +puissance, BOUILLON = −usure de PV,
@@ -351,6 +455,10 @@ const CONSUMABLE_RECIPES = {
 };
 
 function consumableDesc(type, tier) {
+  if (type === 'PARCHEMIN_ENDURANCE') {
+    return 'Recharge l’Endurance au maximum (' + CONFIG.PA.MAX + ' PA) — 1 utilisation toutes les ' +
+      Math.round(PA_SCROLL_COOLDOWN_MS / 3600000) + ' h maximum';
+  }
   const pct = Math.round(CONSUMABLE_EFFECTS[type][tier] * 100);
   if (type === 'RAGOUT') return '+' + pct + ' % de puissance pendant ' + BUFF_COMBATS + ' combats';
   if (type === 'BOUILLON') return '−' + pct + ' % d’usure de PV pendant ' + BUFF_COMBATS + ' combats';
@@ -399,7 +507,9 @@ const TERRAINS = {
 const TIER_COLORS = { 0: '#6f7a87', 1: '#9aa5b1', 2: '#58b368', 3: '#4a9fd8', 4: '#a86fd1', 5: '#e8a33f', 6: '#d66a4a' };
 
 /* XP cumulée requise pour atteindre le niveau (index = niveau - 1) */
-const XP_LEVELS = [0, 100, 300, 700, 1500];
+// Seuils cumulés — même principe que les quantités de récolte : T1-T2
+// rapides, puis ça se corse fort. Palier 6 = maîtrise/récolte/équipement T6.
+const XP_LEVELS = [0, 90, 350, 1300, 4500, 15000];
 
 function levelFromXp(xp) {
   let lvl = 1;
@@ -410,20 +520,29 @@ function levelFromXp(xp) {
 }
 
 /* Recettes d'amélioration — une arme/armure Tn se craft avec des ressources Tn. */
+// Courbe volontairement exponentielle (T1 très rapide → T5 dur), simulée
+// pour atterrir sur plusieurs jours de jeu optimisé pour tout maxer sur un
+// seul personnage (récolte + maîtrise + arme + armure). Le T6 est à part :
+// exclusif aux ressources spéciales de donjon (BOIS_ANCIEN/MINERAI_RUNIQUE/
+// FLEUR_ASTRALE), donc plus dur en pratique qu'un simple multiplicateur de
+// quantité ne le montre (nœuds limités, repousse, monstres T6 costauds —
+// d'où l'intérêt d'y aller en groupe).
 const UPGRADE_RECIPES = {
   weapon: {
     1: { BOIS_1: 20, MINERAI_1: 10 },
-    2: { MINERAI_2: 25, BOIS_2: 15 },
-    3: { MINERAI_3: 30, PLANTE_3: 20 },
-    4: { MINERAI_4: 40, PLANTE_4: 25 },
-    5: { MINERAI_5: 50, PLANTE_5: 30 },
+    2: { MINERAI_2: 63, BOIS_2: 38 },
+    3: { MINERAI_3: 180, PLANTE_3: 120 },
+    4: { MINERAI_4: 520, PLANTE_4: 325 },
+    5: { MINERAI_5: 1150, PLANTE_5: 690 },
+    6: { MINERAI_RUNIQUE_6: 70, FLEUR_ASTRALE_6: 45 },
   },
   armor: {
     1: { MINERAI_1: 15, PLANTE_1: 15 },
-    2: { BOIS_2: 20, PLANTE_2: 20 },
-    3: { BOIS_3: 25, MINERAI_3: 25 },
-    4: { BOIS_4: 30, MINERAI_4: 35 },
-    5: { BOIS_5: 36, MINERAI_5: 42 },
+    2: { BOIS_2: 50, PLANTE_2: 50 },
+    3: { BOIS_3: 150, MINERAI_3: 150 },
+    4: { BOIS_4: 390, MINERAI_4: 455 },
+    5: { BOIS_5: 828, MINERAI_5: 966 },
+    6: { BOIS_ANCIEN_6: 65, MINERAI_RUNIQUE_6: 75 },
   },
 };
 
@@ -561,15 +680,18 @@ const MONSTER_EMOJI = { 1: '🐺', 2: '🐻', 3: '👻', 4: '🦎', 5: '🐉', 6
 /* Utilisable côté Node (backend) comme côté navigateur */
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    CONFIG, CLASSES, CLASS_GEAR, MAX_CHAR_SLOTS, RESOURCES, MONSTERS, MONSTER_FORCE,
+    CONFIG, CLASSES, CLASS_GEAR, EQUIPMENT_ASSETS, MAX_CHAR_SLOTS, RESOURCES, MONSTERS, MONSTER_FORCE,
     CASTLE_TERRAINS, CASTLE_BASE_HP, CASTLE_HP_PER_LEVEL, CASTLE_MAX_LEVEL,
     CASTLE_CLAIM_COST_GOLD, CASTLE_REINFORCE_COST_GOLD, CASTLE_REPAIR_GOLD_PER_HP,
     CASTLE_DAMAGE_PER_ASSAULT, CASTLE_ZONE_GOLD_BONUS,
-    CASTLE_TERRAIN_RESOURCE, CASTLE_REINFORCE_RESOURCES, CASTLE_REPAIR_RESOURCE_TIER, CASTLE_REPAIR_HP_PER_RESOURCE,
+    CASTLE_TERRAIN_RESOURCE, CASTLE_REINFORCE_RESOURCES, castleRepairResourceTier, CASTLE_REPAIR_HP_PER_RESOURCE,
+    SIEGE_ENGINE_ITEM, SIEGE_ENGINE_RECIPES, SIEGE_ENGINE_FORCE, SIEGE_ENGINE_DAMAGE, SIEGE_ENGINES,
+    CASTLE_MAX_FORT_LEVEL, CASTLE_FORTIFY_COST_GOLD, CASTLE_FORTIFY_BONUS_PER_LEVEL, CASTLE_FORTIFY_RESOURCES,
     TERRAINS, TIER_COLORS, XP_LEVELS, UPGRADE_RECIPES, SPRITE_CELLS,
     RESOURCE_EMOJI, MONSTER_EMOJI, CHARACTER_FIELDS,
-    PREMIUM_CURRENCY, SKIN_SHOP_ITEMS, SKIN_BY_ID, SKIN_ASSET_REV, CLASS_SKIN_SCALE, CLASS_BASE_SKINS,
-    skinFor, skinAssetUrl, classSkinScale, baseSkinAsset,
+    PREMIUM_CURRENCY, MOONSTONE_PACKS, GOLD_PACKS, PA_SCROLL_COST_MOONSTONES, PA_SCROLL_COOLDOWN_MS,
+    SKIN_SHOP_ITEMS, SKIN_BY_ID, SKIN_ASSET_REV, CLASS_SKIN_SCALE, CLASS_BASE_SKINS,
+    skinFor, skinAssetUrl, classSkinScale, baseSkinAsset, equipmentAsset,
     levelFromXp, playerForce, maxHp, hpLossReduction, stackKey, parseStackKey, resourceFamily,
     newCharacter, syncActiveCharacter, applyCharacter, rollGoldLoot,
     combatPower, teamPowerOf, winChance,

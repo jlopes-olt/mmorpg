@@ -13,9 +13,41 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="stylesheet" href="css/style.css?v=20260719-tile-ux-castle-cost-1">
+  <link rel="stylesheet" href="css/style.css?v=20260720-scroll-cooldown-1">
 </head>
 <body>
+  <div id="desktopLayout">
+  <aside id="desktopLeft" class="desktop-rail desktop-rail-left" aria-label="Aventurier et minimap">
+    <section class="desktop-panel desktop-profile-panel">
+      <div class="desktop-panel-head">
+        <div>
+          <span class="desktop-panel-kicker">Aventurier</span>
+          <h2>Profil</h2>
+        </div>
+        <button id="desktopProfileOpen" class="desktop-panel-link">Détails</button>
+      </div>
+      <div id="desktopProfileBody" class="desktop-profile-body"></div>
+    </section>
+    <section class="desktop-panel desktop-map-panel">
+      <div class="desktop-panel-head">
+        <div>
+          <span class="desktop-panel-kicker">Exploration</span>
+          <h2>Minimap</h2>
+        </div>
+        <button id="desktopMapOpen" class="desktop-panel-link">Agrandir</button>
+      </div>
+      <div class="desktop-minimap-wrap">
+        <canvas id="desktopMinimap" width="440" height="440"></canvas>
+      </div>
+      <div class="desktop-map-legend">
+        <span><i class="legend-mark legend-capital"></i>Capitale</span>
+        <span><i class="legend-mark legend-village"></i>Village</span>
+        <span><i class="legend-mark legend-dungeon"></i>Donjon</span>
+        <span><i class="legend-mark legend-me"></i>Vous</span>
+      </div>
+    </section>
+  </aside>
+
   <div id="app">
     <div id="splash">
       <div class="splash-inner">
@@ -72,6 +104,7 @@
     <div id="lobbyBanner" class="hidden">
       <span id="lobbyText"></span>
       <span id="lobbyChance" class="hidden"></span>
+      <button id="lobbyDeployEngine" class="hidden">⚙ Déployer un engin</button>
       <button id="lobbyStart" class="hidden">⚡ Lancer le combat maintenant</button>
     </div>
     <div id="toasts"></div>
@@ -124,16 +157,29 @@
     </div>
   </div>
 
+  <aside id="desktopRight" class="desktop-rail desktop-rail-right" aria-label="Panneau social">
+    <section class="desktop-panel desktop-social-panel">
+      <div class="desktop-panel-head">
+        <div>
+          <span class="desktop-panel-kicker">Communauté</span>
+          <h2>Social</h2>
+        </div>
+        <span class="desktop-live-dot" title="Discussion en direct"></span>
+      </div>
+      <div id="desktopSocialBody" class="desktop-social-body"></div>
+    </section>
+  </aside>
+  </div>
+
   <!-- Fourni par le backend Node ; échoue silencieusement en local pur
        (file:// / artifact) et le jeu bascule alors en simulation solo. -->
   <script src="/socket.io/socket.io.js"></script>
-  <script src="js/config.js?v=20260719-tile-ux-castle-cost-1"></script>
-  <script src="js/world.js?v=20260719-tile-ux-castle-cost-1"></script>
-  <script src="js/server.js?v=20260719-tile-ux-castle-cost-1"></script>
-  <script src="js/net.js?v=20260719-tile-ux-castle-cost-1"></script>
-  <script src="js/render.js?v=20260719-tile-ux-castle-cost-1"></script>
-  <script src="js/ui.js?v=20260719-tile-ux-castle-cost-1"></script>
-  <script src="js/main.js?v=20260719-tile-ux-castle-cost-1"></script>
+  <script src="js/config.js?v=20260720-scroll-cooldown-1"></script>
+  <script src="js/world.js?v=20260720-scroll-cooldown-1"></script>
+  <script src="js/server.js?v=20260720-scroll-cooldown-1"></script>
+  <script src="js/net.js?v=20260720-scroll-cooldown-1"></script>
+  <script src="js/render.js?v=20260720-scroll-cooldown-1"></script>
+  <script src="js/ui.js?v=20260720-scroll-cooldown-1"></script>
+  <script src="js/main.js?v=20260720-scroll-cooldown-1"></script>
 </body>
 </html>
-

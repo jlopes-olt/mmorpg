@@ -186,7 +186,10 @@ class ServerSim {
   claimCastle(terrain) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
   reinforceCastle(terrain) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
   repairCastle(terrain, gold) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
+  fortifyCastle(terrain) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
   assaultCastle(terrain) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
+  craftSiegeEngine(tier) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
+  deploySiegeEngine(key, tier) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
 
   mapStates() {
     const out = {};
@@ -247,6 +250,7 @@ class ServerSim {
       inventory: {},
       gold: 0,
       [PREMIUM_CURRENCY.key]: 24,
+      lastPaScrollAt: -PA_SCROLL_COOLDOWN_MS,   // « jamais utilisé » : disponible dès la création
       ownedSkins: [],
       status: 'IDLE',
       harvestKey: null, harvestEndsAt: 0,
@@ -312,6 +316,35 @@ class ServerSim {
     return { ok: true };
   }
 
+  buyPaScroll() {
+    const me = this.me;
+    const balance = Number(me[PREMIUM_CURRENCY.key] || 0);
+    if (balance < PA_SCROLL_COST_MOONSTONES) {
+      return { ok: false, error: 'Il faut ' + PA_SCROLL_COST_MOONSTONES + ' ' + PREMIUM_CURRENCY.label + '.' };
+    }
+    me[PREMIUM_CURRENCY.key] = balance - PA_SCROLL_COST_MOONSTONES;
+    const key = stackKey('PARCHEMIN_ENDURANCE', 1);
+    me.inventory[key] = (me.inventory[key] || 0) + 1;
+    this.emit('self', me);
+    return { ok: true, cost: PA_SCROLL_COST_MOONSTONES };
+  }
+
+  buyGoldPack(packId) {
+    const me = this.me;
+    const pack = GOLD_PACKS.find((item) => item.id === String(packId || ''));
+    if (!pack) return { ok: false, error: 'Pack d’or inconnu.' };
+    const balance = Number(me[PREMIUM_CURRENCY.key] || 0);
+    if (balance < pack.moonstones) return { ok: false, error: 'Pas assez de ' + PREMIUM_CURRENCY.label.toLowerCase() + '.' };
+    me[PREMIUM_CURRENCY.key] = balance - pack.moonstones;
+    me.gold = Number(me.gold || 0) + pack.gold;
+    this.emit('self', me);
+    return { ok: true, gold: pack.gold, cost: pack.moonstones };
+  }
+
+  getCheckoutLink() {
+    return { ok: false, error: 'Achats en argent réel disponibles en multijoueur réel.' };
+  }
+
   equipSkin(skinId) {
     const me = this.me;
     this.skinStateOf(me);
@@ -371,6 +404,15 @@ class ServerSim {
     if (!item) return { ok: false, error: 'Objet inconnu.' };
     if ((me.inventory[key] || 0) < 1) return { ok: false, error: 'Vous n’en avez plus.' };
 
+    if (item.kind === 'pa_refill') {
+      if (typeof me.lastPaScrollAt !== 'number') me.lastPaScrollAt = -PA_SCROLL_COOLDOWN_MS;
+      const remainingMs = PA_SCROLL_COOLDOWN_MS - (this.now - me.lastPaScrollAt);
+      if (remainingMs > 0) {
+        return { ok: false, error: 'Parchemin en recharge — encore ' + Math.ceil(remainingMs / 60000) + ' min.' };
+      }
+      if (me.pa >= CONFIG.PA.MAX) return { ok: false, error: 'Endurance déjà au maximum.' };
+    }
+
     me.inventory[key] -= 1;
     if (me.inventory[key] <= 0) delete me.inventory[key];
 
@@ -378,6 +420,11 @@ class ServerSim {
       const heal = Math.round(maxHp(me) * CONSUMABLE_EFFECTS[parsed.type][parsed.tier]);
       me.hp = Math.min(maxHp(me), me.hp + heal);
       this.toast(item.icon + ' +' + heal + ' PV');
+    } else if (item.kind === 'pa_refill') {
+      me.pa = CONFIG.PA.MAX;
+      me.paMs = 0;
+      me.lastPaScrollAt = this.now;
+      this.toast(item.icon + ' Endurance rechargée au maximum !');
     } else {
       me.buff = { type: parsed.type, tier: parsed.tier, combats: BUFF_COMBATS };
       this.toast(item.icon + ' ' + item.label + ' T' + parsed.tier + ' actif (' + BUFF_COMBATS + ' combats)');
@@ -503,7 +550,7 @@ class ServerSim {
     if (me.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
     if (this.chebyshev(me.pos, tile) > 1) return { ok: false, error: 'Trop loin — approchez-vous.' };
     if (this.now < node.inactiveUntil) return { ok: false, error: 'Gisement épuisé.' };
-    const reqTier = Math.min(5, node.tier);
+    const reqTier = Math.min(6, node.tier);
     if (me.harvestLevel < reqTier) return { ok: false, error: 'Niveau de récolte insuffisant (T' + reqTier + ' requis).' };
     if (me.pa < CONFIG.COSTS.HARVEST) return { ok: false, error: 'Pas assez de PA (2 requis).' };
     me.pa -= CONFIG.COSTS.HARVEST;
@@ -526,7 +573,7 @@ class ServerSim {
     me.inventory[invKey] = (me.inventory[invKey] || 0) + qty;
     node.inactiveUntil = this.now + (node.dungeonResource ? CONFIG.RESPAWN_DUNGEON_RESOURCE_MS : CONFIG.RESPAWN_RESOURCE_MS);
 
-    const xp = 8 + Math.min(5, node.tier) * 6;
+    const xp = 8 + Math.min(6, node.tier) * 6;
     me.harvestXp += xp;
     this.log('+' + qty + ' ' + resourceLabel(node.type, node.tier) + ' (+' + xp + ' XP récolte)');
     this.checkLevelUp(me, 'harvest');
@@ -647,7 +694,7 @@ class ServerSim {
       if (victory && !p.bot) {
         // Les monstres lâchent de l'or (+ XP) et, parfois, un ingrédient
         // de cuisine de leur tier.
-        const xp = 15 + Math.min(5, monster.tier) * 15;
+        const xp = 15 + Math.min(6, monster.tier) * 15;
         // Chapardeur (Renard Voleur) : +50 % d'or pour lui
         const lootMult = p.speciesClass === 'RENARD_VOLEUR' ? 1.5 : 1;
         p.weaponXp += xp;
@@ -730,7 +777,7 @@ class ServerSim {
     if (me.mapId !== 'world' || me.pos.x !== 0 || me.pos.y !== 0) return { ok: false, error: 'Vous devez être à la Capitale (0,0).' };
     const item = me[slot];
     const target = item.tier + 1;
-    if (target > 5) return { ok: false, error: 'Tier maximum atteint.' };
+    if (target > 6) return { ok: false, error: 'Tier maximum atteint.' };
     if (me.weaponMastery < target) return { ok: false, error: 'Maîtrise d’arme T' + target + ' requise.' };
     const recipe = UPGRADE_RECIPES[slot][target];
     for (const k in recipe) {

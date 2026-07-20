@@ -3,7 +3,7 @@
 /* ============================================================
  * render.js -- rendu habille : carte iso (canvas 2D) + minimap
  * - tuiles artistiques chargees depuis assets/terrain_generated
- * - quadrillage lisible et brouillard leger
+ * - quadrillage lisible (le brouillard ne reste que sur la minimap)
  * - ressources / monstres / capitale via vrais assets PNG
  * - personnages : sprites de assets/personnages_small.png
  * ============================================================ */
@@ -11,6 +11,11 @@
 const TILE_W = 76, TILE_H = 38;
 const TW2 = TILE_W / 2, TH2 = TILE_H / 2;
 const TOP_FACE_CROP = 0.74;
+
+// Horloge réelle (pas le temps de jeu, qui tourne à une vitesse variable en
+// DEV) : les bulles de discussion doivent rester lisibles quelques
+// véritables secondes, quel que soit le multiplicateur de vitesse.
+function nowMs() { return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now(); }
 
 const TERRAIN_TILE_FILES = {
   PLAINE: [
@@ -191,6 +196,7 @@ class Renderer {
     this.playerSkins = {};
     this.terrainTiles = {};
     this.playerHitboxes = [];
+    this.chatBubbles = new Map();   // username -> { text, until } (horloge réelle, indépendante du multiplicateur DEV)
     this.loadWorldIcons();
     this.loadTerrainTiles();
     this.resize();
@@ -759,16 +765,7 @@ class Renderer {
       for (let x = px - R; x <= px + R; x++) {
         if (!inBounds(x, y, s.tiles)) continue;
         const key = tileKey(x, y);
-        const visible = Math.hypot(x - px, y - py) <= CONFIG.VIEW_RADIUS + 0.5;
         const tile = s.tiles.get(key);
-        // Repères permanents : visibles même à travers le brouillard
-        const landmark = tile.content &&
-          (tile.content.kind === 'capital' || tile.content.kind === 'village' || tile.content.kind === 'dungeon' || tile.content.kind === 'castle');
-        const known = visible || this.explored.has(key);
-        // Donjon : zones vides (non praticables) en noir profond, dessinées
-        // même sous brouillard — on lit la silhouette des couloirs d'un
-        // coup d'œil et on comprend que ce n'est pas du sol
-        if (!known && !landmark && !tile.blocked) continue;
         const cx = this.isoX(x, y) - this.cam.x + this.w / 2;
         const cy = this.isoY(x, y) - this.cam.y + this.h / 2;
         if (cx < -TILE_W * 2 || cx > this.w + TILE_W * 2 || cy < -TILE_H * 4 || cy > this.h + TILE_H * 3) continue;
@@ -778,22 +775,16 @@ class Renderer {
           continue;
         }
 
-        if (known) {
-          this.drawTerrainTile(tile, cx, cy, visible);
-        } else {
-          // Îlot de terrain fantôme sous le repère non exploré
-          ctx.globalAlpha = 0.5;
-          this.drawTerrainTile(tile, cx, cy, false);
-          ctx.globalAlpha = 1;
-        }
-
-        if (landmark) poi.push({ tile, cx, cy, visible, fogged: !known });
-        else if (tile.content && visible) poi.push({ tile, cx, cy, visible, fogged: false });
+        // Brouillard de guerre retiré de la vue principale (écran mobile
+        // déjà petit, le rayon de vue le rendait redondant) — il reste
+        // uniquement sur la minicarte (drawMinimap, via this.explored).
+        this.drawTerrainTile(tile, cx, cy, true);
+        if (tile.content) poi.push({ tile, cx, cy, visible: true });
       }
     }
 
     poi.sort((a, b) => a.cy - b.cy);
-    for (const p of poi) this.drawContent(p.tile, p.cx, p.cy, p.visible, p.fogged);
+    for (const p of poi) this.drawContent(p.tile, p.cx, p.cy, p.visible);
 
     const visiblePlayers = [...s.players.values()]
       .filter((p) => p.mapId === (me.mapId || 'world') && p.pos && Math.hypot(p.pos.x - px, p.pos.y - py) <= CONFIG.VIEW_RADIUS + 0.5)
@@ -825,12 +816,8 @@ class Renderer {
     }
   }
 
-  drawContent(tile, cx, cy, visible, fogged) {
+  drawContent(tile, cx, cy, visible) {
     const ctx = this.ctx, c = tile.content, s = this.server;
-
-    // Repère aperçu à travers le brouillard : rendu fantôme
-    const isLandmark = c.kind === 'capital' || c.kind === 'village' || c.kind === 'dungeon' || c.kind === 'castle';
-    if (isLandmark && fogged) ctx.globalAlpha = 0.62;
 
     if (c.kind === 'capital') {
       this.drawCapitalBase(cx, cy);
@@ -1077,6 +1064,74 @@ if (c.kind === 'dungeon') {
     ctx.lineWidth = 1;
   }
 
+  // Bulle de discussion (canal Général) : apparaît au-dessus du joueur qui
+  // vient de parler, remplacée par le prochain message du même joueur.
+  showChatBubble(username, text) {
+    if (!username || !text) return;
+    const BUBBLE_MS = 4500;
+    this.chatBubbles.set(username, { text: String(text), until: nowMs() + BUBBLE_MS });
+  }
+
+  drawChatBubble(cx, bottomY, rawText, alpha) {
+    const ctx = this.ctx;
+    const maxWidth = 160, maxLines = 3, lineHeight = 14, padX = 10, padY = 8, tail = 7;
+    ctx.font = '600 11px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const words = String(rawText).trim().split(/\s+/).filter(Boolean);
+    const allLines = [];
+    let line = '';
+    for (const word of words) {
+      const attempt = line ? line + ' ' + word : word;
+      if (line && ctx.measureText(attempt).width > maxWidth) {
+        allLines.push(line);
+        line = word;
+      } else {
+        line = attempt;
+      }
+    }
+    if (line) allLines.push(line);
+
+    let lines = allLines.length ? allLines : [''];
+    if (allLines.length > maxLines) {
+      lines = allLines.slice(0, maxLines);
+      let last = lines[maxLines - 1];
+      while (last.length > 1 && ctx.measureText(last + '…').width > maxWidth) last = last.slice(0, -1);
+      lines[maxLines - 1] = last + '…';
+    }
+
+    const textW = Math.max(...lines.map((l) => ctx.measureText(l).width));
+    const boxW = Math.min(maxWidth, textW) + padX * 2;
+    const boxH = lines.length * lineHeight + padY * 2;
+    const boxBottom = bottomY - tail;
+    const boxTop = boxBottom - boxH;
+    const boxLeft = cx - boxW / 2;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = 'rgba(20, 24, 29, 0.92)';
+    ctx.strokeStyle = 'rgba(232, 178, 63, 0.55)';
+    ctx.lineWidth = 1.25;
+    this.roundRect(boxLeft, boxTop, boxW, boxH, 9);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(cx - tail, boxBottom);
+    ctx.lineTo(cx + tail, boxBottom);
+    ctx.lineTo(cx, boxBottom + tail);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(20, 24, 29, 0.92)';
+    ctx.fill();
+
+    ctx.fillStyle = '#f2f5f9';
+    lines.forEach((l, i) => {
+      ctx.fillText(l, cx, boxTop + padY + lineHeight * (i + 0.5));
+    });
+    ctx.restore();
+  }
+
   badge(cx, cy, text, color) {
     const ctx = this.ctx;
     ctx.fillStyle = color;
@@ -1166,9 +1221,22 @@ if (c.kind === 'dungeon') {
 
     this.label(cx, topY - 7, p.username, isMe ? '#f4cd6e' : '#dfe5ec', 9);
 
-    if (p.status === 'LOBBY_COMBAT') {
+    const inRaidTag = p.status === 'LOBBY_COMBAT';
+    if (inRaidTag) {
       const inRaid = p.raidKey && this.server.raids.get(p.raidKey);
       this.label(cx, topY - 18, (inRaid && inRaid.siege) ? 'SIÈGE' : 'RAID', '#ff7b6b', 11);
+    }
+
+    const bubble = this.chatBubbles.get(p.username);
+    if (bubble) {
+      const now = nowMs();
+      if (now >= bubble.until) {
+        this.chatBubbles.delete(p.username);
+      } else {
+        const fadeMs = 400;
+        const alpha = Math.min(1, (bubble.until - now) / fadeMs);
+        this.drawChatBubble(cx, topY - (inRaidTag ? 30 : 18), bubble.text, alpha);
+      }
     }
 
     if (isMe && p.status === 'HARVESTING') {

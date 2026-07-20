@@ -51,11 +51,20 @@ class UI {
       RAGOUT: 'assets/item_ragout_du_chasseur.png',
       BOUILLON: 'assets/item_bouillon_decailles.png',
       POTION_SEVE: 'assets/item_potion_de_seve.png',
+      PARCHEMIN_ENDURANCE: 'assets/item_parchemin_endurance.png',
+    };
+    this.currencyIconSrc = {
+      gold: 'assets/currency_gold.png',
+      premium: 'assets/currency_moon_scale.png',
     };
     this.harvestFxTimer = null;
+    this.inventoryCooldownTimer = null;
     this.popupMode = null;
     this.tradeDraft = null;
     this.tradeUiState = { filter: 'ALL', scrollTop: 0 };
+    this.desktopMedia = window.matchMedia('(min-width: 1600px)');
+    this.desktopProfileSignature = '';
+    this.desktopSocialRequest = 0;
 
     // Feuille de sprites partagée avec le CSS (avatars DOM).
     // URL absolue obligatoire : une url() relative dans une custom
@@ -80,6 +89,7 @@ class UI {
       const r = await Promise.resolve(this.server.startRaidNow(me.raidKey));
       if (!r.ok) this.toast(r.error);
     });
+    $('lobbyDeployEngine').addEventListener('click', () => this.showDeployEnginePicker());
     $('popup').addEventListener('click', (e) => {
       if (e.target.id === 'popup' && this.popupMode !== 'trade') this.closePopup();
     });
@@ -89,22 +99,42 @@ class UI {
         this.openSheet === name ? this.closeSheet() : this.showSheet(name);
       });
     });
+    $('desktopProfileOpen').addEventListener('click', () => this.showSheet('profile'));
+    $('desktopMapOpen').addEventListener('click', () => this.showSheet('map'));
+    const onDesktopChange = () => this.syncDesktopPanels(true);
+    if (this.desktopMedia.addEventListener) this.desktopMedia.addEventListener('change', onDesktopChange);
+    else this.desktopMedia.addListener(onDesktopChange);
 
     server.on('toast', (t) => this.toast(t.text));
-    server.on('chat', (msg) => this.pushFeed(msg));
+    server.on('chat', (msg) => {
+      this.pushFeed(msg);
+      // Bulle au-dessus de la tête : uniquement le canal Général (le seul
+      // « parlé à voix haute » dans le monde), et seulement si l'expéditeur
+      // est un vrai joueur actuellement chargé (pas un message système).
+      if (msg.type === 'chat' && msg.channel === 'general' && msg.from && this.renderer) {
+        this.renderer.showChatBubble(msg.from, msg.text);
+      }
+    });
     server.on('ready', () => {
       // Historique reçu à la connexion (général vu de tous, guilde courante,
       // MP qui nous concernent) : on le rejoue pour retrouver le fil après
-      // une déconnexion, et on signale ce qui n'a pas encore été lu.
+      // une déconnexion. Le simple fait qu'un canal contienne un message
+      // d'autrui ne veut pas dire qu'il est NON LU — on compare à la
+      // signature du dernier message déjà vu (persistée localement) pour ne
+      // signaler que ce qui est vraiment arrivé depuis la dernière lecture,
+      // sinon la pastille rouge réapparaît à chaque reconnexion sans raison.
       const history = Array.isArray(this.server.chatHistory) ? this.server.chatHistory.slice(-120) : [];
       this.feed = history.map((m) => ({
         ...m,
         self: !!(m.from && this.server.me && m.from === this.server.me.username),
       }));
-      for (const m of this.feed) {
-        if (m.type === 'chat' && !m.self) this.chatUnread[m.channel || 'general'] = true;
+      this.chatSeen = this.loadChatSeen();
+      for (const ch of ['general', 'guild', 'whisper']) {
+        const hasOthers = this.feed.some((m) => m.type === 'chat' && !m.self && (m.channel || 'general') === ch);
+        this.chatUnread[ch] = hasOthers && this.chatChannelSignature(ch) !== (this.chatSeen[ch] || '');
       }
       this.updateChatBadges();
+      this.syncDesktopPanels(true);
     });
     server.on('result', (r) => this.showResult(r));
     server.on('siegeResult', (r) => this.showSiegeResult(r));
@@ -125,6 +155,7 @@ class UI {
       }
     });
     server.on('self', () => {
+      this.updateDesktopProfile();
       if (this.openSheet === 'inventory') this.showSheet('inventory');
       if (this.openSheet === 'shop') this.showSheet('shop');
       if (this.openSheet === 'profile') this.showSheet('profile');
@@ -351,30 +382,38 @@ showDungeonPopup(tile, onEnter) {
       this.renderer.setCastleInfo(list);
     }
     const c = list.find((x) => x.terrain === terrain) ||
-      { terrain, ownerGuildId: null, ownerGuildName: null, hp: 0, hpMax: 0, level: 0, maxLevel: CASTLE_MAX_LEVEL, isOwnGuild: false };
+      { terrain, ownerGuildId: null, ownerGuildName: null, hp: 0, hpMax: 0, level: 0, maxLevel: CASTLE_MAX_LEVEL, fortLevel: 0, maxFortLevel: CASTLE_MAX_FORT_LEVEL, isOwnGuild: false };
 
     const pct = c.hpMax ? Math.max(0, Math.min(100, Math.round(100 * c.hp / c.hpMax))) : 0;
     const bonusPct = Math.round((CASTLE_ZONE_GOLD_BONUS - 1) * 100);
     const resType = CASTLE_TERRAIN_RESOURCE[terrain];
-    const nextRecipe = CASTLE_REINFORCE_RESOURCES[c.level + 1];
     const siegeKey = 'siege:' + terrain;
     const activeSiege = (me.guildId && c.ownerGuildId) ? this.server.raids.get(siegeKey) : null;
     const alreadyInSiege = !!(activeSiege && me.raidKey === siegeKey);
-    const bodyHtml =
+
+    const statusHtml =
       (c.ownerGuildName
-        ? '<p>Tenu par <b>' + esc(c.ownerGuildName) + '</b> — niveau ' + c.level + ' / ' + c.maxLevel + '</p>' +
+        ? '<p>Tenu par <b>' + esc(c.ownerGuildName) + '</b></p>' +
+          '<div class="castle-badges">' +
+            '<span class="tier t' + c.level + '">Niveau ' + c.level + ' / ' + c.maxLevel + '</span>' +
+            (c.fortLevel ? '<span class="tier t' + c.fortLevel + '">🛡 Fortification ' + c.fortLevel + ' / ' + c.maxFortLevel + '</span>' : '') +
+          '</div>' +
           '<div class="xp-track"><div class="xp-fill" style="width:' + pct + '%"></div></div>' +
           '<p class="dim small">' + c.hp + ' / ' + c.hpMax + ' points de structure</p>'
         : '<p class="dim">Libre — aucune guilde ne le tient.</p>') +
-      '<p class="dim small">Le tenir offre à la guilde +' + bonusPct + ' % d’or sur toute la zone ' + terrainName + '.</p>' +
-      (!me.guildId ? '<p class="hp-c small">Rejoignez une guilde pour revendiquer, renforcer ou assiéger un château.</p>'
-        : !c.ownerGuildId ? '<p class="dim small">Fondation : ' + CASTLE_CLAIM_COST_GOLD + ' 🪙 (contribution personnelle).</p>'
-        : c.isOwnGuild
-          ? '<p class="dim small">Renfort : ' + CASTLE_REINFORCE_COST_GOLD + ' 🪙' +
-            (nextRecipe ? ' + ' + nextRecipe.qty + '× ' + esc(resourceLabel(resType, nextRecipe.tier)) : '') +
-            ' · Réparation : ' + CASTLE_REPAIR_GOLD_PER_HP + ' 🪙/PS + 1× ' + esc(resourceLabel(resType, CASTLE_REPAIR_RESOURCE_TIER)) +
-            ' / ' + CASTLE_REPAIR_HP_PER_RESOURCE + ' PS.</p>'
-          : '');
+      '<p class="dim small">Le tenir offre à la guilde +' + bonusPct + ' % d’or sur toute la zone ' + terrainName + '.</p>';
+
+    let costHtml = '';
+    if (!me.guildId) {
+      costHtml = '<p class="hp-c small">Rejoignez une guilde pour revendiquer, renforcer ou assiéger un château.</p>';
+    } else if (!c.ownerGuildId) {
+      costHtml = '<p class="dim small">Fondation : ' + CASTLE_CLAIM_COST_GOLD + ' ' + this.currencyIcon('gold', 'small') + ' (contribution personnelle).</p>';
+    } else if (c.isOwnGuild) {
+      costHtml = this.castleReinforceCardHtml(c, resType) +
+        this.castleRepairCardHtml(c, resType) +
+        this.castleFortifyCardHtml(c, resType);
+    }
+
     const secsLeftSiege = activeSiege ? Math.max(0, Math.ceil((activeSiege.endsAt - this.server.now) / 1000)) : 0;
     const siegeHtml = !activeSiege ? '' : c.isOwnGuild
       ? '<p class="hp-c small"><b>🛡 Vous êtes assiégés !</b> ' + activeSiege.participants.length + ' assaillant(s) — ' +
@@ -395,26 +434,6 @@ showDungeonPopup(tile, onEnter) {
           this.toast(r.ok ? 'Château fondé !' : r.error);
         },
       });
-    } else if (me.guildId && c.isOwnGuild) {
-      actions.unshift({
-        label: 'Réparer',
-        cb: async () => {
-          const r = await Promise.resolve(this.server.repairCastle(terrain, me.gold));
-          if (r.ok && this.renderer) this.renderer.refreshCastleLevels();
-          this.toast(r.ok ? ('Réparé de ' + r.healed + ' PS pour ' + r.cost + ' 🪙 + ' + r.resourceCost + '× ' + resourceLabel(r.resourceType, r.resourceTier) + '.') : r.error);
-        },
-      });
-      if (c.level < c.maxLevel) {
-        actions.unshift({
-          label: 'Renforcer',
-          primary: true,
-          cb: async () => {
-            const r = await Promise.resolve(this.server.reinforceCastle(terrain));
-            if (r.ok && this.renderer) this.renderer.refreshCastleLevels();
-            this.toast(r.ok ? ('Château renforcé (niveau ' + r.level + ').') : r.error);
-          },
-        });
-      }
     } else if (me.guildId && c.ownerGuildId && !c.isOwnGuild && !alreadyInSiege) {
       actions.unshift({
         label: activeSiege ? 'Rejoindre le siège' : '⚔ Lancer le siège',
@@ -430,7 +449,127 @@ showDungeonPopup(tile, onEnter) {
       });
     }
 
-    this.popup('Château — ' + terrainName, bodyHtml + siegeHtml, actions, { mode: 'castle' });
+    this.popup('Château — ' + terrainName, statusHtml + costHtml + siegeHtml, actions, { mode: 'castle' });
+
+    if (c.isOwnGuild) {
+      $('popup').querySelectorAll('[data-castle-action]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const action = btn.dataset.castleAction;
+          let r;
+          if (action === 'reinforce') r = await Promise.resolve(this.server.reinforceCastle(terrain));
+          else if (action === 'repair') r = await Promise.resolve(this.server.repairCastle(terrain, me.gold));
+          else if (action === 'fortify') r = await Promise.resolve(this.server.fortifyCastle(terrain));
+          if (!r) return;
+          if (r.ok && this.renderer) this.renderer.refreshCastleLevels();
+          if (action === 'reinforce') this.toast(r.ok ? ('Château renforcé (niveau ' + r.level + ').') : r.error);
+          else if (action === 'repair') this.toast(r.ok ? ('Réparé de ' + r.healed + ' PS pour ' + r.cost + ' 🪙 + ' + r.resourceCost + '× ' + resourceLabel(r.resourceType, r.resourceTier) + '.') : r.error);
+          else if (action === 'fortify') this.toast(r.ok ? ('Fortifications renforcées (niveau ' + r.fortLevel + ').') : r.error);
+          if (r.ok) this.showCastlePopup(tile);
+        });
+      });
+    }
+  }
+
+  castleReinforceCardHtml(c, resType) {
+    const me = this.server.me;
+    if (c.level >= c.maxLevel) {
+      return '<div class="upg"><div class="upg-head"><b>⚒ Renfort</b><span class="tier t' + c.maxLevel + '">Niveau max</span></div></div>';
+    }
+    const next = c.level + 1;
+    const recipe = CASTLE_REINFORCE_RESOURCES[next];
+    const haveGold = me.gold || 0;
+    const goldOk = haveGold >= CASTLE_REINFORCE_COST_GOLD;
+    const haveRes = me.inventory[stackKey(resType, recipe.tier)] || 0;
+    const resOk = haveRes >= recipe.qty;
+    return '<div class="upg">' +
+      '<div class="upg-head"><b>⚒ Renfort</b><span><span class="tier t' + c.level + '">' + c.level + '</span> → <span class="tier t' + next + '">' + next + '</span></span></div>' +
+      '<ul class="upg-needs">' +
+        '<li class="' + (goldOk ? 'ok-c' : 'hp-c') + '">' + CASTLE_REINFORCE_COST_GOLD + ' ' + this.currencyIcon('gold', 'small') + ' <span class="dim">(' + haveGold + ')</span></li>' +
+        '<li class="' + (resOk ? 'ok-c' : 'hp-c') + '">' + recipe.qty + '× ' + esc(resourceLabel(resType, recipe.tier)) + ' <span class="dim">(' + haveRes + ')</span></li>' +
+      '</ul>' +
+      '<button class="btn primary wide" data-castle-action="reinforce"' + ((goldOk && resOk) ? '' : ' disabled') + '>⚒ Renforcer</button>' +
+    '</div>';
+  }
+
+  castleRepairCardHtml(c, resType) {
+    const me = this.server.me;
+    const missing = c.hpMax - c.hp;
+    if (missing <= 0) {
+      return '<div class="upg"><div class="upg-head"><b>🔧 Réparation</b><span class="dim small">structure intacte</span></div></div>';
+    }
+    const repairTier = castleRepairResourceTier(c.level);
+    const haveGold = me.gold || 0;
+    const haveRes = me.inventory[stackKey(resType, repairTier)] || 0;
+    const fullGoldCost = missing * CASTLE_REPAIR_GOLD_PER_HP;
+    const fullResCost = Math.ceil(missing / CASTLE_REPAIR_HP_PER_RESOURCE);
+    const preview = Math.max(0, Math.min(missing, Math.floor(haveGold / CASTLE_REPAIR_GOLD_PER_HP), haveRes * CASTLE_REPAIR_HP_PER_RESOURCE));
+    const goldOk = haveGold >= fullGoldCost;
+    const resOk = haveRes >= fullResCost;
+    return '<div class="upg">' +
+      '<div class="upg-head"><b>🔧 Réparation</b><span class="dim small">' + missing + ' PS manquants</span></div>' +
+      '<ul class="upg-needs">' +
+        '<li class="' + (goldOk ? 'ok-c' : 'hp-c') + '">' + fullGoldCost + ' ' + this.currencyIcon('gold', 'small') + ' pour tout réparer <span class="dim">(' + haveGold + ')</span></li>' +
+        '<li class="' + (resOk ? 'ok-c' : 'hp-c') + '">' + fullResCost + '× ' + esc(resourceLabel(resType, repairTier)) + ' pour tout réparer <span class="dim">(' + haveRes + ')</span></li>' +
+      '</ul>' +
+      (preview > 0 && preview < missing ? '<p class="dim small">Répare au maximum de vos moyens actuels : jusqu’à <b>' + preview + ' PS</b>.</p>' : '') +
+      '<button class="btn wide" data-castle-action="repair"' + (preview <= 0 ? ' disabled' : '') + '>🔧 Réparer' + (preview > 0 ? ' (' + preview + ' PS)' : '') + '</button>' +
+    '</div>';
+  }
+
+  castleFortifyCardHtml(c, resType) {
+    const me = this.server.me;
+    const fortLevel = c.fortLevel || 0;
+    if (fortLevel >= c.maxFortLevel) {
+      return '<div class="upg"><div class="upg-head"><b>🛡 Fortification</b><span class="tier t' + c.maxFortLevel + '">Niveau max</span></div></div>';
+    }
+    const next = fortLevel + 1;
+    const recipe = CASTLE_FORTIFY_RESOURCES[next];
+    const haveGold = me.gold || 0;
+    const goldOk = haveGold >= CASTLE_FORTIFY_COST_GOLD;
+    const haveRes = me.inventory[stackKey(resType, recipe.tier)] || 0;
+    const resOk = haveRes >= recipe.qty;
+    return '<div class="upg">' +
+      '<div class="upg-head"><b>🛡 Fortification</b><span><span class="tier t' + fortLevel + '">' + fortLevel + '</span> → <span class="tier t' + next + '">' + next + '</span></span></div>' +
+      '<ul class="upg-needs">' +
+        '<li class="' + (goldOk ? 'ok-c' : 'hp-c') + '">' + CASTLE_FORTIFY_COST_GOLD + ' ' + this.currencyIcon('gold', 'small') + ' <span class="dim">(' + haveGold + ')</span></li>' +
+        '<li class="' + (resOk ? 'ok-c' : 'hp-c') + '">' + recipe.qty + '× ' + esc(resourceLabel(resType, recipe.tier)) + ' <span class="dim">(' + haveRes + ')</span></li>' +
+      '</ul>' +
+      '<p class="dim small">+' + CASTLE_FORTIFY_BONUS_PER_LEVEL + ' garnison passive, sans besoin de défenseurs présents.</p>' +
+      '<button class="btn wide" data-castle-action="fortify"' + ((goldOk && resOk) ? '' : ' disabled') + '>🛡 Fortifier</button>' +
+    '</div>';
+  }
+
+  showDeployEnginePicker() {
+    const me = this.server.me;
+    if (!me) return;
+    const owned = [1, 2, 3, 4, 5].filter((t) => (me.inventory[stackKey(SIEGE_ENGINE_ITEM, t)] || 0) > 0);
+    if (!owned.length) {
+      this.toast('Aucun engin de siège en stock — à construire à la Capitale.');
+      return;
+    }
+    const actions = owned.map((t) => ({
+      label: SIEGE_ENGINES[t].label + ' · T' + t + ' (+' + SIEGE_ENGINE_FORCE[t] + ' force, +' + SIEGE_ENGINE_DAMAGE[t] + ' PS)',
+      primary: t === owned[owned.length - 1],
+      cb: async () => {
+        const key = me.raidKey;
+        const r = await Promise.resolve(this.server.deploySiegeEngine(key, t));
+        this.toast(r.ok ? ('⚙ Engin T' + t + ' déployé pour ce siège.') : r.error);
+      },
+    }));
+    actions.push({ label: 'Annuler' });
+    const engineCards = owned.map((t) => (
+      '<div class="siege-engine-pick">' +
+        '<img src="' + SIEGE_ENGINES[t].asset + '" alt="' + esc(SIEGE_ENGINES[t].label) + '">' +
+        '<span><b>' + esc(SIEGE_ENGINES[t].label) + '</b><small>T' + t + '</small></span>' +
+      '</div>'
+    )).join('');
+    this.popup(
+      'Déployer un engin de siège',
+      '<div class="siege-engine-picker">' + engineCards + '</div>' +
+      '<p class="dim small">Un seul engin par personne et par siège — consommé, gagné ou perdu.</p>',
+      actions,
+      { mode: 'generic' }
+    );
   }
 
   playerSummaryHtml(player) {
@@ -882,14 +1021,21 @@ showDungeonPopup(tile, onEnter) {
         const chance = this.server.raidChance(raid);
         const pct = Math.round(chance * 100);
         const secsLeft = Math.max(0, Math.ceil((raid.endsAt - this.server.now) / 1000));
+        const engineCount = (raid.engines || []).length;
         $('lobbyText').textContent = raid.siege
-          ? '🏰 Siège — ' + raid.label + ' — résolution dans ' + secsLeft + ' s — ' + raid.participants.length + ' assaillant(s)'
+          ? '🏰 Siège — ' + raid.label + ' — résolution dans ' + secsLeft + ' s — ' + raid.participants.length + ' assaillant(s)' +
+            (engineCount ? ' — ' + engineCount + ' engin(s)' : '')
           : '⚔ Raid ' + raid.label + ' T' + raid.tier + ' — résolution dans ' + secsLeft + ' s — ' + raid.participants.length + ' participant(s)';
         const chanceEl = $('lobbyChance');
         chanceEl.classList.remove('hidden');
         chanceEl.textContent = pct + ' % de victoire';
         chanceEl.className = 'chance-badge ' + this.chanceClass(chance);
         $('lobbyStart').classList.toggle('hidden', raid.leaderId !== me.id);
+
+        const deployBtn = $('lobbyDeployEngine');
+        const alreadyDeployed = (raid.engines || []).some((e) => e.by === me.id);
+        const hasAnyEngine = raid.siege && [1, 2, 3, 4, 5].some((t) => (me.inventory[stackKey(SIEGE_ENGINE_ITEM, t)] || 0) > 0);
+        deployBtn.classList.toggle('hidden', !raid.siege || alreadyDeployed || !hasAnyEngine);
       }
     } else {
       banner.classList.add('hidden');
@@ -1167,6 +1313,12 @@ showDungeonPopup(tile, onEnter) {
     return this.consumableIconSrc[type] || '';
   }
 
+  currencyIcon(kind, extraClass) {
+    const src = this.currencyIconSrc[kind];
+    if (!src) return '';
+    return '<img class="currency-icon ' + (extraClass || '') + '" src="' + src + '" alt="" aria-hidden="true">';
+  }
+
   getSpriteSrc(sprite) {
     if (!sprite) return '';
     if (sprite.processed && typeof sprite.processed.toDataURL === 'function') {
@@ -1236,7 +1388,7 @@ showDungeonPopup(tile, onEnter) {
     if (r.victory) {
       lines.push('<p><span class="battle-label">PV perdus</span> <b class="hp-c">−' + r.hpLoss + '</b>' +
         (r.druid ? ' <span class="ok-c">(Sève : +15 % des PV max)</span>' : '') + '</p>');
-      if (r.gold) lines.push('<p><span class="battle-label">Or</span> <b class="gold-c">+' + r.gold + ' 🪙</b></p>');
+      if (r.gold) lines.push('<p><span class="battle-label">Or</span> <b class="gold-c">+' + r.gold + ' ' + this.currencyIcon('gold', 'small') + '</b></p>');
       if (r.food) {
         const pf = parseStackKey(r.food);
         lines.push('<p><span class="battle-label">Trouvaille</span> ' + (RESOURCE_EMOJI[pf.type] || '❔') + ' 1× ' + resourceLabel(pf.type, pf.tier) + '</p>');
@@ -1279,6 +1431,10 @@ showDungeonPopup(tile, onEnter) {
     }
     lines.push('<p><span class="battle-label">' + (isDefender ? 'Défenseurs présents' : 'Assaillants') + '</span> ' +
       (r.participants.length ? r.participants.map(esc).join(', ') : '—') + '</p>');
+    if (r.engineCount) {
+      lines.push('<p class="dim small">⚙ ' + r.engineCount + ' engin(s) de siège : +' + r.engineForce + ' force' +
+        (r.engineDamage ? ', +' + r.engineDamage + ' PS garantis' : '') + '</p>');
+    }
     lines.push('<p><span class="battle-label">Chances</span> ' + this.chanceHtml(isDefender ? 1 - r.chance : r.chance) +
       ' de victoire — le sort a ' + (won ? 'souri' : 'tranché') + '.</p>');
     if (!won) {
@@ -1363,7 +1519,14 @@ showDungeonPopup(tile, onEnter) {
 
   /* ---------- Bottom sheets ---------- */
   showSheet(name) {
+    if (name === 'social' && this.desktopPanelsActive()) {
+      this.closeSheet();
+      this.refreshDesktopSocial(true);
+      this.emphasizeDesktopPanel('desktopRight');
+      return;
+    }
     this.openSheet = name;
+    this.stopInventoryCooldownTimer();
     const titles = { inventory: 'Inventaire', shop: 'Boutique', profile: 'Profil', map: 'Carte du monde', social: 'Social', capital: 'Capitale — PNJ Artisans', marmite: 'La Marmite — Cuisine', admin: 'Administration' };
     $('sheetTitle').textContent = titles[name];
     const body = $('sheetBody');
@@ -1374,9 +1537,106 @@ showDungeonPopup(tile, onEnter) {
   }
 
   closeSheet() {
+    this.stopInventoryCooldownTimer();
     this.openSheet = null;
     $('sheet').classList.add('hidden');
     document.querySelectorAll('#nav button').forEach((b) => b.classList.remove('active'));
+  }
+
+  desktopPanelsActive() {
+    return !!(this.desktopMedia && this.desktopMedia.matches && this.server.me);
+  }
+
+  syncDesktopPanels(refreshSocial) {
+    const layout = $('desktopLayout');
+    if (!layout) return;
+    const active = this.desktopPanelsActive();
+    layout.classList.toggle('desktop-panels-ready', active);
+    if (!active) {
+      this.desktopProfileSignature = '';
+      this.desktopSocialRequest += 1;
+      $('desktopProfileBody').innerHTML = '';
+      $('desktopSocialBody').innerHTML = '';
+      $('desktopSocialBody').removeAttribute('data-ready');
+      return;
+    }
+    if (this.openSheet === 'social') this.closeSheet();
+    this.updateDesktopProfile(true);
+    this.renderer.drawMinimap($('desktopMinimap'));
+    if (refreshSocial || !$('desktopSocialBody').dataset.ready) this.refreshDesktopSocial(true);
+  }
+
+  emphasizeDesktopPanel(id) {
+    const panel = $(id);
+    if (!panel) return;
+    panel.classList.remove('desktop-panel-emphasis');
+    requestAnimationFrame(() => panel.classList.add('desktop-panel-emphasis'));
+    setTimeout(() => panel.classList.remove('desktop-panel-emphasis'), 700);
+  }
+
+  updateDesktopProfile(force) {
+    if (!this.desktopPanelsActive()) return;
+    const me = this.server.me;
+    const cls = CLASSES[me.speciesClass];
+    const skin = skinFor(me.skinId);
+    const buffKey = me.buff ? [me.buff.type, me.buff.tier, me.buff.combats].join(':') : 'none';
+    const signature = [me.username, me.speciesClass, me.skinId || 'base', me.hp, me.gold,
+      me.weapon.type, me.weapon.tier, me.armor.type, me.armor.tier,
+      me.harvestLevel, me.weaponMastery, buffKey].join('|');
+    if (!force && signature === this.desktopProfileSignature) return;
+    this.desktopProfileSignature = signature;
+    const buff = me.buff && CONSUMABLES[me.buff.type];
+    const buffAsset = buff ? this.consumableIconSrc[me.buff.type] : '';
+    $('desktopProfileBody').innerHTML =
+      '<div class="desktop-hero-summary">' +
+        this.spriteAvatar(me.speciesClass, 'hero', me.skinId) +
+        '<div class="desktop-hero-copy">' +
+          '<div class="hero-name">' + esc(me.username) + '</div>' +
+          '<div class="hero-class">' + esc(cls.label) + ' · ' + esc(cls.role) + '</div>' +
+          '<div class="desktop-skin-name">' + esc((skin && skin.label) || 'Tenue de base') + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="desktop-stat-grid">' +
+        '<div><span>Puissance</span><b>' + Math.round(combatPower(me)) + '</b></div>' +
+        '<div><span>PV</span><b>' + me.hp + ' / ' + maxHp(me) + '</b></div>' +
+        '<div><span>Or</span><b>' + (me.gold || 0).toLocaleString('fr-FR') + '</b></div>' +
+      '</div>' +
+      '<div class="desktop-equipment-grid">' +
+        '<div class="desktop-equipment-item"><img src="' + equipmentAsset('weapon', me.weapon.type) + '" alt=""><span><small>Arme</small><b>' + esc(me.weapon.type) + '</b></span><i class="tier t' + me.weapon.tier + '">T' + me.weapon.tier + '</i></div>' +
+        '<div class="desktop-equipment-item"><img src="' + equipmentAsset('armor', me.armor.type) + '" alt=""><span><small>Armure</small><b>' + esc(me.armor.type) + '</b></span><i class="tier t' + me.armor.tier + '">T' + me.armor.tier + '</i></div>' +
+      '</div>' +
+      '<div class="desktop-mastery-row"><span>Récolte <b>T' + me.harvestLevel + '</b></span><span>Maîtrise <b>T' + me.weaponMastery + '</b></span></div>' +
+      '<div class="desktop-buff' + (buff ? ' active' : '') + '">' +
+        (buffAsset ? '<img src="' + buffAsset + '" alt="">' : '<span class="desktop-buff-empty">✦</span>') +
+        '<span><small>Effet actif</small><b>' + (buff ? esc(buff.label + ' T' + me.buff.tier) : 'Aucun mets actif') + '</b>' +
+        (buff ? '<em>' + me.buff.combats + ' combat' + (me.buff.combats > 1 ? 's' : '') + '</em>' : '') + '</span>' +
+      '</div>';
+  }
+
+  refreshDesktopSocial(force) {
+    if (!this.desktopPanelsActive()) return;
+    const body = $('desktopSocialBody');
+    const active = document.activeElement;
+    const isTyping = active && body.contains(active) &&
+      (active.tagName === 'INPUT' || active.tagName === 'SELECT' || active.tagName === 'TEXTAREA');
+    if (isTyping && !force) return;
+    const me = this.server.me;
+    const request = ++this.desktopSocialRequest;
+    if (!body.dataset.ready) body.innerHTML = '<p class="dim">Chargement…</p>';
+    Promise.all([
+      me.guildId ? Promise.resolve(this.server.guildInfo()) : Promise.resolve({ ok: false }),
+      Promise.resolve(this.server.friendsList()),
+      me.guildId ? Promise.resolve(this.server.castlesInfo()) : Promise.resolve({ ok: false }),
+    ]).then(([guildRes, friendsRes, castlesRes]) => {
+      if (request !== this.desktopSocialRequest || !this.desktopPanelsActive()) return;
+      this.renderSocial(
+        body, me,
+        (guildRes && guildRes.ok) ? guildRes.guild : null,
+        (friendsRes && friendsRes.ok) ? friendsRes.list : [],
+        (castlesRes && castlesRes.ok) ? castlesRes.list : []
+      );
+      body.dataset.ready = 'true';
+    });
   }
 
   build_inventory(body) {
@@ -1384,7 +1644,7 @@ showDungeonPopup(tile, onEnter) {
     const inv = me.inventory;
     const goldHtml =
       '<div class="gold-banner">' +
-        '<span class="gold-coin">🪙</span>' +
+        '<span class="gold-coin">' + this.currencyIcon('gold', 'large') + '</span>' +
         '<span class="gold-label">Or</span>' +
         '<span class="gold-amount">' + (me.gold || 0).toLocaleString('fr-FR') + '</span>' +
       '</div>';
@@ -1402,6 +1662,7 @@ showDungeonPopup(tile, onEnter) {
       BOUILLON: 5,
       POTION_SEVE: 6,
       TOURBE_VIVANTE: 7,
+      ENGIN_SIEGE: 8,
     };
     const sortedKeys = keys.sort((a, b) => {
       const pa = parseStackKey(a);
@@ -1422,18 +1683,36 @@ showDungeonPopup(tile, onEnter) {
       const cons = CONSUMABLES[p.type];
       if (cons) {
         const consSrc = this.getConsumableTargetSrc(p.type);
-        return '<button class="inv-card inv-consumable" data-consume="' + k + '">' +
+        const isPaScroll = p.type === 'PARCHEMIN_ENDURANCE';
+        const cooldownMs = isPaScroll ? this.paScrollCooldownRemaining() : 0;
+        return '<button class="inv-card inv-consumable' + (cooldownMs > 0 ? ' is-cooling-down' : '') + '" data-consume="' + k + '"' +
+          (isPaScroll ? ' data-pa-scroll-cooldown' : '') + (cooldownMs > 0 ? ' disabled' : '') + '>' +
           '<div class="inv-card-art-wrap">' +
             (consSrc
               ? '<img class="inv-card-art" src="' + consSrc + '" alt="">'
               : '<span class="inv-card-emoji">' + cons.icon + '</span>') +
             '<span class="tier t' + p.tier + ' inv-card-tier">T' + p.tier + '</span>' +
+            (isPaScroll ? '<span class="inv-cooldown-badge" data-cooldown-label>' +
+              (cooldownMs > 0 ? 'Recharge ' + this.formatCooldown(cooldownMs) : 'Disponible') + '</span>' : '') +
           '</div>' +
           '<div class="inv-card-name">' + cons.label + '</div>' +
           '<div class="inv-card-meta">' + consumableDesc(p.type, p.tier) + '</div>' +
           '<div class="inv-card-qty">×' + inv[k] + '</div>' +
-          '<div class="inv-card-use">Utiliser</div>' +
+          '<div class="inv-card-use" data-consume-label>' + (cooldownMs > 0 ? 'En recharge' : 'Utiliser') + '</div>' +
         '</button>';
+      }
+
+      if (p.type === SIEGE_ENGINE_ITEM && SIEGE_ENGINES[p.tier]) {
+        const engine = SIEGE_ENGINES[p.tier];
+        return '<div class="inv-card">' +
+          '<div class="inv-card-art-wrap">' +
+            '<img class="inv-card-art" src="' + engine.asset + '" alt="">' +
+            '<span class="tier t' + p.tier + ' inv-card-tier">T' + p.tier + '</span>' +
+          '</div>' +
+          '<div class="inv-card-name">' + esc(engine.label) + '</div>' +
+          '<div class="inv-card-meta">Engin de siège · Tier ' + p.tier + '</div>' +
+          '<div class="inv-card-qty">×' + inv[k] + '</div>' +
+        '</div>';
       }
 
       const res = RESOURCES[p.type];
@@ -1483,6 +1762,51 @@ showDungeonPopup(tile, onEnter) {
         );
       });
     });
+    this.startInventoryCooldownTimer(body);
+  }
+
+  paScrollCooldownRemaining() {
+    const me = this.server.me;
+    const lastUsedAt = Number(me && me.lastPaScrollAt);
+    if (!Number.isFinite(lastUsedAt)) return 0;
+    return Math.max(0, PA_SCROLL_COOLDOWN_MS - (this.server.now - lastUsedAt));
+  }
+
+  formatCooldown(ms) {
+    const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':');
+  }
+
+  startInventoryCooldownTimer(body) {
+    const card = body.querySelector('[data-pa-scroll-cooldown]');
+    if (!card) return;
+    const update = () => {
+      if (this.openSheet !== 'inventory' || !card.isConnected) {
+        this.stopInventoryCooldownTimer();
+        return;
+      }
+      const remainingMs = this.paScrollCooldownRemaining();
+      const badge = card.querySelector('[data-cooldown-label]');
+      const action = card.querySelector('[data-consume-label]');
+      const coolingDown = remainingMs > 0;
+      card.disabled = coolingDown;
+      card.classList.toggle('is-cooling-down', coolingDown);
+      if (badge) badge.textContent = coolingDown ? 'Recharge ' + this.formatCooldown(remainingMs) : 'Disponible';
+      if (action) action.textContent = coolingDown ? 'En recharge' : 'Utiliser';
+      if (!coolingDown) this.stopInventoryCooldownTimer();
+    };
+    update();
+    if (!card.disabled) return;
+    this.inventoryCooldownTimer = setInterval(update, 1000);
+  }
+
+  stopInventoryCooldownTimer() {
+    if (!this.inventoryCooldownTimer) return;
+    clearInterval(this.inventoryCooldownTimer);
+    this.inventoryCooldownTimer = null;
   }
 
   build_shop(body) {
@@ -1491,24 +1815,29 @@ showDungeonPopup(tile, onEnter) {
     const premiumSkins = SKIN_SHOP_ITEMS.filter((item) => item.currency === PREMIUM_CURRENCY.key);
     const moneyCard =
       '<div class="shop-wallets">' +
-        '<div class="shop-wallet"><span class="shop-wallet-label">Or</span><b>' + (me.gold || 0).toLocaleString('fr-FR') + ' 🪙</b></div>' +
-        '<div class="shop-wallet premium"><span class="shop-wallet-label">' + PREMIUM_CURRENCY.label + '</span><b>' +
-          (me[PREMIUM_CURRENCY.key] || 0).toLocaleString('fr-FR') + ' ' + PREMIUM_CURRENCY.icon + '</b></div>' +
+        '<div class="shop-wallet">' + this.currencyIcon('gold', 'large') + '<span><span class="shop-wallet-label">Or</span><b>' +
+          (me.gold || 0).toLocaleString('fr-FR') + '</b></span></div>' +
+        '<div class="shop-wallet premium">' + this.currencyIcon('premium', 'large') + '<span><span class="shop-wallet-label">' + PREMIUM_CURRENCY.label + '</span><b>' +
+          (me[PREMIUM_CURRENCY.key] || 0).toLocaleString('fr-FR') + '</b></span></div>' +
       '</div>';
     body.innerHTML =
       moneyCard +
+      '<div class="shop-section">' +
+        '<div class="upg-head"><b>Recharger en ' + PREMIUM_CURRENCY.label + '</b><span class="dim">Paiement sécurisé</span></div>' +
+        '<div class="shop-packs">' + MOONSTONE_PACKS.map((pack) => this.moonstonePackCard(pack)).join('') + '</div>' +
+      '</div>' +
+      '<div class="shop-section gold-exchange-section">' +
+        '<div class="upg-head"><b>Obtenir des pièces d’or</b><span class="dim">Contre des ' + PREMIUM_CURRENCY.label + '</span></div>' +
+        '<div class="shop-packs gold-packs">' + GOLD_PACKS.map((pack) => this.goldPackCard(pack)).join('') + '</div>' +
+      '</div>' +
+      this.paScrollCardHtml(me) +
       '<div class="shop-section">' +
         '<div class="upg-head"><b>Garde-robe des aventuriers</b><span class="dim">Skins contre or</span></div>' +
         '<div class="shop-grid">' + goldSkins.map((item) => this.shopSkinCard(me, item)).join('') + '</div>' +
       '</div>' +
       '<div class="shop-section premium">' +
-        '<div class="upg-head"><b>Collection premium</b><span class="dim">' + PREMIUM_CURRENCY.label + ' ' + PREMIUM_CURRENCY.icon + '</span></div>' +
+        '<div class="upg-head"><b>Collection premium</b><span class="dim">' + PREMIUM_CURRENCY.label + ' ' + this.currencyIcon('premium', 'small') + '</span></div>' +
         '<div class="shop-grid">' + premiumSkins.map((item) => this.shopSkinCard(me, item)).join('') + '</div>' +
-      '</div>' +
-      '<div class="upg shop-premium-note">' +
-        '<div class="upg-head"><b>Partie premium</b><span class="dim">Monnaie spéciale</span></div>' +
-        '<p>Les <b>' + PREMIUM_CURRENCY.label + '</b> servent aux variantes rares et à la future boutique cosmétique.</p>' +
-        '<p class="dim">Pour les tests, tu peux t’en attribuer depuis le menu admin.</p>' +
       '</div>';
     body.querySelectorAll('[data-shop-buy]').forEach((btn) => {
       btn.addEventListener('click', async () => {
@@ -1523,6 +1852,67 @@ showDungeonPopup(tile, onEnter) {
         this.toast(r.ok ? 'Apparence mise à jour.' : r.error);
       });
     });
+    body.querySelectorAll('[data-buy-pack]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.getCheckoutLink(btn.dataset.buyPack));
+        if (r.ok && r.url) window.location.href = r.url;
+        else this.toast(r.error || 'Achat indisponible pour le moment.');
+      });
+    });
+    body.querySelectorAll('[data-buy-gold-pack]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.buyGoldPack(btn.dataset.buyGoldPack));
+        this.toast(r.ok ? ('+' + r.gold.toLocaleString('fr-FR') + ' pièces d’or ajoutées.') : r.error);
+        if (r.ok) this.showSheet('shop');
+      });
+    });
+    const paScrollBtn = body.querySelector('[data-buy-pa-scroll]');
+    if (paScrollBtn) {
+      paScrollBtn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.buyPaScroll());
+        this.toast(r.ok ? '📜 Parchemin ajouté à l’inventaire.' : r.error);
+        if (r.ok) this.showSheet('shop');
+      });
+    }
+  }
+
+  moonstonePackCard(pack) {
+    const packLabels = { small: 'Petit', medium: 'Moyen', large: 'Grand' };
+    return '<article class="shop-pack pack-' + esc(pack.id) + '">' +
+      (pack.bonusLabel ? '<span class="shop-pack-bonus">' + esc(pack.bonusLabel) + '</span>' : '') +
+      '<div class="shop-pack-name">' + esc(packLabels[pack.id] || pack.id) + '</div>' +
+      '<div class="shop-pack-art">' + this.currencyIcon('premium', 'pack-currency') + '</div>' +
+      '<div class="shop-pack-amount"><b>' + pack.lunaires + '</b><span>Écailles</span></div>' +
+      '<button class="btn primary shop-btn" data-buy-pack="' + esc(pack.id) + '">' + esc(pack.priceLabel) + '</button>' +
+    '</article>';
+  }
+
+  goldPackCard(pack) {
+    const packLabels = { pouch: 'Bourse', chest: 'Coffre', hoard: 'Trésor' };
+    return '<article class="shop-pack gold-pack gold-pack-' + esc(pack.id) + '">' +
+      (pack.bonusLabel ? '<span class="shop-pack-bonus">' + esc(pack.bonusLabel) + '</span>' : '') +
+      '<div class="shop-pack-name">' + esc(packLabels[pack.id] || pack.id) + '</div>' +
+      '<div class="shop-pack-art">' + this.currencyIcon('gold', 'pack-currency') + '</div>' +
+      '<div class="shop-pack-amount"><b>+' + pack.gold.toLocaleString('fr-FR') + '</b><span>Pièces d’or</span></div>' +
+      '<button class="btn primary shop-btn" data-buy-gold-pack="' + esc(pack.id) + '">' +
+        pack.moonstones + ' ' + this.currencyIcon('premium', 'small') +
+      '</button>' +
+    '</article>';
+  }
+
+  // Simple carte d'achat : le parchemin part en inventaire, pas d'effet
+  // immédiat — le cooldown d'utilisation s'affiche/s'applique depuis
+  // l'Inventaire (voir build_inventory), pas ici.
+  paScrollCardHtml(me) {
+    const canAfford = Number(me[PREMIUM_CURRENCY.key] || 0) >= PA_SCROLL_COST_MOONSTONES;
+    return '<div class="upg pa-scroll-card">' +
+      '<img class="pa-scroll-art" src="' + this.getConsumableTargetSrc('PARCHEMIN_ENDURANCE') + '" alt="Parchemin d’Endurance">' +
+      '<div class="pa-scroll-copy">' +
+        '<div class="upg-head"><b>Parchemin d’Endurance</b><span class="dim small">' + PA_SCROLL_COST_MOONSTONES + ' ' + this.currencyIcon('premium', 'small') + '</span></div>' +
+        '<p class="dim small">Recharge l’Endurance au maximum quand vous l’utilisez depuis l’Inventaire — limité à 1-2 utilisations par jour.</p>' +
+        '<button class="btn primary wide" data-buy-pa-scroll' + (canAfford ? '' : ' disabled') + '>Acheter</button>' +
+      '</div>' +
+    '</div>';
   }
 
   shopSkinCard(me, item) {
@@ -1545,7 +1935,7 @@ showDungeonPopup(tile, onEnter) {
           '</div>' +
           '<div class="shop-card-meta">' + esc(cls.role || 'Classe') + '</div>' +
           '<div class="shop-card-price ' + (item.currency === PREMIUM_CURRENCY.key ? 'premium' : 'gold') + '">' +
-            (item.currency === PREMIUM_CURRENCY.key ? PREMIUM_CURRENCY.icon : '🪙') + ' ' + item.price +
+            (item.currency === PREMIUM_CURRENCY.key ? this.currencyIcon('premium') : this.currencyIcon('gold')) + ' ' + item.price +
           '</div>' +
           '<div class="shop-card-state">' +
             (equipped ? 'Équipé' : owned ? 'Possédé' : compatible ? (canAfford ? 'Disponible' : 'Fonds insuffisants') : 'Active cette classe pour l’utiliser') +
@@ -1601,8 +1991,8 @@ showDungeonPopup(tile, onEnter) {
       '<div class="stat-line">' +
         '<span>⚔ Puissance <b>' + power + '</b></span>' +
         '<span>♥ PV max <b>' + maxHp(me) + '</b></span>' +
-        '<span>🪙 Or <b>' + (me.gold || 0).toLocaleString('fr-FR') + '</b></span>' +
-        '<span>' + PREMIUM_CURRENCY.icon + ' ' + PREMIUM_CURRENCY.label + ' <b>' + (me[PREMIUM_CURRENCY.key] || 0).toLocaleString('fr-FR') + '</b></span>' +
+        '<span>' + this.currencyIcon('gold') + ' Or <b>' + (me.gold || 0).toLocaleString('fr-FR') + '</b></span>' +
+        '<span>' + this.currencyIcon('premium') + ' ' + PREMIUM_CURRENCY.label + ' <b>' + (me[PREMIUM_CURRENCY.key] || 0).toLocaleString('fr-FR') + '</b></span>' +
         '<span>🥊 Duels <b>' + ((me.duels && me.duels.wins) || 0) + 'V / ' + ((me.duels && me.duels.losses) || 0) + 'D</b></span>' +
       '</div>' +
 
@@ -1612,8 +2002,8 @@ showDungeonPopup(tile, onEnter) {
       '<div class="section-divider">✦</div>' +
 
       '<div class="profile-sec-title">Équipement</div>' +
-      '<div class="gear-line"><span class="gear-ico">⚔️</span><span class="gear-name">' + me.weapon.type + '</span><span class="tier t' + me.weapon.tier + '">T' + me.weapon.tier + '</span></div>' +
-      '<div class="gear-line"><span class="gear-ico">🛡️</span><span class="gear-name">Armure de ' + me.armor.type + '</span><span class="tier t' + me.armor.tier + '">T' + me.armor.tier + '</span></div>' +
+      '<div class="gear-line"><img class="gear-art" src="' + equipmentAsset('weapon', me.weapon.type) + '" alt="' + esc(me.weapon.type) + '"><span class="gear-name">' + me.weapon.type + '</span><span class="tier t' + me.weapon.tier + '">T' + me.weapon.tier + '</span></div>' +
+      '<div class="gear-line"><img class="gear-art" src="' + equipmentAsset('armor', me.armor.type) + '" alt="Armure de ' + esc(me.armor.type) + '"><span class="gear-name">Armure de ' + me.armor.type + '</span><span class="tier t' + me.armor.tier + '">T' + me.armor.tier + '</span></div>' +
       '<div class="gear-line"><span class="gear-ico">✨</span><span class="gear-name">Apparence ' + esc((skinFor(me.skinId) || {}).label || 'Tenue de base') + '</span><span class="tier">Actuelle</span></div>' +
       '<button id="profileSkinBtn" class="btn wide">Changer d’apparence</button>' +
       '<p class="dim small profile-hint">Unique et évolutif — chez le Forgeron de la Capitale.</p>' +
@@ -1798,7 +2188,7 @@ showDungeonPopup(tile, onEnter) {
           '<span class="admin-dot ' + (p.online ? 'on' : 'off') + '"></span>' +
           '<span class="admin-player-name">' + esc(p.username) + '</span>' +
           (p.role === 'admin' ? '<span class="role-chip">Admin</span>' : '') +
-          '<span class="dim small admin-player-meta">' + esc(p.classLabel || '') + ' · Récolte ' + p.harvestLevel + ' · Arme ' + p.weaponMastery + ' · 🪙 ' + (p.gold || 0) + ' · ' + PREMIUM_CURRENCY.icon + ' ' + (p.premium || 0) + '</span>' +
+          '<span class="dim small admin-player-meta">' + esc(p.classLabel || '') + ' · Récolte ' + p.harvestLevel + ' · Arme ' + p.weaponMastery + ' · ' + this.currencyIcon('gold', 'small') + ' ' + (p.gold || 0) + ' · ' + this.currencyIcon('premium', 'small') + ' ' + (p[PREMIUM_CURRENCY.key] || 0) + '</span>' +
         '</summary>' +
         '<div class="admin-player-body">' +
           '<p class="dim small">Inscrit le ' + dateStr + ' · ' + p.charCount + ' personnage(s) / ' + p.charSlots + ' emplacement(s) (max ' + MAX_CHAR_SLOTS + ') · arme T' + p.weaponTier + ' · armure T' + p.armorTier + '</p>' +
@@ -1825,8 +2215,8 @@ showDungeonPopup(tile, onEnter) {
       '<div class="admin-grant-form" data-username="' + esc(username) + '">' +
         '<select class="admin-select admin-select-what" data-role="what">' +
           '<optgroup label="Compte">' +
-            '<option value="gold">🪙 Or</option>' +
-            '<option value="premium">' + PREMIUM_CURRENCY.icon + ' ' + PREMIUM_CURRENCY.label + '</option>' +
+            '<option value="gold">Or</option>' +
+            '<option value="premium">' + PREMIUM_CURRENCY.label + '</option>' +
           '</optgroup>' +
           '<optgroup label="Progression">' +
             '<option value="level:harvest">⛏ Niveau de récolte</option>' +
@@ -1861,7 +2251,7 @@ showDungeonPopup(tile, onEnter) {
     return Object.entries(recipe).map(([k, n]) => {
       if (k === 'gold') {
         const ok = (me.gold || 0) >= n;
-        return '<li class="' + (ok ? 'ok-c' : 'hp-c') + '">' + n + ' 🪙 <span class="dim">(' + (me.gold || 0) + ')</span></li>';
+        return '<li class="' + (ok ? 'ok-c' : 'hp-c') + '">' + n + ' ' + this.currencyIcon('gold', 'small') + ' <span class="dim">(' + (me.gold || 0) + ')</span></li>';
       }
       const r = parseStackKey(k);
       const have = me.inventory[k] || 0;
@@ -1879,6 +2269,10 @@ showDungeonPopup(tile, onEnter) {
           ' T' + me.buff.tier + ' (' + me.buff.combats + ' combats restants)</p>'
         : '');
     for (const [type, item] of Object.entries(CONSUMABLES)) {
+      // Seuls les plats cuisinés (buff/instant) se préparent à la Marmite —
+      // le Parchemin d'Endurance s'achète à la Boutique contre des Écailles
+      // Lunaires, il n'a pas de recette CONSUMABLE_RECIPES.
+      if (item.kind !== 'buff' && item.kind !== 'instant') continue;
       const itemSrc = this.getConsumableTargetSrc(type);
       let tiersHtml = '';
       for (let t = 1; t <= 6; t++) {
@@ -2111,19 +2505,27 @@ showDungeonPopup(tile, onEnter) {
     Promise.all([
       me.guildId ? Promise.resolve(this.server.guildInfo()) : Promise.resolve({ ok: false }),
       Promise.resolve(this.server.friendsList()),
-    ]).then(([guildRes, friendsRes]) => {
+      me.guildId ? Promise.resolve(this.server.castlesInfo()) : Promise.resolve({ ok: false }),
+    ]).then(([guildRes, friendsRes, castlesRes]) => {
       if (this.openSheet !== 'social') return;   // fermé entre-temps
       this.renderSocial(
         body, me,
         (guildRes && guildRes.ok) ? guildRes.guild : null,
-        (friendsRes && friendsRes.ok) ? friendsRes.list : []
+        (friendsRes && friendsRes.ok) ? friendsRes.list : [],
+        (castlesRes && castlesRes.ok) ? castlesRes.list : []
       );
     });
   }
 
-  renderSocial(body, me, guild, friends) {
+  // Changer d'onglet de discussion (ou de destinataire de MP) est un pur
+  // changement d'affichage local : on rappelle renderSocial directement avec
+  // les données déjà en mémoire plutôt que showSheet('social'), qui repasse
+  // par « Chargement… » et re-fetch guilde/amis — ça évitait le clignotement
+  // à chaque changement d'onglet.
+  renderSocial(body, me, guild, friends, castles) {
     // L'onglet actif est sous les yeux : plus la peine d'y signaler du non-lu.
     this.chatUnread[this.chatChannel] = false;
+    this.markChatSeen(this.chatChannel);
 
     const tabs = [
       { key: 'general', label: 'Général' },
@@ -2165,20 +2567,20 @@ showDungeonPopup(tile, onEnter) {
         '<button id="chatSend" class="btn primary"' + (canType ? '' : ' disabled') + '>Envoyer</button>' +
       '</div>' +
       '<div class="section-divider">✦</div>' +
-      this.buildGuildSectionHtml(me, guild) +
+      this.buildGuildSectionHtml(me, guild, castles) +
       '<div class="section-divider">✦</div>' +
       this.buildFriendsSectionHtml(me, friends);
 
     this.renderFeed();
 
     body.querySelectorAll('[data-chat-tab]').forEach((btn) => {
-      btn.addEventListener('click', () => { this.chatChannel = btn.dataset.chatTab; this.showSheet('social'); });
+      btn.addEventListener('click', () => { this.chatChannel = btn.dataset.chatTab; this.renderSocial(body, me, guild, friends, castles); });
     });
     const whisperSelect = $('whisperTargetSelect');
     if (whisperSelect) {
       whisperSelect.addEventListener('change', () => {
         this.chatWhisperTarget = whisperSelect.value;
-        this.showSheet('social');
+        this.renderSocial(body, me, guild, friends, castles);
       });
     }
 
@@ -2200,14 +2602,13 @@ showDungeonPopup(tile, onEnter) {
     this.updateChatBadges();
 
     if (typeof this.pendingSocialScrollTop === 'number') {
-      const sheetBody = $('sheetBody');
-      if (sheetBody) sheetBody.scrollTop = this.pendingSocialScrollTop;
+      body.scrollTop = this.pendingSocialScrollTop;
       this.pendingSocialScrollTop = null;
     }
   }
 
   /* ---------- Guilde ---------- */
-  buildGuildSectionHtml(me, guild) {
+  buildGuildSectionHtml(me, guild, castles) {
     if (me.guildInvite) {
       return '<div class="profile-sec-title">Guilde</div>' +
         '<div class="invite-card">' +
@@ -2235,11 +2636,31 @@ showDungeonPopup(tile, onEnter) {
         (isLeader && !m.isLeader ? '<button class="btn btn-small" data-guild-kick="' + esc(m.username) + '">Exclure</button>' : '') +
       '</div>'
     )).join('');
+    const owned = (castles || []).filter((c) => c.isOwnGuild);
+    const castlesHtml = '<div class="profile-sec-title">Châteaux <span class="sec-count">' + owned.length + '</span></div>' +
+      (owned.length
+        ? '<div class="castle-owned-list">' + owned.map((c) => {
+            const pct = c.hpMax ? Math.max(0, Math.min(100, Math.round(100 * c.hp / c.hpMax))) : 0;
+            return '<div class="castle-owned-row">' +
+              '<div class="castle-owned-head">' +
+                '<span class="castle-owned-name">' + esc(this.terrainLabel(c.terrain)) + '</span>' +
+                '<span class="castle-badges">' +
+                  '<span class="tier t' + c.level + '">Niv. ' + c.level + ' / ' + c.maxLevel + '</span>' +
+                  '<span class="tier t' + (c.fortLevel || 0) + '">🛡 ' + (c.fortLevel || 0) + ' / ' + c.maxFortLevel + '</span>' +
+                '</span>' +
+              '</div>' +
+              '<div class="xp-track"><div class="xp-fill" style="width:' + pct + '%"></div></div>' +
+              '<p class="dim small">' + c.hp + ' / ' + c.hpMax + ' PS</p>' +
+            '</div>';
+          }).join('') + '</div>'
+        : '<p class="dim small">Aucun château détenu pour l’instant.</p>');
     return '<div class="profile-sec-title">Guilde <span class="sec-count">' + guild.members.length + ' / ' + guild.maxMembers + '</span></div>' +
       '<div class="hero-name guild-name">' + esc(guild.name) + '</div>' +
       '<div class="friend-list">' + rows + '</div>' +
       (isLeader ? '<div class="chat-row"><input id="guildInviteInput" type="text" maxlength="16" placeholder="Pseudo à inviter…"><button id="guildInviteBtn" class="btn primary">Inviter</button></div>' : '') +
-      '<button class="btn wide danger" id="guildLeaveBtn">Quitter la guilde</button>';
+      '<button class="btn wide danger" id="guildLeaveBtn">Quitter la guilde</button>' +
+      '<div class="section-divider">✦</div>' +
+      castlesHtml;
   }
 
   wireGuildSection(body) {
@@ -2343,12 +2764,13 @@ showDungeonPopup(tile, onEnter) {
   build_capital(body) {
     const me = this.server.me;
     body.innerHTML =
-      '<p class="dim">Zone neutre absolue. Les PNJ Artisans (T1 à T5) y tiennent boutique.</p>' +
+      '<p class="dim">Zone neutre absolue. Les PNJ Artisans (T1 à T6) y tiennent boutique.</p>' +
       '<button id="restBtn" class="btn wide">⛲ Se reposer à la fontaine — PV restaurés (gratuit)</button>' +
       '<button id="travelBtn" class="btn wide">🌀 Réseau de téléporteurs</button>' +
       '<button id="marmiteBtn" class="btn wide">🍲 La Marmite — cuisine & buffs</button>' +
       this.upgradeCard('weapon') +
-      this.upgradeCard('armor');
+      this.upgradeCard('armor') +
+      this.engineCraftSection();
     $('restBtn').addEventListener('click', async () => {
       const r = await Promise.resolve(this.server.rest());
       if (!r.ok) this.toast(r.error);
@@ -2361,16 +2783,59 @@ showDungeonPopup(tile, onEnter) {
         this.toast(r.ok ? 'Amélioration réussie !' : r.error);
       });
     });
+    body.querySelectorAll('[data-craft-engine]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.craftSiegeEngine(Number(btn.dataset.craftEngine)));
+        this.toast(r.ok ? '⚙ Engin de siège construit !' : r.error);
+        if (r.ok) this.showSheet('capital');
+      });
+    });
+  }
+
+  engineCraftSection() {
+    const me = this.server.me;
+    const rows = [1, 2, 3, 4, 5].map((t) => {
+      const engine = SIEGE_ENGINES[t];
+      const recipe = SIEGE_ENGINE_RECIPES[t];
+      const have = me.inventory[stackKey(SIEGE_ENGINE_ITEM, t)] || 0;
+      let allOk = true;
+      const parts = Object.entries(recipe).map(([k, n]) => {
+        if (k === 'gold') {
+          const ok = (me.gold || 0) >= n;
+          if (!ok) allOk = false;
+          return '<span class="' + (ok ? 'ok-c' : 'hp-c') + '">' + n + ' ' + this.currencyIcon('gold', 'small') + '</span>';
+        }
+        const r = parseStackKey(k);
+        const ok = (me.inventory[k] || 0) >= n;
+        if (!ok) allOk = false;
+        return '<span class="' + (ok ? 'ok-c' : 'hp-c') + '">' + n + '× ' + esc(resourceLabel(r.type, r.tier)) + '</span>';
+      });
+      return '<div class="upg siege-engine-card">' +
+        '<img class="siege-engine-art" src="' + engine.asset + '" alt="' + esc(engine.label) + '">' +
+        '<div class="siege-engine-copy">' +
+          '<div class="upg-head"><b>' + esc(engine.label) + ' · T' + t + '</b><span class="dim small">en stock : ' + have + '</span></div>' +
+          '<p class="dim small">' + parts.join(' · ') + '</p>' +
+          '<p class="dim small">En siège : +' + SIEGE_ENGINE_FORCE[t] + ' force, +' + SIEGE_ENGINE_DAMAGE[t] + ' PS garantis.</p>' +
+          '<button class="btn wide" data-craft-engine="' + t + '"' + (allOk ? '' : ' disabled') + '>⚙ Construire</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+    return '<div class="profile-sec-title">Ingénierie de siège</div>' +
+      '<p class="dim small">Prépare une attaque de château à l’avance — les engins se déploient (1 par personne) en rejoignant un siège.</p>' +
+      rows;
   }
 
   upgradeCard(slot) {
     const me = this.server.me;
     const item = me[slot];
     const name = slot === 'weapon' ? item.type : 'Armure de ' + item.type;
+    const art = equipmentAsset(slot, item.type);
     const target = item.tier + 1;
-    if (target > 5) {
-      return '<div class="upg"><div class="upg-head"><b>' + name + '</b><span class="tier t5">T5 — max</span></div>' +
-        '<p class="dim">Tier maximum atteint.</p></div>';
+    if (target > 6) {
+      return '<div class="upg equipment-upgrade-card">' +
+        '<img class="equipment-art" src="' + art + '" alt="' + esc(name) + '">' +
+        '<div class="equipment-copy"><div class="upg-head"><b>' + name + '</b><span class="tier t6">T6 — max</span></div>' +
+        '<p class="dim">Tier maximum atteint.</p></div></div>';
     }
     const recipe = UPGRADE_RECIPES[slot][target];
     const paCost = CONFIG.COSTS.UPGRADE[target];
@@ -2388,31 +2853,70 @@ showDungeonPopup(tile, onEnter) {
     const paOk = me.pa >= paCost;
     if (!paOk) allOk = false;
 
-    return '<div class="upg">' +
-      '<div class="upg-head"><b>' + name + '</b><span><span class="tier t' + item.tier + '">T' + item.tier + '</span> → <span class="tier t' + target + '">T' + target + '</span></span></div>' +
-      '<ul class="upg-needs">' + needs.join('') +
-        '<li class="' + (masteryOk ? 'ok-c' : 'hp-c') + '">Maîtrise d’arme T' + target + ' <span class="dim">(actuelle : T' + me.weaponMastery + ')</span></li>' +
-        '<li class="' + (paOk ? 'ok-c' : 'hp-c') + '">' + paCost + ' PA</li>' +
-      '</ul>' +
-      '<button class="btn primary wide" data-upgrade="' + slot + '"' + (allOk ? '' : ' disabled') + '>⚒ Améliorer (' + paCost + ' PA)</button>' +
-      '</div>';
+    return '<div class="upg equipment-upgrade-card">' +
+      '<img class="equipment-art" src="' + art + '" alt="' + esc(name) + '">' +
+      '<div class="equipment-copy">' +
+        '<div class="upg-head"><b>' + name + '</b><span><span class="tier t' + item.tier + '">T' + item.tier + '</span> → <span class="tier t' + target + '">T' + target + '</span></span></div>' +
+        '<ul class="upg-needs">' + needs.join('') +
+          '<li class="' + (masteryOk ? 'ok-c' : 'hp-c') + '">Maîtrise d’arme T' + target + ' <span class="dim">(actuelle : T' + me.weaponMastery + ')</span></li>' +
+          '<li class="' + (paOk ? 'ok-c' : 'hp-c') + '">' + paCost + ' PA</li>' +
+        '</ul>' +
+        '<button class="btn primary wide" data-upgrade="' + slot + '"' + (allOk ? '' : ' disabled') + '>⚒ Améliorer (' + paCost + ' PA)</button>' +
+      '</div>' +
+    '</div>';
   }
 
   /* ---------- Fil social / événements ---------- */
   pushFeed(msg) {
     this.feed.push(msg);
     if (this.feed.length > 120) this.feed.shift();
-    if (this.openSheet === 'social') this.renderFeed();
+    if (this.openSheet === 'social' || this.desktopPanelsActive()) this.renderFeed();
 
-    if (msg.type === 'chat' && !msg.self) {
+    if (msg.type === 'chat') {
       const ch = msg.channel || 'general';
-      const inView = this.openSheet === 'social' && this.chatChannel === ch &&
+      const socialVisible = this.openSheet === 'social' || this.desktopPanelsActive();
+      const inView = socialVisible && this.chatChannel === ch &&
         (ch !== 'whisper' || (this.chatWhisperTarget && (msg.from === this.chatWhisperTarget || msg.to === this.chatWhisperTarget)));
-      if (!inView) {
+      if (inView) {
+        // Déjà sous les yeux (même en train de recevoir en direct) : on
+        // retient la signature tout de suite pour qu'une reconnexion
+        // immédiate après ne re-signale pas ce qu'on vient de voir.
+        this.markChatSeen(ch);
+      } else if (!msg.self) {
         this.chatUnread[ch] = true;
         this.updateChatBadges();
       }
     }
+  }
+
+  // Signature bon marché (sans horodatage côté serveur) du dernier message
+  // d'un canal : compte + expéditeur + texte. Sert uniquement à détecter
+  // « quelque chose a changé depuis la dernière lecture », pas à trier.
+  chatChannelSignature(channel) {
+    const msgs = this.feed.filter((m) => m.type === 'chat' && (m.channel || 'general') === channel);
+    if (!msgs.length) return '';
+    const last = msgs[msgs.length - 1];
+    return msgs.length + '|' + (last.from || '') + '|' + (last.text || '');
+  }
+
+  chatSeenStorageKey() {
+    return CONFIG.SAVE_KEY + '_chatseen_' + (this.server.me ? this.server.me.username : '');
+  }
+
+  loadChatSeen() {
+    try { return JSON.parse(localStorage.getItem(this.chatSeenStorageKey()) || '{}'); }
+    catch (e) { return {}; }
+  }
+
+  saveChatSeen() {
+    try { localStorage.setItem(this.chatSeenStorageKey(), JSON.stringify(this.chatSeen || {})); }
+    catch (e) { /* stockage indisponible (navigation privée, quota…) */ }
+  }
+
+  markChatSeen(channel) {
+    if (!this.chatSeen) this.chatSeen = this.loadChatSeen();
+    this.chatSeen[channel] = this.chatChannelSignature(channel);
+    this.saveChatSeen();
   }
 
   /* Pastilles de messages non lus : icône Social (bar du bas) + onglets de canal */
