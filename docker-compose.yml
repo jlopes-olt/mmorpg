@@ -7,6 +7,11 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
+      # Tant que le profil "https" (service caddy ci-dessous) n'est pas activé,
+      # le port reste public comme avant — accès direct http://ip:3000.
+      # Le jour où vous activez Caddy (nom de domaine prêt), repassez cette
+      # ligne en "127.0.0.1:${APP_PORT:-3000}:3000" pour forcer tout le trafic
+      # externe à passer par HTTPS (nécessaire pour Service Worker / notifications push).
       - "${APP_PORT:-3000}:3000"
     environment:
       PORT: 3000
@@ -28,5 +33,32 @@ services:
       retries: 3
       start_period: 20s
 
+  # Optionnel, désactivé par défaut : reverse proxy HTTPS (Let's Encrypt automatique).
+  # Ne démarre PAS avec un simple "docker compose up" — il faut activer le profil
+  # explicitement une fois le nom de domaine prêt :
+  #   docker compose --profile https up -d --build
+  # (ou définir COMPOSE_PROFILES=https dans les variables d'environnement du stack Portainer).
+  # Sans ça, aucun risque que ce service bloque le déploiement actuel en HTTP simple.
+  caddy:
+    image: caddy:2-alpine
+    container_name: mmorpg_caddy
+    profiles: ["https"]
+    depends_on:
+      - mmorpg
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Nom de domaine pointé vers l'IP publique du VPS (ex. feralia.exemple.com).
+      # À définir dans Portainer/.env — même remarque que pour ADMIN_USERNAMES ci-dessus.
+      DOMAIN: ${DOMAIN:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
 volumes:
   mmorpg_state:
+  caddy_data:
+  caddy_config:

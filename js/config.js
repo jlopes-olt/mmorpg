@@ -16,6 +16,12 @@ const CONFIG = {
   JOIN_RADIUS: 6,      // distance max pour rejoindre un lobby de raid
   SAFE_RADIUS: 3,      // zone sans monstre autour de la Capitale
 
+  // Glisser pour explorer la caméra loin du héros (tape une case révélée
+  // pour s'y déplacer, bouton de recentrage tant qu'on n'est pas sur soi).
+  // Repasser à false pour revenir instantanément à l'ancien comportement
+  // (caméra toujours verrouillée sur le héros) sans toucher au reste du code.
+  CAMERA_PAN_ENABLED: true,
+
   // Plafond pensé pour 1-3 sessions/jour : un réservoir vide se remplit en
   // 12h (720 min à +1/min), donc personne n'a besoin de se reconnecter
   // toutes les 2-3h pour ne pas « perdre » de PA en dépassant le plafond.

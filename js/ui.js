@@ -2543,10 +2543,6 @@ showDungeonPopup(tile, onEnter) {
       return '<div class="xp"><div class="xp-head"><span>' + label + '</span><span class="tier t6">T6 — max</span></div>' +
         '<div class="xp-track"><div class="xp-fill" style="width:100%"></div></div></div>';
     }
-    if (lvl >= 5) {
-      return '<div class="xp"><div class="xp-head"><span>' + label + '</span><span class="tier t5">T5 — max</span></div>' +
-        '<div class="xp-track"><div class="xp-fill" style="width:100%"></div></div></div>';
-    }
     const prev = XP_LEVELS[lvl - 1], next = XP_LEVELS[lvl];
     const frac = Math.max(0, Math.min(1, (xp - prev) / (next - prev)));
     return '<div class="xp"><div class="xp-head"><span>' + label + '</span>' +
@@ -3051,7 +3047,7 @@ showDungeonPopup(tile, onEnter) {
 
     overlay.innerHTML =
       '<div class="creation-card">' +
-        '<h1>FERALIA <span class="dim">Online</span></h1>' +
+        '<img class="auth-logo" src="assets/feralia_online_logo.png" alt="FERALIA Online">' +
         '<div class="auth-tabs">' +
           '<button id="tabLogin" class="auth-tab active" type="button">Se connecter</button>' +
           '<button id="tabRegister" class="auth-tab" type="button">Créer un compte</button>' +
@@ -3142,7 +3138,7 @@ showDungeonPopup(tile, onEnter) {
     ).join('');
     overlay.innerHTML =
       '<div class="creation-card">' +
-        '<h1>FERALIA <span class="dim">Online</span></h1>' +
+        '<img class="auth-logo" src="assets/feralia_online_logo.png" alt="FERALIA Online">' +
         '<p class="dim">Choisissez votre combo espèce / classe — il est définitif.</p>' +
         '<input id="nameInput" type="text" maxlength="16" placeholder="Nom d’aventurier…" autocomplete="off">' +
         '<div class="class-grid">' + cards + '</div>' +

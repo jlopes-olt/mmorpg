@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v31-push-camera';
+const VERSION = 'wildrift-v37-pan-fog';
 
 const CORE = [
   '/',

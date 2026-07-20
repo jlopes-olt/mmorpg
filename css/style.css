@@ -1069,6 +1069,23 @@ html, body {
   cursor: pointer;
 }
 
+#recenterBtn {
+  position: absolute;
+  bottom: 86px;
+  right: 14px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 1px solid var(--gold);
+  background: rgba(20, 24, 29, 0.82);
+  color: var(--gold);
+  font-size: 22px;
+  line-height: 1;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  z-index: 25;
+}
+
 /* ---------- Navigation inférieure ---------- */
 #nav {
   position: absolute;
@@ -2956,44 +2973,99 @@ html, body {
   inset: 0;
   z-index: 60;
   overflow-y: auto;
-  background: var(--bg);
   display: flex;
   align-items: flex-start;
   justify-content: center;
+  padding: max(22px, env(safe-area-inset-top)) 16px calc(22px + env(safe-area-inset-bottom));
+  background:
+    radial-gradient(circle at 50% 0%, rgba(232, 178, 63, 0.16), transparent 46%),
+    radial-gradient(circle at 12% 88%, rgba(80, 126, 92, 0.2), transparent 42%),
+    radial-gradient(circle at 90% 82%, rgba(38, 98, 115, 0.18), transparent 40%),
+    repeating-linear-gradient(120deg, rgba(232, 236, 241, 0.035) 0px, rgba(232, 236, 241, 0.035) 1.5px, transparent 1.5px, transparent 46px),
+    repeating-linear-gradient(60deg, rgba(232, 236, 241, 0.03) 0px, rgba(232, 236, 241, 0.03) 1.5px, transparent 1.5px, transparent 46px),
+    linear-gradient(160deg, #141b24 0%, #0c1017 45%, #05070a 100%);
 }
-.creation-card { width: 100%; max-width: 420px; padding: 28px 20px calc(28px + env(safe-area-inset-bottom)); }
+.creation-card {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  margin: auto;
+  padding: 26px 22px calc(24px + env(safe-area-inset-bottom));
+  border-radius: 24px;
+  background: linear-gradient(180deg, rgba(36, 44, 54, 0.94), rgba(18, 22, 27, 0.96));
+  border: 1px solid rgba(214, 178, 102, 0.26);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 245, 220, 0.06),
+    inset 0 0 60px rgba(0, 0, 0, 0.32),
+    0 28px 54px rgba(0, 0, 0, 0.5);
+  animation: splashRise 0.55s ease-out;
+}
+.creation-card::before {
+  content: '';
+  position: absolute;
+  inset: 9px;
+  border-radius: 17px;
+  border: 1px solid rgba(214, 178, 102, 0.14);
+  pointer-events: none;
+}
+.auth-logo {
+  display: block;
+  position: relative;
+  z-index: 1;
+  width: min(84%, 300px);
+  height: auto;
+  margin: 2px auto 12px;
+  filter:
+    drop-shadow(0 14px 18px rgba(0, 0, 0, 0.45))
+    drop-shadow(0 0 16px rgba(244, 205, 110, 0.18));
+}
 .auth-tabs {
   display: flex;
   gap: 6px;
-  margin: 14px 0;
-  padding: 4px;
-  border-radius: 10px;
-  background: var(--panel);
-  border: 1px solid var(--line);
+  margin: 4px 0 18px;
+  padding: 5px;
+  border-radius: 12px;
+  background: rgba(7, 9, 12, 0.5);
+  border: 1px solid rgba(214, 178, 102, 0.2);
+  box-shadow: inset 0 1px 5px rgba(0, 0, 0, 0.4);
 }
 .auth-tab {
   flex: 1;
-  min-height: 42px;
+  min-height: 44px;
   border: none;
-  border-radius: 7px;
+  border-radius: 8px;
   background: none;
-  color: var(--dim);
-  font-size: 13.5px;
+  color: rgba(232, 236, 241, 0.55);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 14px;
   font-weight: 700;
+  letter-spacing: 0.02em;
   cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
 }
-.auth-tab.active { background: var(--panel-2); color: var(--ink); }
-.creation-card h1 { font-size: 26px; letter-spacing: 0.01em; margin-bottom: 4px; }
+.auth-tab.active {
+  background: linear-gradient(180deg, rgba(243, 219, 162, 0.92), rgba(225, 184, 104, 0.84));
+  color: #4f2c12;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+}
 .creation-card > p { margin-bottom: 16px; font-size: 13px; }
 .creation-card input {
   width: 100%;
   padding: 13px 14px;
-  border-radius: 9px;
-  border: 1px solid var(--line);
-  background: var(--panel);
+  border-radius: 10px;
+  border: 1px solid rgba(214, 178, 102, 0.2);
+  background: rgba(7, 9, 12, 0.5);
   color: var(--ink);
   font-size: 15px;
   margin-bottom: 14px;
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.35);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.creation-card input::placeholder { color: rgba(139, 150, 165, 0.75); }
+.creation-card input:focus {
+  outline: none;
+  border-color: rgba(232, 178, 63, 0.55);
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.35), 0 0 0 3px rgba(232, 178, 63, 0.14);
 }
 .class-grid { display: flex; flex-direction: column; gap: 8px; }
 .class-card {

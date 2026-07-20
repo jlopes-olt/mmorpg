@@ -184,6 +184,7 @@ class Renderer {
     this.explored = explored;
     this.cam = { x: 0, y: 0 };
     this.camInit = false;
+    this.camPanned = false;   // true tant qu'on a glissé la caméra loin du héros (voir CONFIG.CAMERA_PAN_ENABLED)
 
     this.sprites = new Image();
     this.spritesReady = false;
@@ -758,15 +759,21 @@ class Renderer {
     // converge à la même VITESSE RÉELLE quel que soit le frame rate (calibrée
     // pour ressembler à l'ancien rendu à 60 fps stable : 103 ms de constante
     // de temps ≈ 0.85 restant après 16,7 ms, comme *0.15 par frame à 60 fps).
-    const smoothing = 1 - Math.exp(-(dt || 16.7) / 103);
-    this.cam.x += (tx - this.cam.x) * smoothing;
-    this.cam.y += (ty - this.cam.y) * smoothing;
+    if (!this.camPanned) {
+      const smoothing = 1 - Math.exp(-(dt || 16.7) / 103);
+      this.cam.x += (tx - this.cam.x) * smoothing;
+      this.cam.y += (ty - this.cam.y) * smoothing;
+    }
 
     ctx.fillStyle = '#101318';
     ctx.fillRect(0, 0, this.w, this.h);
 
     const R = Math.min(30, Math.ceil(Math.max(this.w / TILE_W, this.h / TILE_H)) + 3);
-    const px = me.pos.x, py = me.pos.y;
+    // Caméra glissée loin du héros : on centre la fenêtre de tuiles dessinées
+    // sur ce que la caméra regarde (et non plus sur le héros), sinon la zone
+    // révélée par le glissement resterait hors de la fenêtre et n'afficherait
+    // rien. Comportement inchangé quand la caméra suit le héros (camPanned=false).
+    const { x: px, y: py } = this.camPanned ? this.screenToTile(this.w / 2, this.h / 2) : me.pos;
 
     const poi = [];
     for (let y = py - R; y <= py + R; y++) {
@@ -783,11 +790,22 @@ class Renderer {
           continue;
         }
 
-        // Brouillard de guerre retiré de la vue principale (écran mobile
-        // déjà petit, le rayon de vue le rendait redondant) — il reste
-        // uniquement sur la minicarte (drawMinimap, via this.explored).
-        this.drawTerrainTile(tile, cx, cy, true);
-        if (tile.content) poi.push({ tile, cx, cy, visible: true });
+        // Brouillard de guerre retiré de la vue principale en suivi normal
+        // (écran mobile déjà petit, le rayon de vue le rendait redondant) —
+        // mais une caméra glissée loin du héros peut regarder une zone jamais
+        // visitée : on y réapplique le brouillard (via this.explored, comme
+        // la minicarte) pour ne pas pouvoir repérer une zone à distance sans
+        // jamais s'y être rendu. Zone déjà explorée : toujours en clair, même
+        // glissée, puisqu'on l'a réellement visitée.
+        const visible = !this.camPanned || this.explored.has(key);
+        this.drawTerrainTile(tile, cx, cy, visible);
+        // Sous brouillard, un monstre ou une ressource ne doit laisser deviner
+        // ni sa présence ni son tier à distance (repérage gratuit sans y être
+        // jamais allé) — on ne les dessine pas du tout. Les repères de
+        // structure (capitale, village, donjon, château) restent visibles,
+        // comme sur la minicarte : ils indiquent juste qu'il y a quelque chose là.
+        const isScoutable = tile.content && (tile.content.kind === 'resource' || tile.content.kind === 'monster');
+        if (tile.content && !(isScoutable && !visible)) poi.push({ tile, cx, cy, visible });
       }
     }
 
@@ -1428,5 +1446,48 @@ if (c.kind === 'dungeon') {
     ctx.lineTo(mx - 6, my);
     ctx.closePath();
     ctx.stroke();
+
+    // Caméra glissée loin du héros : un second repère (mire dorée, distincte
+    // du losange blanc/bleu du héros) indique où regarde la vue principale.
+    if (this.camPanned) {
+      const camTile = this.screenToTile(this.w / 2, this.h / 2);
+      const camX = toPx(camTile.x) + scale / 2;
+      const camY = toPx(camTile.y) + scale / 2;
+      ctx.strokeStyle = '#e8b23f';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(camX, camY, 7, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(camX - 11, camY); ctx.lineTo(camX - 4, camY);
+      ctx.moveTo(camX + 4, camY); ctx.lineTo(camX + 11, camY);
+      ctx.moveTo(camX, camY - 11); ctx.lineTo(camX, camY - 4);
+      ctx.moveTo(camX, camY + 4); ctx.lineTo(camX, camY + 11);
+      ctx.stroke();
+    }
+  }
+
+  // Inverse de la projection utilisée par drawMinimap (toPx) : retrouve la
+  // case monde sous un clic écran sur le canvas de minicarte. Retourne null
+  // si le clic tombe hors des limites du monde (bords du canvas).
+  minimapTileAt(canvas, clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const b = boundsOf(this.server.tiles);
+    const scale = canvas.width / (b.max - b.min + 1);
+    const px = (clientX - rect.left) * (canvas.width / rect.width);
+    const py = (clientY - rect.top) * (canvas.height / rect.height);
+    const x = Math.floor(px / scale) + b.min;
+    const y = Math.floor(py / scale) + b.min;
+    if (x < b.min || x > b.max || y < b.min || y > b.max) return null;
+    return { x, y };
+  }
+
+  // Déplace la caméra (mode glissé, voir CONFIG.CAMERA_PAN_ENABLED) pile sur
+  // une case monde donnée, sans attendre un geste de glissement manuel.
+  jumpCameraTo(worldX, worldY) {
+    this.cam.x = this.isoX(worldX, worldY);
+    this.cam.y = this.isoY(worldX, worldY);
+    this.camPanned = true;
   }
 }

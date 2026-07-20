@@ -13,7 +13,7 @@
 
 (function () {
   const remote = typeof io !== 'undefined' && location.protocol.indexOf('http') === 0;
-  const SHELL_REV = '20260720-push-camera-1';
+  const SHELL_REV = '20260720-pan-fog-2';
 
   // PWA : service worker (cache + installation sur l'écran d'accueil).
   // Échec silencieux en file:// / artifact.
@@ -471,13 +471,66 @@
   }
 
   /* ---------- Entrées : tap (drag toléré) + clavier desktop ---------- */
+  // Glisser la caméra loin du héros (CONFIG.CAMERA_PAN_ENABLED) : réutilise le
+  // même seuil de 12 px que la distinction tap/drag ci-dessous, pour ne rien
+  // changer au comportement existant tant qu'on reste sous ce seuil.
+  const recenterBtn = document.getElementById('recenterBtn');
   let downPos = null;
-  canvas.addEventListener('pointerdown', (e) => { downPos = { x: e.clientX, y: e.clientY }; });
+  let lastPos = null;
+  let isPanning = false;
+  canvas.addEventListener('pointerdown', (e) => {
+    downPos = { x: e.clientX, y: e.clientY };
+    lastPos = downPos;
+    isPanning = false;
+  });
+  if (CONFIG.CAMERA_PAN_ENABLED) {
+    canvas.addEventListener('pointermove', (e) => {
+      if (!downPos) return;
+      const totalMoved = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y);
+      if (!isPanning && totalMoved > 12) {
+        isPanning = true;
+        renderer.camPanned = true;
+        recenterBtn.classList.remove('hidden');
+      }
+      if (isPanning) {
+        renderer.cam.x -= e.clientX - lastPos.x;
+        renderer.cam.y -= e.clientY - lastPos.y;
+      }
+      lastPos = { x: e.clientX, y: e.clientY };
+    });
+    recenterBtn.addEventListener('click', () => {
+      renderer.camPanned = false;
+      recenterBtn.classList.add('hidden');
+    });
+
+    // Taper la minicarte (feuille "Carte" mobile ou panneau desktop persistant)
+    // déplace directement la caméra monde à cet endroit — pas besoin de glisser
+    // à la main sur toute la distance. #minimap est recréé à chaque ouverture
+    // de la feuille (innerHTML), donc on écoute sur #sheetBody (stable) plutôt
+    // que sur le canvas lui-même.
+    const jumpFromMinimap = (canvas2, e, closeAfter) => {
+      const tile = renderer.minimapTileAt(canvas2, e.clientX, e.clientY);
+      if (!tile) return;
+      renderer.jumpCameraTo(tile.x, tile.y);
+      recenterBtn.classList.remove('hidden');
+      if (closeAfter) ui.closeSheet();
+    };
+    document.getElementById('sheetBody').addEventListener('click', (e) => {
+      if (e.target && e.target.id === 'minimap') jumpFromMinimap(e.target, e, true);
+    });
+    const desktopMinimapEl = document.getElementById('desktopMinimap');
+    if (desktopMinimapEl) {
+      desktopMinimapEl.addEventListener('click', (e) => jumpFromMinimap(desktopMinimapEl, e, false));
+    }
+  }
   canvas.addEventListener('pointerup', (e) => {
     if (!downPos) return;
     const moved = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y);
+    const wasPanning = isPanning;
     downPos = null;
-    if (moved > 12) return;
+    lastPos = null;
+    isPanning = false;
+    if (moved > 12 || wasPanning) return;
     if (!server.me) return;
     const rect = canvas.getBoundingClientRect();
     const localX = e.clientX - rect.left;
@@ -561,6 +614,10 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
   server.on('map', () => {
     moveQueue = [];
     stepFrom = null;
+    // Changement de carte (donjon, capitale…) : une caméra glissée sur l'ancienne
+    // carte n'a plus de sens sur la nouvelle, on retombe sur le héros.
+    renderer.camPanned = false;
+    document.getElementById('recenterBtn').classList.add('hidden');
     explored.clear();
     try {
       const exp = JSON.parse(localStorage.getItem(exploredKey()) || '[]');
