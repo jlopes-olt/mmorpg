@@ -32,7 +32,6 @@ class UI {
     this.openSheet = null;
     this.inventorySort = 'type';
     this.adminOpen = false;   // état du <details> admin, survit aux re-rendus
-    this.adminExpandedUser = null;   // ligne dépliée dans le dashboard admin, survit aux re-rendus
     this.chatChannel = 'general';   // 'general' | 'guild' | 'whisper', survit aux re-rendus
     this.chatWhisperTarget = null;  // pseudo de l'ami actuellement en conversation privée
     this.chatUnread = { general: false, guild: false, whisper: false };
@@ -1605,7 +1604,7 @@ showDungeonPopup(tile, onEnter) {
     }
     this.openSheet = name;
     this.stopInventoryCooldownTimer();
-    const titles = { inventory: 'Inventaire', shop: 'Boutique', profile: 'Profil', map: 'Carte du monde', social: 'Social', capital: 'Capitale — PNJ Artisans', marmite: 'La Marmite — Cuisine', admin: 'Administration' };
+    const titles = { inventory: 'Inventaire', shop: 'Boutique', profile: 'Profil', map: 'Carte du monde', social: 'Social', capital: 'Capitale — PNJ Artisans', marmite: 'La Marmite — Cuisine' };
     $('sheetTitle').textContent = titles[name];
     const body = $('sheetBody');
     body.innerHTML = '';
@@ -2056,7 +2055,6 @@ showDungeonPopup(tile, onEnter) {
     // En solo (sandbox locale), les outils de triche restent toujours accessibles ;
     // en multijoueur, ils sont réservés au rôle admin.
     const showCheats = !this.server.remote || me.role === 'admin';
-    const isAdmin = this.server.remote && me.role === 'admin';
     body.innerHTML =
       // En-tête façon fiche d'aventurier : portrait cerclé d'or, nom, devise
       '<div class="profile-hero">' +
@@ -2093,7 +2091,6 @@ showDungeonPopup(tile, onEnter) {
       this.buildCharactersSection(me) +
 
       '<div class="section-divider">✦</div>' +
-      (isAdmin ? '<button id="openAdminBtn" class="btn wide admin-btn">🛠 Administration</button>' : '') +
       (showCheats ?
         '<details class="profile-admin"' + (this.adminOpen ? ' open' : '') + '>' +
           '<summary>🛠 Outils de test (admin)</summary>' +
@@ -2140,9 +2137,6 @@ showDungeonPopup(tile, onEnter) {
         '</button>'
         : '') +
       (this.server.remote ? '<button id="logoutBtn" class="btn wide logout-btn">🚪 Se déconnecter</button>' : '');
-    if (isAdmin) {
-      $('openAdminBtn').addEventListener('click', () => this.showSheet('admin'));
-    }
     body.querySelectorAll('[data-title]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const title = btn.dataset.title || null;
@@ -2198,141 +2192,6 @@ showDungeonPopup(tile, onEnter) {
       btn.addEventListener('click', () => this.showCharacterCreatePopup());
     });
     $('profileSkinBtn').addEventListener('click', () => this.showSkinWardrobePopup());
-  }
-
-  /* ---------- Administration (rôle admin, multijoueur uniquement) ---------- */
-  build_admin(body) {
-    const me = this.server.me;
-    if (!this.server.remote || !me || me.role !== 'admin') {
-      body.innerHTML = '<p class="empty">Accès réservé aux administrateurs.</p>';
-      return;
-    }
-    body.innerHTML = '<p class="dim">Chargement…</p>';
-    Promise.all([
-      Promise.resolve(this.server.adminStats()),
-      Promise.resolve(this.server.adminPlayers()),
-    ]).then(([statsRes, playersRes]) => {
-      if (this.openSheet !== 'admin') return;   // fermé entre-temps
-      if (!statsRes.ok || !playersRes.ok) {
-        body.innerHTML = '<p class="empty">' + esc(statsRes.error || playersRes.error || 'Erreur serveur.') + '</p>';
-        return;
-      }
-      this.renderAdminPanel(body, statsRes.stats, playersRes.list);
-    });
-  }
-
-  renderAdminPanel(body, stats, list) {
-    const classEntries = Object.entries(stats.byClass || {})
-      .map(([k, n]) => ((CLASSES[k] && CLASSES[k].label) || k) + ' ×' + n)
-      .join(' · ');
-    const statsHtml =
-      '<div class="admin-stats-bar">' +
-        '<span><b>' + stats.total + '</b> comptes</span>' +
-        '<span><b>' + stats.online + '</b> en ligne</span>' +
-        '<span><b>' + stats.admins + '</b> admin' + (stats.admins > 1 ? 's' : '') + '</span>' +
-      '</div>' +
-      (classEntries ? '<p class="dim small admin-class-breakdown">' + esc(classEntries) + '</p>' : '');
-
-    body.innerHTML =
-      statsHtml +
-      '<div class="section-divider">✦</div>' +
-      '<div class="admin-player-list">' + list.map((p) => this.adminPlayerRow(p)).join('') + '</div>';
-
-    body.querySelectorAll('.admin-player').forEach((det) => {
-      det.addEventListener('toggle', (e) => {
-        this.adminExpandedUser = e.target.open ? e.target.dataset.username : null;
-      });
-    });
-    body.querySelectorAll('[data-admin-role-toggle]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const r = await Promise.resolve(this.server.adminSetRole(btn.dataset.adminRoleToggle, btn.dataset.nextRole));
-        this.toast(r.ok ? 'Rôle mis à jour.' : r.error);
-        if (r.ok) this.showSheet('admin');
-      });
-    });
-    body.querySelectorAll('[data-admin-slot]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const r = await Promise.resolve(this.server.adminGrantSlot(btn.dataset.adminSlot, 1));
-        this.toast(r.ok ? '+1 emplacement de personnage.' : r.error);
-        if (r.ok) this.showSheet('admin');
-      });
-    });
-    body.querySelectorAll('.admin-grant-form').forEach((form) => {
-      const username = form.dataset.username;
-      const whatSel = form.querySelector('[data-role="what"]');
-      const tierSel = form.querySelector('[data-role="tier"]');
-      const qtyInput = form.querySelector('[data-role="qty"]');
-      form.querySelector('[data-role="submit"]').addEventListener('click', async () => {
-        const what = whatSel.value;
-        const tier = Number(tierSel.value);
-        const qty = Math.max(1, Number(qtyInput.value) || 1);
-        let r;
-        if (what === 'gold') r = await Promise.resolve(this.server.adminGrantGold(username, qty));
-        else if (what === 'premium') r = await Promise.resolve(this.server.adminGrantPremium(username, qty));
-        else if (what === 'level:harvest') r = await Promise.resolve(this.server.adminSetLevel(username, 'harvest', tier));
-        else if (what === 'level:weapon') r = await Promise.resolve(this.server.adminSetLevel(username, 'weapon', tier));
-        else if (what === 'gear:weapon') r = await Promise.resolve(this.server.adminSetGear(username, 'weapon', tier));
-        else if (what === 'gear:armor') r = await Promise.resolve(this.server.adminSetGear(username, 'armor', tier));
-        else if (what.indexOf('item:') === 0) r = await Promise.resolve(this.server.adminGrantItem(username, stackKey(what.slice(5), tier), qty));
-        this.toast((r && r.ok) ? 'Attribution effectuée.' : ((r && r.error) || 'Erreur serveur.'));
-        if (r && r.ok) this.showSheet('admin');
-      });
-    });
-  }
-
-  adminPlayerRow(p) {
-    const isOpen = this.adminExpandedUser === p.username;
-    const dateStr = p.createdAt ? new Date(p.createdAt).toLocaleDateString('fr-FR') : '?';
-    return (
-      '<details class="admin-player"' + (isOpen ? ' open' : '') + ' data-username="' + esc(p.username) + '">' +
-        '<summary>' +
-          '<span class="admin-dot ' + (p.online ? 'on' : 'off') + '"></span>' +
-          '<span class="admin-player-name">' + esc(p.username) + '</span>' +
-          (p.role === 'admin' ? '<span class="role-chip">Admin</span>' : '') +
-          '<span class="dim small admin-player-meta">' + esc(p.classLabel || '') + ' · Récolte ' + p.harvestLevel + ' · Arme ' + p.weaponMastery + ' · ' + this.currencyIcon('gold', 'small') + ' ' + (p.gold || 0) + ' · ' + this.currencyIcon('premium', 'small') + ' ' + (p[PREMIUM_CURRENCY.key] || 0) + '</span>' +
-        '</summary>' +
-        '<div class="admin-player-body">' +
-          '<p class="dim small">Inscrit le ' + dateStr + ' · ' + p.charCount + ' personnage(s) / ' + p.charSlots + ' emplacement(s) (max ' + MAX_CHAR_SLOTS + ') · arme T' + p.weaponTier + ' · armure T' + p.armorTier + '</p>' +
-          '<div class="admin-row-actions">' +
-            '<button class="btn" data-admin-role-toggle="' + esc(p.username) + '" data-next-role="' + (p.role === 'admin' ? 'user' : 'admin') + '">' +
-              (p.role === 'admin' ? 'Rétrograder utilisateur' : 'Promouvoir admin') +
-            '</button>' +
-            '<button class="btn" data-admin-slot="' + esc(p.username) + '"' + (p.charSlots >= MAX_CHAR_SLOTS ? ' disabled' : '') + '>+1 emplacement perso</button>' +
-          '</div>' +
-          this.adminGrantForm(p.username) +
-        '</div>' +
-      '</details>'
-    );
-  }
-
-  adminGrantForm(username) {
-    const resourceOptions = Object.keys(RESOURCES)
-      .map((t) => '<option value="item:' + t + '">' + RESOURCES[t].label + '</option>').join('');
-    const consumableOptions = Object.keys(CONSUMABLES)
-      .map((t) => '<option value="item:' + t + '">' + CONSUMABLES[t].label + '</option>').join('');
-    const tierOptions = [0, 1, 2, 3, 4, 5, 6]
-      .map((t) => '<option value="' + t + '"' + (t === 1 ? ' selected' : '') + '>T' + t + '</option>').join('');
-    return (
-      '<div class="admin-grant-form" data-username="' + esc(username) + '">' +
-        '<select class="admin-select admin-select-what" data-role="what">' +
-          '<optgroup label="Compte">' +
-            '<option value="gold">Or</option>' +
-            '<option value="premium">' + PREMIUM_CURRENCY.label + '</option>' +
-          '</optgroup>' +
-          '<optgroup label="Progression">' +
-            '<option value="level:harvest">⛏ Niveau de récolte</option>' +
-            '<option value="level:weapon">⚔ Maîtrise d’arme</option>' +
-            '<option value="gear:weapon">🗡 Tier d’arme</option>' +
-            '<option value="gear:armor">🛡 Tier d’armure</option>' +
-          '</optgroup>' +
-          '<optgroup label="Ressources">' + resourceOptions + '</optgroup>' +
-          '<optgroup label="Consommables">' + consumableOptions + '</optgroup>' +
-        '</select>' +
-        '<select class="admin-select admin-select-tier" data-role="tier">' + tierOptions + '</select>' +
-        '<input class="admin-select admin-qty" data-role="qty" type="number" min="1" max="999" value="1">' +
-        '<button class="btn primary" data-role="submit">Donner</button>' +
-      '</div>'
-    );
   }
 
   /* ---------- La Marmite : cuisine des consommables ---------- */

@@ -16,6 +16,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const http = require('http');
 const express = require('express');
 const { Server } = require('socket.io');
@@ -218,6 +219,104 @@ app.post('/stripe/webhook', express.raw({ type: 'application/json' }), (req, res
     }
   }
   res.json({ received: true });
+});
+
+/* ---------- Backoffice /admin (page statique + API JSON) ----------
+ * Page autonome, hors du client de jeu : authentification par
+ * pseudo/mot de passe (comptes existants ayant le rôle admin),
+ * puis un jeton porteur (Authorization: Bearer <token>) pour les
+ * appels suivants. Le jeton vit en mémoire (perdu au redémarrage du
+ * serveur — l'admin doit alors se reconnecter, ce qui est très bien
+ * pour un outil interne). */
+const adminSessions = new Map();   // token -> { playerId, expiresAt }
+const ADMIN_SESSION_MS = 12 * 60 * 60 * 1000;
+
+function adminAuth(req, res, next) {
+  const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  const session = token && adminSessions.get(token);
+  if (!session || session.expiresAt < Date.now()) {
+    adminSessions.delete(token);
+    return res.status(401).json({ ok: false, error: 'Session admin invalide ou expirée.' });
+  }
+  const admin = game.players.get(session.playerId);
+  if (!admin || admin.role !== 'admin') {
+    adminSessions.delete(token);
+    return res.status(403).json({ ok: false, error: 'Accès réservé aux administrateurs.' });
+  }
+  session.expiresAt = Date.now() + ADMIN_SESSION_MS;   // prolonge la session à l'usage
+  req.adminToken = token;
+  req.adminPlayer = admin;
+  next();
+}
+
+app.use('/admin/api', express.json());
+
+app.post('/admin/api/login', (req, res) => {
+  const username = String((req.body || {}).username || '').trim();
+  const password = String((req.body || {}).password || '');
+  const id = 'p_' + username.toLowerCase();
+  const cred = game.credentials.get(id);
+  const player = game.players.get(id);
+  if (!cred || !player || game.hashPassword(password, cred.passSalt) !== cred.passHash) {
+    return res.status(401).json({ ok: false, error: 'Identifiants incorrects.' });
+  }
+  if (player.role !== 'admin') {
+    return res.status(403).json({ ok: false, error: 'Ce compte n’est pas administrateur.' });
+  }
+  const token = crypto.randomBytes(24).toString('hex');
+  adminSessions.set(token, { playerId: player.id, expiresAt: Date.now() + ADMIN_SESSION_MS });
+  res.json({ ok: true, token, username: player.username });
+});
+
+app.post('/admin/api/logout', adminAuth, (req, res) => {
+  adminSessions.delete(req.adminToken);
+  res.json({ ok: true });
+});
+
+app.get('/admin/api/stats', adminAuth, (req, res) => {
+  res.json({ ok: true, stats: game.adminStats() });
+});
+
+app.get('/admin/api/players', adminAuth, (req, res) => {
+  res.json({ ok: true, list: game.adminPlayerList() });
+});
+
+app.post('/admin/api/players/:username/role', adminAuth, (req, res) => {
+  const r = game.adminSetRole(req.adminPlayer, req.params.username, String((req.body || {}).role || ''));
+  res.json(r);
+});
+
+app.post('/admin/api/players/:username/slots', adminAuth, (req, res) => {
+  const r = game.adminGrantSlot(req.adminPlayer, req.params.username, Number((req.body || {}).count));
+  res.json(r);
+});
+
+app.post('/admin/api/players/:username/gold', adminAuth, (req, res) => {
+  const r = game.adminGrantGold(req.adminPlayer, req.params.username, Number((req.body || {}).amount));
+  res.json(r);
+});
+
+app.post('/admin/api/players/:username/premium', adminAuth, (req, res) => {
+  const r = game.adminGrantPremium(req.adminPlayer, req.params.username, Number((req.body || {}).amount));
+  res.json(r);
+});
+
+app.post('/admin/api/players/:username/item', adminAuth, (req, res) => {
+  const b = req.body || {};
+  const r = game.adminGrantItem(req.adminPlayer, req.params.username, String(b.key || ''), Number(b.qty));
+  res.json(r);
+});
+
+app.post('/admin/api/players/:username/level', adminAuth, (req, res) => {
+  const b = req.body || {};
+  const r = game.adminSetLevel(req.adminPlayer, req.params.username, String(b.kind || ''), Number(b.tier));
+  res.json(r);
+});
+
+app.post('/admin/api/players/:username/gear', adminAuth, (req, res) => {
+  const b = req.body || {};
+  const r = game.adminSetGear(req.adminPlayer, req.params.username, String(b.slot || ''), Number(b.tier));
+  res.json(r);
 });
 
 const httpServer = http.createServer(app);

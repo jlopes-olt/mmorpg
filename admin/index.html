@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FERALIA — Administration</title>
+  <link rel="icon" type="image/png" sizes="192x192" href="/assets/icons/icon-192.png">
+  <link rel="stylesheet" href="admin.css?v=2">
+</head>
+<body>
+
+  <!-- Écran de connexion -->
+  <section id="loginScreen" class="login-screen">
+    <form id="loginForm" class="login-card">
+      <h1>FERALIA <span>Administration</span></h1>
+      <p class="dim">Réservé aux comptes ayant le rôle administrateur.</p>
+      <input id="loginUsername" type="text" placeholder="Nom d’aventurier" autocomplete="username" required>
+      <input id="loginPassword" type="password" placeholder="Mot de passe" autocomplete="current-password" required>
+      <button type="submit" class="btn primary wide">Se connecter</button>
+      <p id="loginError" class="error hidden"></p>
+    </form>
+  </section>
+
+  <!-- Tableau de bord -->
+  <section id="dashboard" class="dashboard hidden">
+    <header class="topbar">
+      <h1>FERALIA <span>Administration</span></h1>
+      <div class="topbar-right">
+        <span id="whoami" class="dim"></span>
+        <button id="refreshBtn" class="btn" title="Rafraîchir">↻ Rafraîchir</button>
+        <button id="logoutBtn" class="btn">Se déconnecter</button>
+      </div>
+    </header>
+
+    <section class="stats-bar" id="statsBar"></section>
+
+    <section class="toolbar">
+      <input id="searchInput" type="search" placeholder="Rechercher un pseudo…">
+      <span id="resultCount" class="dim small"></span>
+    </section>
+
+    <section class="table-wrap">
+      <table id="playersTable">
+        <thead>
+          <tr>
+            <th></th>
+            <th>Pseudo</th>
+            <th>Rôle</th>
+            <th>Classe</th>
+            <th>Récolte</th>
+            <th>Maîtrise</th>
+            <th>Arme</th>
+            <th>Armure</th>
+            <th>Or</th>
+            <th>Écailles Lunaires</th>
+            <th>Perso.</th>
+            <th>Inscrit le</th>
+          </tr>
+        </thead>
+        <tbody id="playersBody"></tbody>
+      </table>
+    </section>
+  </section>
+
+  <!-- Panneau latéral : détail + actions sur un joueur -->
+  <aside id="playerPanel" class="player-panel hidden">
+    <div class="player-panel-inner">
+      <button id="playerPanelClose" class="panel-close" aria-label="Fermer">✕</button>
+      <div id="playerPanelBody"></div>
+    </div>
+  </aside>
+  <div id="panelOverlay" class="panel-overlay hidden"></div>
+
+  <div id="toasts" class="toasts"></div>
+
+  <script src="/js/config.js"></script>
+  <script src="admin.js?v=2"></script>
+</body>
+</html>
