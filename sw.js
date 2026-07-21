@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v40-perf-assets';
+const VERSION = 'wildrift-v43-fog-fix2';
 
 const CORE = [
   '/',

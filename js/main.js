@@ -13,7 +13,7 @@
 
 (function () {
   const remote = typeof io !== 'undefined' && location.protocol.indexOf('http') === 0;
-  const SHELL_REV = '20260721-perf-assets';
+  const SHELL_REV = '20260721-fog-fix2';
 
   // PWA : service worker (cache + installation sur l'écran d'accueil).
   // Échec silencieux en file:// / artifact.
@@ -724,6 +724,11 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
 
       ui.updateHud();
       renderer.draw(dt);
+      if (renderer.justExplored.length) {
+        const onWorld = (server.currentMapId || 'world') === 'world';
+        if (remote && onWorld) for (const k of renderer.justExplored) pendingExploreSync.add(k);
+        renderer.justExplored.length = 0;
+      }
 
       if (t - lastMini > 600 && (ui.openSheet === 'map' || ui.desktopPanelsActive())) {
         lastMini = t;

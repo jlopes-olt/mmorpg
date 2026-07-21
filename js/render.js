@@ -182,6 +182,11 @@ class Renderer {
     this.ctx = canvas.getContext('2d');
     this.server = server;
     this.explored = explored;
+    // Tuiles ajoutées à `explored` par le rendu lui-même ce frame (voir
+    // draw()) — drainé par main.js pour la synchronisation serveur, comme
+    // updateExploredAt(). Ne grossit qu'en caméra centrée (pas en glissée),
+    // sinon regarder au loin en caméra libre « découvrirait » la zone.
+    this.justExplored = [];
     this.cam = { x: 0, y: 0 };
     this.camInit = false;
     this.camPanned = false;   // true tant qu'on a glissé la caméra loin du héros (voir CONFIG.CAMERA_PAN_ENABLED)
@@ -777,6 +782,30 @@ class Renderer {
     // rien. Comportement inchangé quand la caméra suit le héros (camPanned=false).
     const { x: px, y: py } = this.camPanned ? this.screenToTile(this.w / 2, this.h / 2) : me.pos;
 
+    // Caméra glissée ailleurs pendant que le héros continue de marcher : la
+    // découverte ci-dessous ne tourne qu'autour de la fenêtre affichée par la
+    // caméra (px,py), donc autour du héros lui-même seul un petit rayon fixe
+    // (voir updateExploredAt côté main.js) se dévoilait — il fallait recentrer
+    // pour voir le reste. On simule ici une caméra hypothétique centrée sur le
+    // héros pour découvrir la même zone que si on suivait, quelle que soit la
+    // direction regardée pendant ce temps (bornes strictes, comme ci-dessus).
+    if (this.camPanned) {
+      const hx = this.isoX(me.pos.x, me.pos.y);
+      const hy = this.isoY(me.pos.x, me.pos.y);
+      for (let y = me.pos.y - R; y <= me.pos.y + R; y++) {
+        for (let x = me.pos.x - R; x <= me.pos.x + R; x++) {
+          if (!inBounds(x, y, s.tiles)) continue;
+          const key = tileKey(x, y);
+          if (this.explored.has(key)) continue;
+          const hcx = this.isoX(x, y) - hx + this.w / 2;
+          const hcy = this.isoY(x, y) - hy + this.h / 2;
+          if (hcx < 0 || hcx > this.w || hcy < 0 || hcy > this.h) continue;
+          this.explored.add(key);
+          this.justExplored.push(key);
+        }
+      }
+    }
+
     const poi = [];
     for (let y = py - R; y <= py + R; y++) {
       for (let x = px - R; x <= px + R; x++) {
@@ -786,6 +815,17 @@ class Renderer {
         const cx = this.isoX(x, y) - this.cam.x + this.w / 2;
         const cy = this.isoY(x, y) - this.cam.y + this.h / 2;
         if (cx < -TILE_W * 2 || cx > this.w + TILE_W * 2 || cy < -TILE_H * 4 || cy > this.h + TILE_H * 3) continue;
+
+        // Toute case réellement affichée à l'écran en caméra centrée est
+        // considérée découverte — sinon regarder ailleurs en caméra libre la
+        // réaffichait sous brouillard alors qu'on venait de la voir clairement.
+        // Bornes STRICTES de la fenêtre (pas la marge généreuse ci-dessus, qui
+        // sert seulement à précharger le rendu) : on ne marque découvert que
+        // ce qui est réellement à l'écran, ni plus ni moins.
+        if (!this.camPanned && !this.explored.has(key) && cx >= 0 && cx <= this.w && cy >= 0 && cy <= this.h) {
+          this.explored.add(key);
+          this.justExplored.push(key);
+        }
 
         if (tile.blocked) {
           this.drawVoidTile(cx, cy);
@@ -815,7 +855,12 @@ class Renderer {
     for (const p of poi) this.drawContent(p.tile, p.cx, p.cy, p.visible);
 
     const visiblePlayers = [...s.players.values()]
-      .filter((p) => p.mapId === (me.mapId || 'world') && p.pos && Math.hypot(p.pos.x - px, p.pos.y - py) <= CONFIG.VIEW_RADIUS + 0.5)
+      // p.id === me.id : le rayon ci-dessous est centré sur la caméra (qui
+      // regarde ailleurs en mode glissé), pas sur le héros — sans cette
+      // exception, s'éloigner assez avec la caméra libre faisait disparaître
+      // son propre personnage alors qu'il reste bien à l'écran.
+      .filter((p) => p.mapId === (me.mapId || 'world') && p.pos &&
+        (p.id === me.id || Math.hypot(p.pos.x - px, p.pos.y - py) <= CONFIG.VIEW_RADIUS + 0.5))
       .sort((a, b) => {
         const da = (a.pos.x + a.pos.y) - (b.pos.x + b.pos.y);
         if (da) return da;
