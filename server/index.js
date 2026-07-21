@@ -104,6 +104,8 @@ if (store.countAccounts() === 0 && seed === null && fs.existsSync(LEGACY_STATE_F
     chatLog: store.getMeta('chatLog', []),
     worldDiffs: store.loadDiffs(),
     wildSalt: store.getMeta('wildSalt', 0),
+    worldBossAlive: store.getMeta('worldBossAlive', false),
+    worldBossNextSpawnAt: store.getMeta('worldBossNextSpawnAt', Date.now()),
   };
   for (const { player, credentials } of store.loadAccounts()) {
     initialState.players.push(player);
@@ -138,6 +140,8 @@ function saveWorld() {
       store.setMeta('castles', [...game.castles.values()]);
       store.setMeta('chatLog', game.chatLog);
       store.setMeta('wildSalt', game.wildSalt);
+      store.setMeta('worldBossAlive', game.worldBossAlive);
+      store.setMeta('worldBossNextSpawnAt', game.worldBossNextSpawnAt);
       store.setMeta('savedAt', Date.now());
     });
     store.saveDiffs(game.worldDiffs());
@@ -158,6 +162,9 @@ game.onGuildsDirty = () => saveWorld();
 // Chaque message (général/guilde/MP) → écriture immédiate, pour survivre à un redémarrage
 // entre l'envoi et la prochaine connexion du destinataire (coordination asynchrone).
 game.onChatDirty = () => saveWorld();
+// Réveil/mort du boss mondial → écriture immédiate (sinon un redémarrage
+// juste après sa mort le referait apparaître aussitôt, horloge murale perdue).
+game.onWorldBossDirty = () => saveWorld();
 game.sendPush = sendPushToAccount;
 
 // Migration : on fige tout de suite l'état importé, puis on archive le JSON
@@ -307,6 +314,18 @@ app.post('/admin/api/players/:username/item', adminAuth, (req, res) => {
   res.json(r);
 });
 
+app.post('/admin/api/players/:username/accessory', adminAuth, (req, res) => {
+  const b = req.body || {};
+  const r = game.adminGrantAccessory(req.adminPlayer, req.params.username, String(b.accessoryId || ''));
+  res.json(r);
+});
+
+app.post('/admin/api/players/:username/mount', adminAuth, (req, res) => {
+  const b = req.body || {};
+  const r = game.adminGrantMount(req.adminPlayer, req.params.username, String(b.mountId || ''));
+  res.json(r);
+});
+
 app.post('/admin/api/players/:username/level', adminAuth, (req, res) => {
   const b = req.body || {};
   const r = game.adminSetLevel(req.adminPlayer, req.params.username, String(b.kind || ''), Number(b.tier));
@@ -404,6 +423,8 @@ io.on('connection', (socket) => {
   socket.on('char:switch', act((d) => game.switchCharacter(player, d.index)));
   socket.on('shop:buySkin', act((d) => game.buySkin(player, String(d.skinId))));
   socket.on('shop:equipSkin', act((d) => game.equipSkin(player, d.skinId ? String(d.skinId) : null)));
+  socket.on('accessory:equip', act((d) => game.equipAccessory(player, d.accessoryId ? String(d.accessoryId) : null)));
+  socket.on('mount:equip', act((d) => game.equipMount(player, d.mountId ? String(d.mountId) : null)));
   socket.on('shop:buyPaScroll', act(() => game.buyPaScroll(player)));
   socket.on('shop:buyGoldPack', act((d) => game.buyGoldPack(player, String(d.packId || ''))));
   socket.on('shop:checkoutLink', act((d) => buildCheckoutLink(player, String(d.packId || ''))));

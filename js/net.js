@@ -139,6 +139,7 @@ class RemoteServer {
     this.now = d.now;
     this.speed = d.speed || 1;
     this.wildSalt = d.wildSalt || 0;
+    this.worldBoss = d.worldBoss || null;
     this.maps = generateGameMaps(d.seed);
     if (this.wildSalt > 0) {
       const world = this.maps.get('world');
@@ -194,6 +195,8 @@ class RemoteServer {
   switchCharacter(index) { return this.req('char:switch', { index }); }
   buySkin(skinId) { return this.req('shop:buySkin', { skinId }); }
   equipSkin(skinId) { return this.req('shop:equipSkin', { skinId }); }
+  equipAccessory(accessoryId) { return this.req('accessory:equip', { accessoryId }); }
+  equipMount(mountId) { return this.req('mount:equip', { mountId }); }
   buyPaScroll() { return this.req('shop:buyPaScroll', {}); }
   buyGoldPack(packId) { return this.req('shop:buyGoldPack', { packId }); }
   getCheckoutLink(packId) { return this.req('shop:checkoutLink', { packId }); }

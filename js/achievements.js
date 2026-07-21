@@ -39,6 +39,12 @@ const ACHIEVEMENTS = [
   { id: 'boss_50', category: 'Combat', label: 'Vaincre 50 boss',
     test: (p) => (p.stats.bossKills || 0) >= 50, reward: { gold: 4000, moonstones: 15, title: 'Légende des donjons' } },
 
+  /* ---------- Combat — boss de raid mondial (bien au-delà d'un boss de donjon) ---------- */
+  { id: 'world_boss_1', category: 'Combat', label: 'Vaincre le Wyrm Ancestral',
+    test: (p) => (p.stats.worldBossKills || 0) >= 1, reward: { gold: 500, moonstones: 8, title: 'Bourreau du Wyrm' } },
+  { id: 'world_boss_5', category: 'Combat', label: 'Vaincre le Wyrm Ancestral 5 fois',
+    test: (p) => (p.stats.worldBossKills || 0) >= 5, reward: { gold: 3000, moonstones: 25, title: 'Fléau Ancestral' } },
+
   /* ---------- Duels (PvP) ---------- */
   { id: 'duel_win_1', category: 'Duels', label: 'Gagner 1 duel',
     test: (p) => ((p.duels && p.duels.wins) || 0) >= 1, reward: { gold: 20 } },

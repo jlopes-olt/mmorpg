@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v43-fog-fix2';
+const VERSION = 'wildrift-v51-mount-fade';
 
 const CORE = [
   '/',
@@ -26,6 +26,9 @@ const CORE = [
   '/js/ui.js',
   '/js/main.js',
   '/assets/personnages_small.png',
+  '/assets/bosses/wyrm_ancestral.png',
+  '/assets/accessories/wyrm_wings.png',
+  '/assets/mounts/rejeton_wyrm_ancestral.png',
   '/manifest.webmanifest',
   '/assets/icons/icon-192.png',
   '/assets/icons/icon-512.png',

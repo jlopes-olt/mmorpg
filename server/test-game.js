@@ -15,6 +15,7 @@ const {
   SIEGE_ENGINE_ITEM, SIEGE_ENGINE_RECIPES, SIEGE_ENGINE_FORCE, SIEGE_ENGINE_DAMAGE,
   CASTLE_FORTIFY_COST_GOLD, CASTLE_FORTIFY_BONUS_PER_LEVEL, stackKey,
   PREMIUM_CURRENCY, GOLD_PACKS, PA_SCROLL_COST_MOONSTONES, PA_SCROLL_COOLDOWN_MS,
+  MOUNT_ITEMS,
 } = require('../js/config.js');
 const { ACHIEVEMENTS } = require('../js/achievements.js');
 
@@ -914,6 +915,19 @@ assert.strictEqual(alice[PREMIUM_CURRENCY.key], 4, 'coût premium débité exact
 assert.strictEqual(alice.gold, goldBeforePack + goldPack.gold, 'or crédité immédiatement');
 assert.ok(!g.buyGoldPack(alice, 'pack_inconnu').ok, 'pack d’or inconnu refusé');
 console.log('Packs d’or : débit Écailles Lunaires + crédit or atomiques ✔');
+
+// --- Monture cosmétique : possession obligatoire, équipement indépendant du skin ---
+const wyrmMountId = 'wyrm_ancestral_hatchling';
+alice.ownedMounts = [];
+alice.mountId = null;
+assert.ok(MOUNT_ITEMS[wyrmMountId], 'la monture du Wyrm est configurée');
+assert.ok(!g.equipMount(alice, wyrmMountId).ok, 'monture refusée avant obtention');
+alice.ownedMounts.push(wyrmMountId);
+assert.ok(g.equipMount(alice, wyrmMountId).ok, 'monture possédée équipée');
+assert.strictEqual(alice.mountId, wyrmMountId, 'monture active enregistrée sur le compte');
+assert.strictEqual(g.publicPlayer(alice).mountId, wyrmMountId, 'monture transmise aux autres joueurs');
+assert.ok(g.equipMount(alice, null).ok && !alice.mountId, 'retour à pied possible');
+console.log('Montures : possession contrôlée ✔, équipement public indépendant du skin ✔');
 
 // --- Crédit Stripe (webhook) : appliqué même hors ligne, comptes/montants invalides refusés ---
 alice.online = false;

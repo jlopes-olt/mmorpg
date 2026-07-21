@@ -49,6 +49,12 @@ class Game {
     // redistributeWildlife) — persisté pour reconstruire la même disposition
     // après un redémarrage, sans avoir à stocker la carte entière.
     this.wildSalt = 0;
+    // Boss de raid mondial : état sur l'instance (pas sur la tuile), sur une
+    // vraie horloge murale — voir tick() et resolveRaid(). Disponible dès le
+    // 1er démarrage d'un monde neuf ; écrasé par load() si état persisté.
+    this.worldBossAlive = false;
+    this.worldBossNextSpawnAt = Date.now();
+    this.onWorldBossDirty = () => {};
     this.players = new Map();
     this.credentials = new Map();
     this.bots = new Map();
@@ -87,6 +93,10 @@ class Game {
   skinStateOf(p) {
     if (!p) return;
     if (!Array.isArray(p.ownedSkins)) p.ownedSkins = [];
+    if (!Array.isArray(p.ownedAccessories)) p.ownedAccessories = [];
+    if (!Array.isArray(p.ownedMounts)) p.ownedMounts = [];
+    if (typeof p.accessoryId === 'undefined') p.accessoryId = null;
+    if (typeof p.mountId === 'undefined') p.mountId = null;
     if (typeof p[PREMIUM_CURRENCY.key] !== 'number') p[PREMIUM_CURRENCY.key] = 0;
     if (typeof p.skinId === 'undefined') p.skinId = null;
     if (!Array.isArray(p.characters) || !p.characters.length) return;
@@ -206,7 +216,12 @@ class Game {
     p.lastSeen = Date.now();
     p.pushPaFullAt = null;
     p.pushPaFullSent = false;
-    this.notifyAchievements(p, checkAchievements(p, ['Social']));
+    // Vérification complète (toutes catégories, pas de filtre) à chaque
+    // connexion : rattrape les hauts faits déjà mérités par une progression
+    // antérieure à leur ajout (ou à un correctif de branchement) — sans ça,
+    // un joueur qui a déjà 500 cases explorées ne serait crédité qu'à la
+    // PROCHAINE case explorée, jamais pour les 500 déjà acquises.
+    this.notifyAchievements(p, checkAchievements(p));
   }
 
   // Programme (à la déconnexion) l'instant réel où l'Endurance hors ligne
@@ -275,6 +290,10 @@ class Game {
       pushPaFullAt: null,
       pushPaFullSent: false,
       ownedSkins: [],
+      ownedAccessories: [],
+      accessoryId: null,
+      ownedMounts: [],
+      mountId: null,
       status: 'IDLE',
       harvestKey: null, harvestEndsAt: 0,
       raidKey: null,
@@ -352,6 +371,7 @@ class Game {
       mapStates: this.mapStates(),
       bounds: boundsOf(this.tilesOf(p)),
       players: this.publicPlayers(),
+      worldBoss: { alive: this.worldBossAlive, nextSpawnAt: this.worldBossNextSpawnAt, pos: WORLD_BOSS.pos, label: WORLD_BOSS.label },
       raids: this.raidsPayload(),
       trade: p.tradeId ? this.tradePayloadFor(p, this.trades.get(p.tradeId)) : null,
       chatHistory: this.chatHistoryFor(p),
@@ -374,6 +394,8 @@ class Game {
       weaponType: p.weapon ? p.weapon.type : '',
       armorType: p.armor ? p.armor.type : '',
       skinId: p.skinId || null,
+      accessoryId: p.accessoryId || null,
+      mountId: p.mountId || null,
       activeTitle: p.activeTitle || null,
       guildName: p.guildName || null,
     };
@@ -455,6 +477,37 @@ class Game {
     if (!p.ownedSkins.includes(item.id)) return { ok: false, error: 'Vous ne possédez pas ce skin.' };
     p.skinId = item.id;
     syncActiveCharacter(p);
+    this.pushSelf(p);
+    return { ok: true };
+  }
+
+  /* Accessoire cosmétique (calque additionnel, indépendant de la classe/du
+   * skin) : jamais en vente, uniquement obtenu en loot rare ou attribution
+   * admin. Un seul actif à la fois. */
+  equipAccessory(p, accessoryId) {
+    const desired = accessoryId ? String(accessoryId) : null;
+    if (!desired) {
+      p.accessoryId = null;
+      this.pushSelf(p);
+      return { ok: true };
+    }
+    if (!ACCESSORY_ITEMS[desired]) return { ok: false, error: 'Accessoire inconnu.' };
+    if (!p.ownedAccessories.includes(desired)) return { ok: false, error: 'Vous ne possédez pas cet accessoire.' };
+    p.accessoryId = desired;
+    this.pushSelf(p);
+    return { ok: true };
+  }
+
+  equipMount(p, mountId) {
+    const desired = mountId ? String(mountId) : null;
+    if (!desired) {
+      p.mountId = null;
+      this.pushSelf(p);
+      return { ok: true };
+    }
+    if (!MOUNT_ITEMS[desired]) return { ok: false, error: 'Monture inconnue.' };
+    if (!p.ownedMounts.includes(desired)) return { ok: false, error: 'Vous ne possédez pas cette monture.' };
+    p.mountId = desired;
     this.pushSelf(p);
     return { ok: true };
   }
@@ -1410,20 +1463,23 @@ class Game {
   }
 
   spawnBots() {
+    const { MIN, MAX } = CONFIG.WORLD;
     for (let i = 0; i < CONFIG.BOT_COUNT; i++) {
       const classes = Object.keys(CLASSES);
       const cls = classes[Math.floor(Math.random() * classes.length)];
       const tier = 1 + Math.floor(Math.random() * 3);
+      const skinOptions = [null, ...SKIN_SHOP_ITEMS.filter((s) => s.speciesClass === cls).map((s) => s.id)];
+      const skinId = skinOptions[Math.floor(Math.random() * skinOptions.length)];
+      // Répartis sur toute la carte (et non plus regroupés près de la Capitale)
+      // pour que le monde paraisse habité même loin du point de départ.
       let x = 0, y = 0, tries = 0;
       do {
-        const a = Math.random() * Math.PI * 2;
-        const d = 4 + Math.random() * 10;
-        x = Math.round(Math.cos(a) * d);
-        y = Math.round(Math.sin(a) * d);
+        x = MIN + Math.floor(Math.random() * (MAX - MIN + 1));
+        y = MIN + Math.floor(Math.random() * (MAX - MIN + 1));
         tries++;
       } while (!isWalkable(this.worldMap.tiles, x, y) && tries < 50);
       const bot = {
-        id: 'bot' + i, username: BOT_NAMES[i % BOT_NAMES.length], speciesClass: cls, bot: true,
+        id: 'bot' + i, username: BOT_NAMES[i % BOT_NAMES.length], speciesClass: cls, skinId, bot: true,
         mapId: 'world',
         pos: { x, y }, home: { x, y },
         pa: 100,
@@ -1442,6 +1498,15 @@ class Game {
   tick(dtReal) {
     const dt = dtReal * this.speed;
     this.now += dt;
+
+    // Réveil du boss mondial : horloge RÉELLE (Date.now()), jamais this.now
+    // (qui accélère avec SPEED en dev) — un évènement à 36h doit rester à 36h
+    // même en test accéléré.
+    if (!this.worldBossAlive && Date.now() >= this.worldBossNextSpawnAt) {
+      this.worldBossAlive = true;
+      this.onWorldBossDirty();
+      this.log('🐉 Le Wyrm Ancestral s’est réveillé dans son repaire !');
+    }
 
     for (const p of this.players.values()) {
       if (!p.online) continue;
@@ -1497,6 +1562,7 @@ class Game {
       const vk = tileKey(nx, ny);
       if (!p.visitedVillages.includes(vk)) {
         p.visitedVillages.push(vk);
+        this.notifyAchievements(p, checkAchievements(p, ['Exploration']));
         this.plog(p, '📍 ' + (arrived.content.name || 'Village') + ' découvert — téléporteur débloqué !');
       }
     }
@@ -1513,7 +1579,10 @@ class Game {
     for (const k of keys) {
       if (typeof k === 'string' && k.length <= 16 && /^-?\d{1,3},-?\d{1,3}$/.test(k)) set.add(k);
     }
-    if (set.size !== before) p.exploredWorld = [...set];
+    if (set.size !== before) {
+      p.exploredWorld = [...set];
+      this.notifyAchievements(p, checkAchievements(p, ['Exploration']));
+    }
     return { ok: true, added: set.size - before };
   }
 
@@ -1560,6 +1629,12 @@ class Game {
     const key = this.raidId(p.mapId, x, y);
     if (!monster || monster.kind !== 'monster') return { ok: false, error: 'Aucun monstre ici.' };
     if (this.now < monster.inactiveUntil) return { ok: false, error: 'Ce groupe est déjà vaincu.' };
+    if (monster.worldBoss && !this.worldBossAlive) {
+      const totalMin = Math.max(1, Math.ceil((this.worldBossNextSpawnAt - Date.now()) / 60000));
+      const h = Math.floor(totalMin / 60);
+      const m = totalMin % 60;
+      return { ok: false, error: 'Le Wyrm Ancestral est endormi — revient dans ' + (h > 0 ? h + ' h ' : '') + m + ' min.' };
+    }
     if (this.raids.has(key)) return this.joinRaid(p, key);
     if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
     if (this.chebyshev(p.pos, tile) > 1) return { ok: false, error: 'Trop loin — approchez-vous.' };
@@ -1690,7 +1765,41 @@ class Game {
           food = foodDropFor(monster.tier);
           p.inventory[food] = (p.inventory[food] || 0) + 1;
         }
-        rewards.set(p.id, { gold, xp, food });
+        let bonus = null;
+        if (monster.worldBoss) {
+          const bonusGold = WORLD_BOSS.goldMin + Math.floor(this.rng() * (WORLD_BOSS.goldMax - WORLD_BOSS.goldMin + 1));
+          p.gold += bonusGold;
+          const bonusXp = WORLD_BOSS.xp;
+          p.weaponXp += bonusXp;
+          let moonstones = 0;
+          if (this.rng() < WORLD_BOSS.moonstoneChance) {
+            moonstones = WORLD_BOSS.moonstoneMin + Math.floor(this.rng() * (WORLD_BOSS.moonstoneMax - WORLD_BOSS.moonstoneMin + 1));
+            p[PREMIUM_CURRENCY.key] = (p[PREMIUM_CURRENCY.key] || 0) + moonstones;
+          }
+          let paScroll = false;
+          if (this.rng() < WORLD_BOSS.paScrollChance) {
+            const scrollKey = stackKey('PARCHEMIN_ENDURANCE', 1);
+            p.inventory[scrollKey] = (p.inventory[scrollKey] || 0) + 1;
+            paScroll = true;
+          }
+          let accessory = false;
+          if (!p.ownedAccessories.includes(WORLD_BOSS.accessoryId) && this.rng() < WORLD_BOSS.accessoryChance) {
+            p.ownedAccessories.push(WORLD_BOSS.accessoryId);
+            p.accessoryId = WORLD_BOSS.accessoryId;
+            accessory = true;
+            this.toast(p, '✨ Objet légendaire obtenu : ' + ACCESSORY_ITEMS[WORLD_BOSS.accessoryId].label + ' !');
+          }
+          let mount = false;
+          if (!p.ownedMounts.includes(WORLD_BOSS.mountId) && this.rng() < WORLD_BOSS.mountChance) {
+            p.ownedMounts.push(WORLD_BOSS.mountId);
+            p.mountId = WORLD_BOSS.mountId;
+            mount = true;
+            this.toast(p, '🐉 Monture légendaire obtenue : ' + MOUNT_ITEMS[WORLD_BOSS.mountId].label + ' !');
+          }
+          p.stats.worldBossKills = (p.stats.worldBossKills || 0) + 1;
+          bonus = { gold: bonusGold, xp: bonusXp, moonstones, paScroll, accessory, mount };
+        }
+        rewards.set(p.id, { gold, xp, food, worldBossBonus: bonus });
         this.checkLevelUp(p, 'weapon');
         p.stats.monsterKills = (p.stats.monsterKills || 0) + 1;
         p.stats.kills[monster.type] = (p.stats.kills[monster.type] || 0) + 1;
@@ -1711,12 +1820,22 @@ class Game {
     }
 
     if (victory) {
-      if (monster.boss) monster.inactiveUntil = 0;
-      else if (monster.dungeonMob) monster.inactiveUntil = this.now + CONFIG.RESPAWN_DUNGEON_MONSTER_MS;
-      else monster.inactiveUntil = this.now + CONFIG.RESPAWN_MONSTER_MS;
-      // Diffuse l'état vaincu du monstre à tous les clients
-      this.broadcast('world', { mapId: raid.mapId || 'world', key: raid.tileKey, inactiveUntil: monster.inactiveUntil });
-      this.updateDungeonProgress(raid.mapId, monster, true);
+      if (monster.worldBoss) {
+        // Horloge murale, pas this.now (voir tick()) — inactiveUntil ne sert
+        // à rien ici, le blocage passe par worldBossAlive (createRaid).
+        this.worldBossAlive = false;
+        this.worldBossNextSpawnAt = Date.now() + WORLD_BOSS.respawnMs;
+        this.onWorldBossDirty();
+        const hrs = Math.round(WORLD_BOSS.respawnMs / 3600000);
+        this.log('🐉 Le Wyrm Ancestral a été terrassé ! Il se réveillera dans environ ' + hrs + ' h.');
+      } else {
+        if (monster.boss) monster.inactiveUntil = 0;
+        else if (monster.dungeonMob) monster.inactiveUntil = this.now + CONFIG.RESPAWN_DUNGEON_MONSTER_MS;
+        else monster.inactiveUntil = this.now + CONFIG.RESPAWN_MONSTER_MS;
+        // Diffuse l'état vaincu du monstre à tous les clients
+        this.broadcast('world', { mapId: raid.mapId || 'world', key: raid.tileKey, inactiveUntil: monster.inactiveUntil });
+        this.updateDungeonProgress(raid.mapId, monster, true);
+      }
     }
     this.log('⚔ Raid ' + raid.label + ' T' + raid.tier + ' : ' +
       (victory ? 'VICTOIRE' : 'DEFAITE — l’équipe a péri') +
@@ -1729,6 +1848,7 @@ class Game {
         died: !victory,
         chance,
         label: raid.label,
+        monsterType: monster.type,
         tier: raid.tier,
         teamForce: force,
         monsterForce: raid.monsterForce,
@@ -1737,6 +1857,8 @@ class Game {
         food: rw ? rw.food : null,
         hpLoss: lossById.get(p.id) || 0,
         xp: rw ? rw.xp : 0,
+        worldBoss: !!monster.worldBoss,
+        worldBossBonus: rw ? rw.worldBossBonus : null,
         druid,
       });
     }
@@ -2060,6 +2182,10 @@ class Game {
       premium: p[PREMIUM_CURRENCY.key] || 0,
       charSlots: p.charSlots,
       charCount: (p.characters || []).length,
+      ownedAccessories: p.ownedAccessories || [],
+      accessoryId: p.accessoryId || null,
+      ownedMounts: p.ownedMounts || [],
+      mountId: p.mountId || null,
     })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   }
 
@@ -2113,6 +2239,30 @@ class Game {
     if (!RESOURCES[parsed.type] && !CONSUMABLES[parsed.type]) return { ok: false, error: 'Objet inconnu.' };
     const n = Math.max(1, Math.min(999, Math.floor(Number(qty)) || 1));
     target.inventory[key] = (target.inventory[key] || 0) + n;
+    this.pushSelf(target);
+    return { ok: true };
+  }
+
+  adminGrantAccessory(admin, username, accessoryId) {
+    if (!admin || admin.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
+    const target = this.adminFindTarget(username);
+    if (!target) return { ok: false, error: 'Joueur introuvable.' };
+    const id = String(accessoryId || '');
+    if (!ACCESSORY_ITEMS[id]) return { ok: false, error: 'Accessoire inconnu.' };
+    if (!target.ownedAccessories.includes(id)) target.ownedAccessories.push(id);
+    target.accessoryId = id;
+    this.pushSelf(target);
+    return { ok: true };
+  }
+
+  adminGrantMount(admin, username, mountId) {
+    if (!admin || admin.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
+    const target = this.adminFindTarget(username);
+    if (!target) return { ok: false, error: 'Joueur introuvable.' };
+    const id = String(mountId || '');
+    if (!MOUNT_ITEMS[id]) return { ok: false, error: 'Monture inconnue.' };
+    if (!target.ownedMounts.includes(id)) target.ownedMounts.push(id);
+    target.mountId = id;
     this.pushSelf(target);
     return { ok: true };
   }
@@ -2231,6 +2381,8 @@ class Game {
       mapStates: this.mapStates(),
       worldDiffs: this.worldDiffs(),
       wildSalt: this.wildSalt,
+      worldBossAlive: this.worldBossAlive,
+      worldBossNextSpawnAt: this.worldBossNextSpawnAt,
       savedAt: Date.now(),
     };
   }
@@ -2260,6 +2412,8 @@ class Game {
       if (typeof p.pushPaFullAt === 'undefined') p.pushPaFullAt = null;
       if (typeof p.pushPaFullSent !== 'boolean') p.pushPaFullSent = false;
       if (!Array.isArray(p.ownedSkins)) p.ownedSkins = [];
+      if (!Array.isArray(p.ownedAccessories)) p.ownedAccessories = [];
+      if (typeof p.accessoryId !== 'string') p.accessoryId = null;
       if (!Array.isArray(p.visitedVillages)) p.visitedVillages = [];
       if (!Array.isArray(p.exploredWorld)) p.exploredWorld = [];
       if (p.role !== 'admin' && p.role !== 'user') p.role = 'user';
@@ -2287,6 +2441,15 @@ class Game {
         const g = this.guilds.get(p.guildId);
         if (g) p.guildName = g.name;
       }
+    }
+    // Rattrapage : ensureAchievementState() (au-dessus) a fixé createdAt à
+    // « maintenant » faute de mieux pour les comptes déjà existants, avant
+    // que les identifiants (avec leur vraie date d'inscription) soient
+    // chargés ci-dessus — on corrige ici avec la date réelle, sinon
+    // l'ancienneté d'un compte de plusieurs mois repartirait de zéro.
+    for (const p of this.players.values()) {
+      const cred = this.credentials.get(p.id);
+      if (cred && typeof cred.createdAt === 'number') p.createdAt = cred.createdAt;
     }
     for (const c of data.castles || []) {
       if (c && c.terrain) this.castles.set(c.terrain, c);
@@ -2318,6 +2481,8 @@ class Game {
     // doivent s'appliquer sur la disposition à jour, pas sur celle d'origine).
     this.wildSalt = Number(data.wildSalt) || 0;
     if (this.wildSalt > 0) applyWildLayer(this.worldMap.tiles, this.seed, this.wildSalt);
+    this.worldBossAlive = !!data.worldBossAlive;
+    this.worldBossNextSpawnAt = typeof data.worldBossNextSpawnAt === 'number' ? data.worldBossNextSpawnAt : Date.now();
     if (data.mapDiffs) {
       for (const [mapId, diffs] of Object.entries(data.mapDiffs || {})) {
         const map = this.mapOf(mapId);

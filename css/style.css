@@ -286,6 +286,26 @@ html, body {
   font-variant-numeric: tabular-nums;
 }
 .gold-c { color: #b8860b; font-variant-numeric: tabular-nums; }
+.legendary-loot {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 4px;
+  padding: 8px 12px 8px 5px;
+  border: 1px solid rgba(121, 208, 211, 0.42);
+  border-radius: 15px;
+  background: radial-gradient(circle at 18% 50%, rgba(72, 205, 211, 0.2), transparent 38%), rgba(73, 28, 52, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.34), 0 8px 18px rgba(62, 24, 45, 0.11);
+}
+.legendary-loot img { width: 108px; height: 82px; object-fit: contain; filter: drop-shadow(0 7px 8px rgba(44, 18, 35, 0.24)); }
+.legendary-loot span { min-width: 0; }
+.legendary-loot small,
+.legendary-loot b,
+.legendary-loot em { display: block; }
+.legendary-loot small { color: #438f91; font-size: 9px; font-weight: 900; letter-spacing: 0.13em; }
+.legendary-loot b { margin-top: 3px; color: #59243e; font: 700 16px Georgia, "Times New Roman", serif; }
+.legendary-loot em { margin-top: 4px; color: #80664e; font-size: 10px; font-style: normal; }
 
 /* ---------- Profil : fiche d'aventurier (sections plates, ornements) ---------- */
 .profile-hero {
@@ -308,17 +328,33 @@ html, body {
 }
 .avatar.skin-avatar {
   --skin-scale: 0.84;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: visible;
   background: radial-gradient(circle at 50% 38%, rgba(255, 244, 214, 0.72), rgba(236, 213, 167, 0.28) 68%, transparent 72%);
 }
-.avatar.skin-avatar img {
+.avatar.skin-avatar .avatar-skin-main {
+  position: relative;
+  z-index: 1;
   width: calc(100% * var(--skin-scale));
   height: calc(100% * var(--skin-scale));
   object-fit: contain;
   filter: drop-shadow(0 8px 14px rgba(0,0,0,0.18));
+}
+.avatar.skin-avatar .avatar-accessory-back {
+  position: absolute;
+  left: 50%;
+  bottom: 7%;
+  z-index: 0;
+  width: 138%;
+  height: 112%;
+  max-width: none;
+  transform: translateX(-50%);
+  object-fit: contain;
+  pointer-events: none;
+  filter: drop-shadow(0 7px 10px rgba(49, 20, 38, 0.24));
 }
 .avatar.skin-avatar.hero {
   width: 104px;
@@ -1409,6 +1445,70 @@ html, body {
 .avatar.sprite.big { width: 56px; height: 56px; }
 .avatar.skin-avatar.small { width: 38px; height: 38px; }
 .avatar.skin-avatar.big { width: 56px; height: 56px; }
+.accessory-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  margin-top: 10px;
+}
+.accessory-card,
+.accessory-none {
+  border: 1px solid rgba(171, 129, 70, 0.3);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(247, 236, 209, 0.88), rgba(226, 205, 162, 0.82));
+  color: #4f2c12;
+  cursor: pointer;
+}
+.accessory-card {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 92px;
+  padding: 7px 10px 7px 5px;
+  text-align: left;
+}
+.accessory-card.active,
+.accessory-none.active {
+  border-color: rgba(191, 132, 32, 0.78);
+  box-shadow: inset 0 0 0 2px rgba(244, 205, 110, 0.28), 0 7px 16px rgba(84, 48, 17, 0.12);
+}
+.accessory-card-art {
+  display: grid;
+  width: 82px;
+  height: 78px;
+  place-items: center;
+}
+.accessory-card-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 6px 8px rgba(49, 20, 38, 0.22));
+}
+.accessory-card-copy b,
+.accessory-card-copy small { display: block; }
+.accessory-card-copy b { font: 700 14px Georgia, "Times New Roman", serif; }
+.accessory-card-copy small { margin-top: 5px; color: #8a6d4a; font-size: 10px; }
+.accessory-none {
+  min-height: 42px;
+  padding: 8px 12px;
+  font: 700 13px Georgia, "Times New Roman", serif;
+}
+.mount-card {
+  grid-column: 1 / -1;
+  grid-template-columns: 118px minmax(0, 1fr);
+}
+.mount-card-art {
+  width: 118px;
+  height: 82px;
+}
+.mount-loot img {
+  width: 118px;
+  height: 88px;
+}
+@media (max-width: 390px) {
+  .accessory-picker { grid-template-columns: 1fr; }
+}
 .bonus {
   padding: 8px 10px;
   border-radius: 12px;
@@ -1536,6 +1636,10 @@ html, body {
   background: #ffffff;
   transform: rotate(45deg);
   border-radius: 2px;
+}
+.legend-worldboss {
+  background: #9a5fd1;
+  border-radius: 50%;
 }
 
 /* Social : canaux de discussion, guilde, amis */

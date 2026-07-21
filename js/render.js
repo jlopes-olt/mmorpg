@@ -110,6 +110,7 @@ const WORLD_ICON_FILES = {
     BOSS_PLAINE: 'assets/boss_plaine_t6.png',
     BOSS_MONTAGNE: 'assets/boss_montagne_t6.png',
     BOSS_MARECAGE: 'assets/boss_marecage_t6.png',
+    WYRM_ANCESTRAL: 'assets/bosses/wyrm_ancestral.png',
   },
   capital: 'assets/capitale_chibi_src.png',
   village: {
@@ -138,6 +139,15 @@ const PLAYER_SKIN_FILES = Object.fromEntries(
   SKIN_SHOP_ITEMS.map((item) => [item.id, skinAssetUrl(item.asset)]).concat(
     Object.entries(CLASS_BASE_SKINS).map(([speciesClass, asset]) => ['base:' + speciesClass, skinAssetUrl(asset)])
   )
+);
+
+// Accessoires cosmétiques (calque additionnel, indépendant de la classe/du
+// skin) — jamais en vente, obtenus en loot très rare ou attribution admin.
+const ACCESSORY_FILES = Object.fromEntries(
+  Object.values(ACCESSORY_ITEMS).map((item) => [item.id, item.asset])
+);
+const MOUNT_FILES = Object.fromEntries(
+  Object.values(MOUNT_ITEMS).map((item) => [item.id, item.asset])
 );
 
 /* Bas utile de chaque rangee de la planche de sprites */
@@ -201,6 +211,12 @@ class Renderer {
     this.castleLevels = {};
     this.castleOwners = {};
     this.playerSkins = {};
+    this.accessorySprites = {};
+    this.mountSprites = {};
+    // Boîtes écran des structures (capitale/village/donjon/château) du frame
+    // courant — recalculées dans draw(), lues par drawPlayer() pour estomper
+    // une monture qui les chevaucherait (voir STRUCTURE_KINDS plus bas).
+    this.structureBoxes = [];
     this.terrainTiles = {};
     this.playerHitboxes = [];
     this.chatBubbles = new Map();   // username -> { text, until } (horloge réelle, indépendante du multiplicateur DEV)
@@ -247,6 +263,12 @@ class Renderer {
     for (const [skinId, src] of Object.entries(PLAYER_SKIN_FILES)) {
       this.playerSkins[skinId] = this.loadSimpleImage(src, 'playerSkin');
     }
+    for (const [accessoryId, src] of Object.entries(ACCESSORY_FILES)) {
+      this.accessorySprites[accessoryId] = this.loadCleanImage(src);
+    }
+    for (const [mountId, src] of Object.entries(MOUNT_FILES)) {
+      this.mountSprites[mountId] = this.loadCleanImage(src);
+    }
   }
 
   setCastleInfo(list) {
@@ -278,6 +300,32 @@ class Renderer {
       const processed = this.prepareContentImage(image);
       image.processed = processed.canvas;
       image.bounds = processed.bounds;
+      image.ready = true;
+    };
+    image.onerror = () => { image.ready = false; };
+    image.src = src;
+    return image;
+  }
+
+  // Pour un asset déjà propre (vraie transparence, pas de fond à détourer) —
+  // se contente de mesurer les bornes utiles, sans stripContentBackground ni
+  // keepLargestAlphaComponent. Ce dernier suppose UN SEUL sujet connexe : sur
+  // des ailes en deux moitiés séparées par du vide, il effacerait une des
+  // deux (la plus petite composante), d'où cette variante allégée.
+  loadCleanImage(src) {
+    const image = new Image();
+    image.ready = false;
+    image.bounds = null;
+    image.processed = null;
+    image.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = image.naturalWidth;
+      c.height = image.naturalHeight;
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(image, 0, 0);
+      const measured = this.measureProcessedCanvas(c);
+      image.processed = measured.canvas;
+      image.bounds = measured.bounds;
       image.ready = true;
     };
     image.onerror = () => { image.ready = false; };
@@ -633,11 +681,11 @@ class Renderer {
     ctx.lineWidth = 1;
   }
 
-  drawWorldSprite(image, cx, groundY, maxW, maxH, shadowW, shadowH, scaleAdjust) {
+  drawWorldSprite(image, cx, groundY, maxW, maxH, shadowW, shadowH, scaleAdjust, widthScale) {
     if (!image || !image.ready || !image.processed || !image.bounds) return null;
     const b = image.bounds;
     const scale = Math.min(maxW / b.w, maxH / b.h) * (scaleAdjust || 1);
-    const dw = b.w * scale;
+    const dw = b.w * scale * (widthScale || 1);
     const dh = b.h * scale;
     if (shadowW && shadowH) {
       this.ctx.fillStyle = 'rgba(0,0,0,0.28)';
@@ -646,7 +694,23 @@ class Renderer {
       this.ctx.fill();
     }
     this.ctx.drawImage(image.processed, b.x, b.y, b.w, b.h, cx - dw / 2, groundY - dh, dw, dh);
-    return { dw, dh, topY: groundY - dh };
+    return { dw, dh, topY: groundY - dh, left: cx - dw / 2, groundY };
+  }
+
+  redrawWorldSpriteFront(image, drawInfo, clipFrom) {
+    if (!image || !image.ready || !image.processed || !image.bounds || !drawInfo) return;
+    const b = image.bounds;
+    const clipY = drawInfo.topY + drawInfo.dh * Math.max(0, Math.min(1, clipFrom));
+    this.ctx.save();
+    this.ctx.beginPath();
+    this.ctx.rect(drawInfo.left - 1, clipY, drawInfo.dw + 2, drawInfo.groundY - clipY + 2);
+    this.ctx.clip();
+    this.ctx.drawImage(
+      image.processed,
+      b.x, b.y, b.w, b.h,
+      drawInfo.left, drawInfo.topY, drawInfo.dw, drawInfo.dh
+    );
+    this.ctx.restore();
   }
 
   /* Case vide de donjon : losange quasi noir, plus sombre que le fond */
@@ -853,6 +917,24 @@ class Renderer {
 
     poi.sort((a, b) => a.cy - b.cy);
     for (const p of poi) this.drawContent(p.tile, p.cx, p.cy, p.visible);
+
+    // Une monture (bien plus grande qu'un personnage) peut chevaucher une
+    // structure voisine sans que rien n'y paraisse dans l'ordre de dessin
+    // (les structures sont toutes dessinées avant les joueurs) — drawPlayer()
+    // s'appuie sur ces boîtes pour l'estomper plutôt que la cacher.
+    this.structureBoxes = [];
+    for (const item of poi) {
+      const kind = item.tile.content.kind;
+      if (kind !== 'capital' && kind !== 'village' && kind !== 'dungeon' && kind !== 'castle') continue;
+      const size = contentSpriteSize(kind);
+      const groundY = item.cy + size.groundOffset;
+      this.structureBoxes.push({
+        left: item.cx - size.w / 2,
+        right: item.cx + size.w / 2,
+        top: groundY - size.h,
+        bottom: groundY,
+      });
+    }
 
     const visiblePlayers = [...s.players.values()]
       // p.id === me.id : le rayon ci-dessous est centré sur la caméra (qui
@@ -1064,7 +1146,13 @@ if (c.kind === 'dungeon') {
     } else if (c.kind === 'monster') {
       const sprite = this.worldIcons.monster[c.type] || this.worldIcons.monster[MONSTERS[c.tier] && MONSTERS[c.tier].type];
       const size = contentSpriteSize('monster', '', c.tier);
-      if (c.boss) {
+      if (c.worldBoss) {
+        size.w = Math.round(size.w * 2.05);
+        size.h = Math.round(size.h * 2.05);
+        size.groundOffset += 6;
+        size.shadowW = Math.round(size.shadowW * 1.9);
+        size.shadowH = Math.round(size.shadowH * 1.45);
+      } else if (c.boss) {
         size.w = Math.round(size.w * 1.55);
         size.h = Math.round(size.h * 1.55);
         size.groundOffset += 4;
@@ -1137,6 +1225,50 @@ if (c.kind === 'dungeon') {
     ctx.fillStyle = color;
     ctx.fillText(text, cx, cy);
     ctx.lineWidth = 1;
+  }
+
+  // Pseudo + titre sur une même ligne, avec une police distincte (italique,
+  // plus petite) pour le titre afin de bien le différencier du pseudo.
+  labelNameTitle(cx, cy, username, title, isMe) {
+    const ctx = this.ctx;
+    const nameFont = '700 9px system-ui, sans-serif';
+    const titleFont = 'italic 600 8px system-ui, sans-serif';
+    const nameColor = isMe ? '#f4cd6e' : '#dfe5ec';
+    const titleColor = isMe ? '#c9b98a' : '#9aa5b1';
+    const sep = '  ';
+
+    ctx.textBaseline = 'middle';
+    ctx.font = nameFont;
+    const nameW = ctx.measureText(username).width;
+    let sepW = 0, titleW = 0;
+    if (title) {
+      ctx.font = titleFont;
+      sepW = ctx.measureText(sep).width;
+      titleW = ctx.measureText(title).width;
+    }
+    const totalW = nameW + sepW + titleW;
+    let x = cx - totalW / 2;
+
+    ctx.textAlign = 'left';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(10,12,16,0.75)';
+
+    ctx.font = nameFont;
+    ctx.strokeText(username, x, cy);
+    ctx.fillStyle = nameColor;
+    ctx.fillText(username, x, cy);
+    x += nameW;
+
+    if (title) {
+      x += sepW;
+      ctx.font = titleFont;
+      ctx.strokeText(title, x, cy);
+      ctx.fillStyle = titleColor;
+      ctx.fillText(title, x, cy);
+    }
+
+    ctx.lineWidth = 1;
+    ctx.textAlign = 'center';
   }
 
   // Bulle de discussion (canal Général) : apparaît au-dessus du joueur qui
@@ -1225,14 +1357,40 @@ if (c.kind === 'dungeon') {
     const cx = this.isoX(p.pos.x, p.pos.y) - this.cam.x + this.w / 2 + offset.x;
     const cy = this.isoY(p.pos.x, p.pos.y) - this.cam.y + this.h / 2 + offset.y;
     const cls = CLASSES[p.speciesClass];
+    const mount = p.mountId && MOUNT_ITEMS[p.mountId];
+    const mountSprite = mount && this.mountSprites[p.mountId];
+    const mountScale = isMe ? 1 : 0.86;
+    const mountWorld = mount && mount.world;
+    const riderCx = cx + (mountWorld ? mountWorld.riderOffsetX * mountScale : 0);
+    const riderCy = cy + (mountWorld ? mountWorld.riderOffsetY * mountScale : 0);
+    let mountDrawn = null;
+
+    // Monture chevauchant une structure (capitale/village/donjon/château) :
+    // on l'estompe plutôt que de la laisser la recouvrir entièrement — sa
+    // boîte est volontairement large (basée sur maxW/maxH, pas les bornes
+    // réelles du sprite) pour déclencher l'effet un peu tôt plutôt que tard.
+    let mountAlpha = 1;
+    if (mountWorld) {
+      const groundY = cy + mountWorld.groundOffset * mountScale;
+      const halfW = (mountWorld.maxW * mountScale) / 2;
+      const mountBox = {
+        left: cx - halfW, right: cx + halfW,
+        top: groundY - mountWorld.maxH * mountScale, bottom: groundY,
+      };
+      const overlaps = this.structureBoxes.some((b) =>
+        mountBox.left < b.right && mountBox.right > b.left &&
+        mountBox.top < b.bottom && mountBox.bottom > b.top
+      );
+      if (overlaps) mountAlpha = 0.42;
+    }
 
     ctx.beginPath();
-    ctx.ellipse(cx, cy + 6, 14, 5.5, 0, 0, Math.PI * 2);
+    ctx.ellipse(cx, cy + 6, mount ? 29 : 14, mount ? 8 : 5.5, 0, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
     ctx.fill();
     if (stackCount > 1 && !isMe) {
       ctx.beginPath();
-      ctx.ellipse(cx, cy + 6, 16, 6.5, 0, 0, Math.PI * 2);
+      ctx.ellipse(cx, cy + 6, mount ? 31 : 16, mount ? 9 : 6.5, 0, 0, Math.PI * 2);
       ctx.strokeStyle = 'rgba(208,224,236,0.38)';
       ctx.lineWidth = 1.25;
       ctx.stroke();
@@ -1240,14 +1398,49 @@ if (c.kind === 'dungeon') {
     }
     if (isMe) {
       ctx.beginPath();
-      ctx.ellipse(cx, cy + 6, 18, 7.5, 0, 0, Math.PI * 2);
+      ctx.ellipse(cx, cy + 6, mount ? 34 : 18, mount ? 10 : 7.5, 0, 0, Math.PI * 2);
       ctx.strokeStyle = 'rgba(244,205,110,0.9)';
       ctx.lineWidth = 2;
       ctx.stroke();
       ctx.lineWidth = 1;
     }
 
-    let topY = cy - 34;
+    ctx.globalAlpha = mountAlpha;
+
+    if (mountWorld && mountSprite) {
+      mountDrawn = this.drawWorldSprite(
+        mountSprite,
+        cx,
+        cy + mountWorld.groundOffset * mountScale,
+        mountWorld.maxW * mountScale,
+        mountWorld.maxH * mountScale,
+        0,
+        0,
+        1
+      );
+    }
+
+    // Accessoire cosmétique (ailes, etc.) : dessiné en premier, donc derrière
+    // le personnage — visible par-dessus les épaules quel que soit le skin.
+    if (p.accessoryId) {
+      const accSprite = this.accessorySprites[p.accessoryId];
+      const accessory = ACCESSORY_ITEMS[p.accessoryId];
+      const world = (accessory && accessory.world) || { maxW: 118, maxH: 92, groundOffset: 8 };
+      const remoteScale = isMe ? 1 : 0.86;
+      this.drawWorldSprite(
+        accSprite,
+        riderCx,
+        riderCy + world.groundOffset,
+        world.maxW * remoteScale,
+        world.maxH * remoteScale,
+        0,
+        0,
+        1,
+        world.squeeze || 1
+      );
+    }
+
+    let topY = riderCy - 34;
     const skinSprite = this.playerSkins[p.skinId || ('base:' + p.speciesClass)] || null;
     const skinScale = classSkinScale(p.speciesClass);
     // La largeur n'est volontairement pas plafonnée serré : drawWorldSprite prend
@@ -1258,8 +1451,8 @@ if (c.kind === 'dungeon') {
     // la feuille de sprites de base, qui fixe toujours une hauteur (dh) fixe.
     const skinDrawn = this.drawWorldSprite(
       skinSprite,
-      cx,
-      cy + 8,
+      riderCx,
+      riderCy + 8,
       isMe ? 120 : 104,
       isMe ? 66 : 56,
       0,
@@ -1275,14 +1468,14 @@ if (c.kind === 'dungeon') {
       const sw = cw * 0.88, sh = ch * SPRITE_ROW_CROP[cell[1]];
       const dh = isMe ? 58 : 46;
       const dw = dh * (sw / sh);
-      ctx.drawImage(this.sprites, sx, sy, sw, sh, cx - dw / 2, cy + 8 - dh, dw, dh);
-      topY = cy + 8 - dh;
+      ctx.drawImage(this.sprites, sx, sy, sw, sh, riderCx - dw / 2, riderCy + 8 - dh, dw, dh);
+      topY = riderCy + 8 - dh;
     } else {
       const size = isMe ? 20 : 16;
       ctx.fillStyle = cls.color;
       ctx.strokeStyle = isMe ? '#e8ecf1' : 'rgba(232,236,241,0.35)';
       ctx.lineWidth = isMe ? 2 : 1;
-      this.roundRect(cx - size / 2, cy - size / 2 - 6, size, size, 4);
+      this.roundRect(riderCx - size / 2, riderCy - size / 2 - 6, size, size, 4);
       ctx.fill();
       ctx.stroke();
       ctx.lineWidth = 1;
@@ -1290,19 +1483,23 @@ if (c.kind === 'dungeon') {
       ctx.font = 'bold 9px system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(cls.icon, cx, cy - 5.5);
-      topY = cy - size - 6;
+      ctx.fillText(cls.icon, riderCx, riderCy - 5.5);
+      topY = riderCy - size - 6;
     }
 
-    this.label(cx, topY - 7, p.username, isMe ? '#f4cd6e' : '#dfe5ec', 9);
+    if (mountDrawn && mountWorld) {
+      this.redrawWorldSpriteFront(mountSprite, mountDrawn, mountWorld.frontClip);
+    }
+    ctx.globalAlpha = 1;
+
+    this.labelNameTitle(riderCx, topY - 17, p.username, p.activeTitle, isMe);
 
     const inRaidTag = p.status === 'LOBBY_COMBAT';
     if (inRaidTag) {
       const inRaid = p.raidKey && this.server.raids.get(p.raidKey);
-      this.label(cx, topY - 18, (inRaid && inRaid.siege) ? 'SIÈGE' : 'RAID', '#ff7b6b', 11);
-    } else {
-      const tag = [p.activeTitle, p.guildName ? ('<' + p.guildName + '>') : null].filter(Boolean).join(' ');
-      if (tag) this.label(cx, topY - 17, tag, isMe ? '#c9b98a' : '#9aa5b1', 8);
+      this.label(riderCx, topY - 7, (inRaid && inRaid.siege) ? 'SIÈGE' : 'RAID', '#ff7b6b', 11);
+    } else if (p.guildName) {
+      this.label(riderCx, topY - 7, '<' + p.guildName + '>', isMe ? '#c9b98a' : '#9aa5b1', 8);
     }
 
     const bubble = this.chatBubbles.get(p.username);
@@ -1313,26 +1510,26 @@ if (c.kind === 'dungeon') {
       } else {
         const fadeMs = 400;
         const alpha = Math.min(1, (bubble.until - now) / fadeMs);
-        this.drawChatBubble(cx, topY - (inRaidTag ? 30 : 18), bubble.text, alpha);
+        this.drawChatBubble(riderCx, topY - (inRaidTag ? 30 : 18), bubble.text, alpha);
       }
     }
 
     if (isMe && p.status === 'HARVESTING') {
       const frac = 1 - (p.harvestEndsAt - this.server.now) / CONFIG.HARVEST_MS;
       ctx.fillStyle = 'rgba(20,24,29,0.85)';
-      ctx.fillRect(cx - 20, topY - 30, 40, 7);
+      ctx.fillRect(riderCx - 20, topY - 30, 40, 7);
       ctx.fillStyle = '#58b368';
-      ctx.fillRect(cx - 19, topY - 29, 38 * Math.max(0, Math.min(1, frac)), 5);
+      ctx.fillRect(riderCx - 19, topY - 29, 38 * Math.max(0, Math.min(1, frac)), 5);
     }
 
     this.playerHitboxes.push({
       player: p,
       cx,
       cy: topY - 6,
-      x1: cx - 28,
+      x1: cx - (mount ? 66 : 28),
       y1: topY - 18,
-      x2: cx + 28,
-      y2: cy + 16,
+      x2: cx + (mount ? 66 : 28),
+      y2: cy + (mount ? 22 : 16),
     });
   }
 
@@ -1396,6 +1593,27 @@ if (c.kind === 'dungeon') {
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
+      return;
+    }
+
+    if (kind === 'worldboss') {
+      // Repère distinct (étoile pourpre) : le seul point unique de toute la
+      // carte, endormi ou réveillé — pulse légèrement pour attirer l'œil.
+      const pulse = 1 + Math.sin(performance.now() / 260) * 0.12;
+      const r1 = size * 1.15 * pulse, r2 = size * 0.5 * pulse;
+      ctx.fillStyle = '#9a5fd1';
+      ctx.strokeStyle = 'rgba(20,24,29,0.9)';
+      ctx.lineWidth = 1.25;
+      ctx.beginPath();
+      for (let i = 0; i < 8; i++) {
+        const ang = (Math.PI / 4) * i - Math.PI / 2;
+        const rad = i % 2 === 0 ? r1 : r2;
+        const px = x + Math.cos(ang) * rad, py = y + Math.sin(ang) * rad;
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
     }
   }
 
@@ -1455,6 +1673,11 @@ if (c.kind === 'dungeon') {
           x: toPx(tile.x) + scale / 2,
           y: toPx(tile.y) + scale / 2,
         });
+      } else if (tile.content && tile.content.worldBoss) {
+        // Repère du boss de raid mondial : visible sur toute la carte, comme
+        // les autres repères permanents, qu'il soit endormi ou réveillé —
+        // sinon impossible à localiser sans l'avoir déjà croisé par hasard.
+        markers.push({ kind: 'worldboss', x: toPx(tile.x) + scale / 2, y: toPx(tile.y) + scale / 2 });
       }
     }
 

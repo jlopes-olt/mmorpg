@@ -176,6 +176,20 @@ function generateWorldMap(seed) {
 
       if (x === 0 && y === 0) {
         content = { kind: 'capital' };
+      } else if (x === WORLD_BOSS.pos.x && y === WORLD_BOSS.pos.y) {
+        // Repaire du boss de raid mondial : point fixe unique, pas un par
+        // biome comme les châteaux — l'état vivant/endormi se pilote côté
+        // serveur (Game.worldBossAlive), pas ici (la génération doit rester
+        // pure et déterministe, sans horloge murale).
+        content = {
+          kind: 'monster',
+          type: WORLD_BOSS.type,
+          label: WORLD_BOSS.label,
+          tier: WORLD_BOSS.tier,
+          force: WORLD_BOSS.force,
+          inactiveUntil: 0,
+          worldBoss: true,
+        };
       } else if (dist > 1.5) {
         const r = hash2(x, y, seed, 3);
         const tier = tierAtDistance(dist);
@@ -226,8 +240,8 @@ function generateWorldMap(seed) {
 function applyWildLayer(tiles, seed, salt) {
   const saltInput = 3 + (salt || 0) * 7919;
   for (const tile of tiles.values()) {
-    const isWild = !tile.content || tile.content.kind === 'resource' || tile.content.kind === 'monster';
-    if (!isWild) continue;   // repère (village/donjon/château/capitale) : jamais touché
+    const isWild = !tile.content || ((tile.content.kind === 'resource' || tile.content.kind === 'monster') && !tile.content.worldBoss);
+    if (!isWild) continue;   // repère (village/donjon/château/capitale/boss mondial) : jamais touché
     const dist = Math.hypot(tile.x, tile.y);
     if (dist <= 1.5) { tile.content = null; continue; }   // abords de la Capitale : toujours dégagés
     const r = hash2(tile.x, tile.y, seed, saltInput);

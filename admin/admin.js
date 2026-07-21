@@ -157,6 +157,16 @@ $('searchInput').addEventListener('input', renderTable);
 
 /* ---------- Panneau latéral : détail + actions ---------- */
 
+function accessoryOptions() {
+  return Object.values(ACCESSORY_ITEMS)
+    .map((item) => '<option value="accessory:' + item.id + '">' + item.label + '</option>').join('');
+}
+
+function mountOptions() {
+  return Object.values(MOUNT_ITEMS)
+    .map((item) => '<option value="mount:' + item.id + '">' + item.label + '</option>').join('');
+}
+
 function grantFormHtml() {
   const resourceOptions = Object.keys(RESOURCES)
     .map((t) => '<option value="item:' + t + '">' + RESOURCES[t].label + '</option>').join('');
@@ -180,6 +190,8 @@ function grantFormHtml() {
           '</optgroup>' +
           '<optgroup label="Ressources">' + resourceOptions + '</optgroup>' +
           '<optgroup label="Consommables">' + consumableOptions + '</optgroup>' +
+          '<optgroup label="Accessoires cosmétiques (rares)">' + accessoryOptions() + '</optgroup>' +
+          '<optgroup label="Montures (rares)">' + mountOptions() + '</optgroup>' +
         '</select>' +
         '<select id="grantTier">' + tierOptions + '</select>' +
         '<input id="grantQty" type="number" min="1" max="999" value="1">' +
@@ -225,6 +237,8 @@ function renderPlayerPanel(p) {
         '<div><span>Tier armure</span> <b>T' + p.armorTier + '</b></div>' +
         '<div><span>Or</span> <b>' + (p.gold || 0).toLocaleString('fr-FR') + '</b></div>' +
         '<div><span>' + esc(PREMIUM_CURRENCY.label) + '</span> <b>' + (p.premium || 0).toLocaleString('fr-FR') + '</b></div>' +
+        '<div><span>Accessoire</span> <b>' + esc((ACCESSORY_ITEMS[p.accessoryId] || {}).label || '—') + '</b></div>' +
+        '<div><span>Monture</span> <b>' + esc((MOUNT_ITEMS[p.mountId] || {}).label || '—') + '</b></div>' +
       '</div>' +
     '</div>' +
 
@@ -266,6 +280,8 @@ function renderPlayerPanel(p) {
     else if (what === 'gear:weapon') r = await api('POST', '/players/' + u + '/gear', { slot: 'weapon', tier });
     else if (what === 'gear:armor') r = await api('POST', '/players/' + u + '/gear', { slot: 'armor', tier });
     else if (what.indexOf('item:') === 0) r = await api('POST', '/players/' + u + '/item', { key: stackKey(what.slice(5), tier), qty });
+    else if (what.indexOf('accessory:') === 0) r = await api('POST', '/players/' + u + '/accessory', { accessoryId: what.slice(10) });
+    else if (what.indexOf('mount:') === 0) r = await api('POST', '/players/' + u + '/mount', { mountId: what.slice(6) });
     toast((r && r.ok) ? 'Attribution effectuée.' : ((r && r.error) || 'Erreur serveur.'), !(r && r.ok));
     if (r && r.ok) loadAll();
   });

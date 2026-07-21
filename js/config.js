@@ -386,6 +386,70 @@ const SKIN_SHOP_ITEMS = [
 
 const SKIN_BY_ID = Object.fromEntries(SKIN_SHOP_ITEMS.map((item) => [item.id, item]));
 
+/* ---------- Boss de raid mondial ---------- */
+// Un point fixe et unique sur toute la carte (contrairement aux châteaux/
+// donjons, un par biome) — pensé pour un raid coordonné d'une dizaine de
+// joueurs, bien au-delà d'un boss de donjon T6 (force ~660-700). Réapparaît
+// sur une VRAIE horloge murale (Date.now(), voir server/game.js) et non
+// l'horloge de jeu — qui accélère avec SPEED en dev — pour qu'un évènement
+// rare reste rare même en test accéléré.
+const WORLD_BOSS = {
+  type: 'WYRM_ANCESTRAL',
+  label: 'Wyrm Ancestral',
+  force: 1150,
+  tier: 6,
+  pos: { x: 33, y: -33 },
+  respawnMs: 36 * 60 * 60 * 1000,   // 36h
+  goldMin: 150,
+  goldMax: 220,
+  xp: 150,
+  // Volontairement pas de monnaie premium garantie (sinon un groupe pourrait
+  // s'offrir un skin gratuit tous les 4-5 jours) : une chance modeste d'un
+  // petit montant, comme le reste du loot rare.
+  moonstoneChance: 0.25,
+  moonstoneMin: 1,
+  moonstoneMax: 2,
+  paScrollChance: 0.08,
+  accessoryChance: 0.02,
+  accessoryId: 'wyrm_wings',
+  mountChance: 0.01,
+  mountId: 'wyrm_ancestral_hatchling',
+};
+
+/* Cosmétiques d'accessoire : calque additionnel dessiné en plus du skin
+ * (indépendant de la classe), jamais en vente — uniquement en loot rare ou
+ * attribution admin. Un seul actif à la fois par joueur (p.equippedAccessory). */
+const ACCESSORY_ITEMS = {
+  wyrm_wings: {
+    id: 'wyrm_wings',
+    label: 'Ailes du Wyrm Ancestral',
+    asset: 'assets/accessories/wyrm_wings.png',
+    // Le large vide central de l'asset accueille tous les héros. Ces dimensions
+    // sont indépendantes du skin et serviront aussi aux prochains accessoires.
+    // squeeze < 1 resserre les ailes horizontalement (uniquement la largeur,
+    // la hauteur n'est pas affectée) ; groundOffset négatif les remonte.
+    world: { maxW: 118, maxH: 92, groundOffset: -8, squeeze: 0.82 },
+  },
+};
+
+/* Les montures encadrent le groupe cavalier sans modifier son échelle : la
+ * monture est derrière, puis sa partie basse est redessinée devant les jambes. */
+const MOUNT_ITEMS = {
+  wyrm_ancestral_hatchling: {
+    id: 'wyrm_ancestral_hatchling',
+    label: 'Rejeton du Wyrm Ancestral',
+    asset: 'assets/mounts/rejeton_wyrm_ancestral.png',
+    world: {
+      maxW: 154,
+      maxH: 110,
+      groundOffset: 13,
+      riderOffsetX: 8,
+      riderOffsetY: -38,
+      frontClip: 0.5,
+    },
+  },
+};
+
 function skinAssetUrl(path) {
   return path + '?v=' + SKIN_ASSET_REV;
 }
@@ -702,6 +766,7 @@ if (typeof module !== 'undefined' && module.exports) {
     RESOURCE_EMOJI, MONSTER_EMOJI, CHARACTER_FIELDS,
     PREMIUM_CURRENCY, MOONSTONE_PACKS, GOLD_PACKS, PA_SCROLL_COST_MOONSTONES, PA_SCROLL_COOLDOWN_MS, VAPID_PUBLIC_KEY,
     SKIN_SHOP_ITEMS, SKIN_BY_ID, SKIN_ASSET_REV, CLASS_SKIN_SCALE, CLASS_BASE_SKINS,
+    WORLD_BOSS, ACCESSORY_ITEMS, MOUNT_ITEMS,
     skinFor, skinAssetUrl, classSkinScale, baseSkinAsset, equipmentAsset,
     levelFromXp, playerForce, maxHp, hpLossReduction, stackKey, parseStackKey, resourceFamily,
     newCharacter, syncActiveCharacter, applyCharacter, rollGoldLoot,

@@ -45,6 +45,10 @@ class ServerSim {
   skinStateOf(p) {
     if (!p) return;
     if (!Array.isArray(p.ownedSkins)) p.ownedSkins = [];
+    if (!Array.isArray(p.ownedAccessories)) p.ownedAccessories = [];
+    if (!Array.isArray(p.ownedMounts)) p.ownedMounts = [];
+    if (typeof p.accessoryId === 'undefined') p.accessoryId = null;
+    if (typeof p.mountId === 'undefined') p.mountId = null;
     if (typeof p[PREMIUM_CURRENCY.key] !== 'number') p[PREMIUM_CURRENCY.key] = 0;
     if (typeof p.skinId === 'undefined') p.skinId = null;
     if (!Array.isArray(p.characters) || !p.characters.length) return;
@@ -68,6 +72,8 @@ class ServerSim {
       weaponType: p.weapon ? p.weapon.type : '',
       armorType: p.armor ? p.armor.type : '',
       skinId: p.skinId || null,
+      accessoryId: p.accessoryId || null,
+      mountId: p.mountId || null,
     };
   }
 
@@ -252,6 +258,10 @@ class ServerSim {
       [PREMIUM_CURRENCY.key]: 24,
       lastPaScrollAt: -PA_SCROLL_COOLDOWN_MS,   // « jamais utilisé » : disponible dès la création
       ownedSkins: [],
+      ownedAccessories: [],
+      accessoryId: null,
+      ownedMounts: [],
+      mountId: null,
       status: 'IDLE',
       harvestKey: null, harvestEndsAt: 0,
       raidKey: null,
@@ -374,6 +384,38 @@ class ServerSim {
     if (!me.ownedSkins.includes(item.id)) return { ok: false, error: 'Vous ne possédez pas ce skin.' };
     me.skinId = item.id;
     syncActiveCharacter(me);
+    this.emit('self', me);
+    return { ok: true };
+  }
+
+  // Accessoire cosmétique : jamais obtenu en solo (pas de boss mondial hors
+  // ligne), mais la méthode existe pour que l'UI du profil reste générique.
+  equipAccessory(accessoryId) {
+    const me = this.me;
+    const desired = accessoryId ? String(accessoryId) : null;
+    if (!desired) {
+      me.accessoryId = null;
+      this.emit('self', me);
+      return { ok: true };
+    }
+    if (!ACCESSORY_ITEMS[desired]) return { ok: false, error: 'Accessoire inconnu.' };
+    if (!me.ownedAccessories.includes(desired)) return { ok: false, error: 'Vous ne possédez pas cet accessoire.' };
+    me.accessoryId = desired;
+    this.emit('self', me);
+    return { ok: true };
+  }
+
+  equipMount(mountId) {
+    const me = this.me;
+    const desired = mountId ? String(mountId) : null;
+    if (!desired) {
+      me.mountId = null;
+      this.emit('self', me);
+      return { ok: true };
+    }
+    if (!MOUNT_ITEMS[desired]) return { ok: false, error: 'Monture inconnue.' };
+    if (!me.ownedMounts.includes(desired)) return { ok: false, error: 'Vous ne possédez pas cette monture.' };
+    me.mountId = desired;
     this.emit('self', me);
     return { ok: true };
   }
@@ -544,6 +586,7 @@ class ServerSim {
       const vk = tileKey(nx, ny);
       if (!me.visitedVillages.includes(vk)) {
         me.visitedVillages.push(vk);
+        for (const a of checkAchievements(me, ['Exploration'])) this.emit('achievementUnlocked', { id: a.id, label: a.label, category: a.category, reward: a.reward || {} });
         this.log('📍 ' + (arrived.content.name || 'Village') + ' découvert — téléporteur débloqué !');
       }
     }
@@ -750,6 +793,7 @@ class ServerSim {
       died: !victory,
       chance,
       label: raid.label,
+      monsterType: monster.type,
       tier: raid.tier,
       teamForce: force,
       monsterForce: raid.monsterForce,
@@ -992,6 +1036,10 @@ class ServerSim {
     if (!Array.isArray(p.friends)) p.friends = [];
     if (!Array.isArray(p.friendRequests)) p.friendRequests = [];
     ensureAchievementState(p);
+    // Vérification complète (toutes catégories) au chargement de la
+    // sauvegarde : rattrape les hauts faits déjà mérités par une progression
+    // antérieure à leur ajout, plutôt que d'attendre la prochaine action.
+    for (const a of checkAchievements(p)) this.emit('achievementUnlocked', { id: a.id, label: a.label, category: a.category, reward: a.reward || {} });
     const away = Math.max(0, Date.now() - (data.savedAt || Date.now()));
     p.pa = Math.min(CONFIG.PA.MAX, p.pa + Math.floor(away / CONFIG.PA.REGEN_MS));
     p.hp = Math.min(maxHp(p), p.hp + Math.floor(away / CONFIG.HP.REGEN_MS));

@@ -634,7 +634,7 @@ showDungeonPopup(tile, onEnter) {
     const cls = CLASSES[player.speciesClass] || { label: player.classLabel || player.speciesClass, role: player.role || '' };
     return (
       '<div class="player-peek">' +
-        this.spriteAvatar(player.speciesClass, 'small', player.skinId) +
+        this.spriteAvatar(player.speciesClass, 'small', player.skinId, player.accessoryId) +
         '<div class="player-peek-copy">' +
           '<div class="player-peek-name">' + esc(player.username) + this.titleGuildTag(player) + '</div>' +
           '<div class="player-peek-class">' + esc(cls.label) + (cls.role ? ' · ' + esc(cls.role) : '') + '</div>' +
@@ -1453,7 +1453,7 @@ showDungeonPopup(tile, onEnter) {
   /* ---------- Résultat de raid ---------- */
   async showResult(r) {
     await this.playCombatClash(r);
-    const monsterSrc = this.getMonsterTargetSrc({ tier: r.tier });
+    const monsterSrc = this.getMonsterTargetSrc({ type: r.monsterType, tier: r.tier });
     const lines = [
       '<div class="vs battle-vs"><span>Équipe <b>' + r.teamForce + '</b></span><span class="vs-x">contre</span><span><b>' + r.monsterForce + '</b> ' + esc(r.label) + ' T' + r.tier + '</span></div>',
       '<p><span class="battle-label">Participants</span> ' + r.participants.map(esc).join(', ') + '</p>',
@@ -1470,16 +1470,37 @@ showDungeonPopup(tile, onEnter) {
         lines.push('<p><span class="battle-label">Trouvaille</span> ' + (RESOURCE_EMOJI[pf.type] || '❔') + ' 1× ' + resourceLabel(pf.type, pf.tier) + '</p>');
       }
       lines.push('<p><span class="battle-label">Maîtrise</span> +' + r.xp + ' XP d’arme</p>');
+      if (r.worldBoss && r.worldBossBonus) {
+        const b = r.worldBossBonus;
+        const bonusBits = [];
+        if (b.moonstones) bonusBits.push('+' + b.moonstones + ' ' + PREMIUM_CURRENCY.label.toLowerCase());
+        if (b.paScroll) bonusBits.push('1× Parchemin d’Endurance');
+        if (bonusBits.length) lines.push('<p class="ok-c"><span class="battle-label">Butin rare</span> ' + esc(bonusBits.join(' · ')) + '</p>');
+        if (b.accessory) {
+          const accessory = ACCESSORY_ITEMS[WORLD_BOSS.accessoryId];
+          lines.push('<div class="legendary-loot">' +
+            '<img src="' + accessory.asset + '" alt="">' +
+            '<span><small>OBJET LÉGENDAIRE</small><b>' + esc(accessory.label) + '</b><em>Équipées automatiquement</em></span>' +
+          '</div>');
+        }
+        if (b.mount) {
+          const mount = MOUNT_ITEMS[WORLD_BOSS.mountId];
+          lines.push('<div class="legendary-loot mount-loot">' +
+            '<img src="' + mount.asset + '" alt="">' +
+            '<span><small>MONTURE LÉGENDAIRE</small><b>' + esc(mount.label) + '</b><em>Équipée automatiquement</em></span>' +
+          '</div>');
+        }
+      }
     } else {
       lines.push('<p class="hp-c"><b>☠ Vous êtes mort.</b> Rapatriement à la Capitale — reposez-vous à la fontaine avant de repartir.</p>');
     }
     this.popup(
-      r.victory ? 'Victoire' : 'Défaite',
+      r.victory ? (r.worldBoss ? 'Victoire légendaire !' : 'Victoire') : 'Défaite',
       lines.join(''),
       [{ label: 'Continuer', primary: true }],
       {
         className: 'popup-card action-popup result-popup tone-' + (r.victory ? 'harvest' : 'danger'),
-        kicker: 'Rapport de bataille',
+        kicker: r.worldBoss ? 'Boss de raid mondial' : 'Rapport de bataille',
         heroHtml: this.buildActionHero({
           mediaSrc: monsterSrc,
           mediaClass: 'monster',
@@ -1657,7 +1678,7 @@ showDungeonPopup(tile, onEnter) {
     const cls = CLASSES[me.speciesClass];
     const skin = skinFor(me.skinId);
     const buffKey = me.buff ? [me.buff.type, me.buff.tier, me.buff.combats].join(':') : 'none';
-    const signature = [me.username, me.speciesClass, me.skinId || 'base', me.hp, me.gold,
+    const signature = [me.username, me.speciesClass, me.skinId || 'base', me.accessoryId || 'none', me.mountId || 'none', me.hp, me.gold,
       me.weapon.type, me.weapon.tier, me.armor.type, me.armor.tier,
       me.harvestLevel, me.weaponMastery, buffKey].join('|');
     if (!force && signature === this.desktopProfileSignature) return;
@@ -1666,7 +1687,7 @@ showDungeonPopup(tile, onEnter) {
     const buffAsset = buff ? this.consumableIconSrc[me.buff.type] : '';
     $('desktopProfileBody').innerHTML =
       '<div class="desktop-hero-summary">' +
-        this.spriteAvatar(me.speciesClass, 'hero', me.skinId) +
+        this.spriteAvatar(me.speciesClass, 'hero', me.skinId, me.accessoryId) +
         '<div class="desktop-hero-copy">' +
           '<div class="hero-name">' + esc(me.username) + this.titleGuildTag(me) + '</div>' +
           '<div class="hero-class">' + esc(cls.label) + ' · ' + esc(cls.role) + '</div>' +
@@ -2024,11 +2045,14 @@ showDungeonPopup(tile, onEnter) {
   }
 
   /* Avatar découpé dans la feuille de sprites (grille 3x2) */
-  spriteAvatar(speciesClass, extraClass, skinId) {
+  spriteAvatar(speciesClass, extraClass, skinId, accessoryId) {
     const skin = skinFor(skinId);
     const asset = skin ? skin.asset : baseSkinAsset(speciesClass);
     if (asset) {
-      return '<span class="avatar skin-avatar ' + (extraClass || '') + '" style="--skin-scale:' + classSkinScale(speciesClass) + '"><img src="' + skinAssetUrl(asset) + '" alt="' + esc(skin ? skin.label : 'Tenue de base') + '"></span>';
+      const accessory = accessoryId && ACCESSORY_ITEMS[accessoryId];
+      return '<span class="avatar skin-avatar ' + (extraClass || '') + '" style="--skin-scale:' + classSkinScale(speciesClass) + '">' +
+        (accessory ? '<img class="avatar-accessory-back" src="' + accessory.asset + '" alt="">' : '') +
+        '<img class="avatar-skin-main" src="' + skinAssetUrl(asset) + '" alt="' + esc(skin ? skin.label : 'Tenue de base') + '"></span>';
     }
     const cell = SPRITE_CELLS[speciesClass];
     return '<span class="avatar sprite ' + (extraClass || '') + '" style="background-position:' +
@@ -2058,7 +2082,7 @@ showDungeonPopup(tile, onEnter) {
     body.innerHTML =
       // En-tête façon fiche d'aventurier : portrait cerclé d'or, nom, devise
       '<div class="profile-hero">' +
-        this.spriteAvatar(me.speciesClass, 'hero', me.skinId) +
+        this.spriteAvatar(me.speciesClass, 'hero', me.skinId, me.accessoryId) +
         '<div class="hero-name">' + esc(me.username) + this.titleGuildTag(me) + '</div>' +
         '<div class="hero-class">' + cls.label + ' <span class="role-chip">' + cls.role + '</span></div>' +
         '<p class="hero-bonus">« ' + cls.bonus + ' »</p>' +
@@ -2086,6 +2110,14 @@ showDungeonPopup(tile, onEnter) {
 
       '<div class="section-divider">✦</div>' +
       this.buildAchievementsSectionHtml(me) +
+
+      ((me.ownedAccessories || []).length ?
+        '<div class="section-divider">✦</div>' + this.buildAccessorySectionHtml(me)
+        : '') +
+
+      ((me.ownedMounts || []).length ?
+        '<div class="section-divider">✦</div>' + this.buildMountSectionHtml(me)
+        : '') +
 
       '<div class="section-divider">✦</div>' +
       this.buildCharactersSection(me) +
@@ -2146,6 +2178,20 @@ showDungeonPopup(tile, onEnter) {
     });
     const achDetails = body.querySelector('.ach-details');
     if (achDetails) achDetails.addEventListener('toggle', (e) => { this.achievementsOpen = e.target.open; });
+    body.querySelectorAll('[data-accessory]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const accessoryId = btn.dataset.accessory || null;
+        const r = await Promise.resolve(this.server.equipAccessory(accessoryId));
+        if (!r.ok) this.toast(r.error);
+      });
+    });
+    body.querySelectorAll('[data-mount]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const mountId = btn.dataset.mount || null;
+        const r = await Promise.resolve(this.server.equipMount(mountId));
+        if (!r.ok) this.toast(r.error);
+      });
+    });
     if (this.pushSupported) {
       $('pushToggleBtn').addEventListener('click', () => this.togglePushNotifications());
     }
@@ -2269,6 +2315,45 @@ showDungeonPopup(tile, onEnter) {
         );
       });
     });
+  }
+
+  /* ---------- Accessoire cosmétique (loot ultra-rare) ---------- */
+  buildAccessorySectionHtml(me) {
+    const owned = me.ownedAccessories || [];
+    const items = owned.map((id) => {
+      const item = ACCESSORY_ITEMS[id];
+      if (!item) return '';
+      const active = me.accessoryId === id;
+      return '<button class="accessory-card' + (active ? ' active' : '') + '" data-accessory="' + esc(id) + '">' +
+        '<span class="accessory-card-art"><img src="' + item.asset + '" alt=""></span>' +
+        '<span class="accessory-card-copy"><b>' + esc(item.label) + '</b><small>' + (active ? 'Équipées' : 'Cliquer pour équiper') + '</small></span>' +
+      '</button>';
+    }).join('');
+    return '<div class="profile-sec-title">Accessoire cosmétique</div>' +
+      '<p class="dim small">Objet extrêmement rare, obtenu en battant un boss de raid mondial.</p>' +
+      '<div class="accessory-picker">' +
+        '<button class="accessory-none' + (!me.accessoryId ? ' active' : '') + '" data-accessory="">Sans accessoire</button>' +
+        items +
+      '</div>';
+  }
+
+  buildMountSectionHtml(me) {
+    const owned = me.ownedMounts || [];
+    const items = owned.map((id) => {
+      const item = MOUNT_ITEMS[id];
+      if (!item) return '';
+      const active = me.mountId === id;
+      return '<button class="accessory-card mount-card' + (active ? ' active' : '') + '" data-mount="' + esc(id) + '">' +
+        '<span class="accessory-card-art mount-card-art"><img src="' + item.asset + '" alt=""></span>' +
+        '<span class="accessory-card-copy"><b>' + esc(item.label) + '</b><small>' + (active ? 'Monture active' : 'Cliquer pour monter') + '</small></span>' +
+      '</button>';
+    }).join('');
+    return '<div class="profile-sec-title">Montures</div>' +
+      '<p class="dim small">Le cavalier et ses accessoires conservent leur taille normale.</p>' +
+      '<div class="accessory-picker mount-picker">' +
+        '<button class="accessory-none' + (!me.mountId ? ' active' : '') + '" data-mount="">À pied</button>' +
+        items +
+      '</div>';
   }
 
   /* ---------- Personnages multiples (formes) ---------- */
@@ -2494,6 +2579,7 @@ showDungeonPopup(tile, onEnter) {
         '<span><i class="legend-mark legend-capital"></i>Capitale</span>' +
         '<span><i class="legend-mark legend-village"></i>Village</span>' +
         '<span><i class="legend-mark legend-dungeon"></i>Donjon</span>' +
+        '<span><i class="legend-mark legend-worldboss"></i>Boss mondial</span>' +
         '<span><i class="legend-mark legend-me"></i>Vous</span>' +
       '</div>' +
       '<p class="dim small">Le fond de la minimap reprend le biome exploré, teinté par le tier de la zone ' +
