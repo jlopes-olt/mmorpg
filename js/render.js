@@ -1359,7 +1359,10 @@ if (c.kind === 'dungeon') {
     const cls = CLASSES[p.speciesClass];
     const mount = p.mountId && MOUNT_ITEMS[p.mountId];
     const mountSprite = mount && this.mountSprites[p.mountId];
-    const mountScale = isMe ? 1 : 0.86;
+    // Même échelle pour soi et pour les autres — on se repère déjà via
+    // l'anneau doré sous les pieds (voir plus bas), pas besoin d'être dessiné
+    // plus grand que tout le monde.
+    const mountScale = 0.86;
     const mountWorld = mount && mount.world;
     const riderCx = cx + (mountWorld ? mountWorld.riderOffsetX * mountScale : 0);
     const riderCy = cy + (mountWorld ? mountWorld.riderOffsetY * mountScale : 0);
@@ -1426,7 +1429,7 @@ if (c.kind === 'dungeon') {
       const accSprite = this.accessorySprites[p.accessoryId];
       const accessory = ACCESSORY_ITEMS[p.accessoryId];
       const world = (accessory && accessory.world) || { maxW: 118, maxH: 92, groundOffset: 8 };
-      const remoteScale = isMe ? 1 : 0.86;
+      const remoteScale = 0.86;
       this.drawWorldSprite(
         accSprite,
         riderCx,
@@ -1453,8 +1456,8 @@ if (c.kind === 'dungeon') {
       skinSprite,
       riderCx,
       riderCy + 8,
-      isMe ? 120 : 104,
-      isMe ? 66 : 56,
+      104,
+      56,
       0,
       0,
       skinScale
@@ -1466,12 +1469,12 @@ if (c.kind === 'dungeon') {
       const cw = this.sprites.width / 3, ch = this.sprites.height / 2;
       const sx = cell[0] * cw + cw * 0.06, sy = cell[1] * ch;
       const sw = cw * 0.88, sh = ch * SPRITE_ROW_CROP[cell[1]];
-      const dh = isMe ? 58 : 46;
+      const dh = 46;
       const dw = dh * (sw / sh);
       ctx.drawImage(this.sprites, sx, sy, sw, sh, riderCx - dw / 2, riderCy + 8 - dh, dw, dh);
       topY = riderCy + 8 - dh;
     } else {
-      const size = isMe ? 20 : 16;
+      const size = 16;
       ctx.fillStyle = cls.color;
       ctx.strokeStyle = isMe ? '#e8ecf1' : 'rgba(232,236,241,0.35)';
       ctx.lineWidth = isMe ? 2 : 1;

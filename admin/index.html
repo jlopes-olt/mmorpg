@@ -4,8 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>FERALIA — Administration</title>
+  <!-- base="/" : le simulateur d'apparence charge render.js tel quel, qui référence
+       ses assets en chemins relatifs ("assets/...") pensés pour être servis depuis
+       la racine (comme index.html) — sans ce <base>, ils résoudraient en /admin/assets/...
+       Du coup les refs de CETTE page (admin.css/admin.js) doivent rester en /admin/... . -->
+  <base href="/">
   <link rel="icon" type="image/png" sizes="192x192" href="/assets/icons/icon-192.png">
-  <link rel="stylesheet" href="admin.css?v=3">
+  <link rel="stylesheet" href="/admin/admin.css?v=5">
 </head>
 <body>
 
@@ -27,6 +32,7 @@
       <h1>FERALIA <span>Administration</span></h1>
       <div class="topbar-right">
         <span id="whoami" class="dim"></span>
+        <button id="openSimulatorBtn" class="btn" title="Aperçu classe/skin/accessoire/monture">🎨 Simulateur d’apparence</button>
         <button id="refreshBtn" class="btn" title="Rafraîchir">↻ Rafraîchir</button>
         <button id="logoutBtn" class="btn">Se déconnecter</button>
       </div>
@@ -71,9 +77,34 @@
   </aside>
   <div id="panelOverlay" class="panel-overlay hidden"></div>
 
+  <!-- Simulateur d'apparence : classe/skin/accessoire/monture, rendu par le
+       VRAI moteur du jeu (render.js) pour un aperçu fidèle, sans avoir à
+       créer/modifier un vrai compte pour vérifier une combinaison. -->
+  <aside id="simPanel" class="player-panel sim-panel hidden">
+    <div class="player-panel-inner">
+      <button id="simPanelClose" class="panel-close" aria-label="Fermer">✕</button>
+      <h2>Simulateur d’apparence</h2>
+      <p class="dim small">Rendu identique au jeu — combine librement classe, apparence, accessoire et monture.</p>
+      <div class="sim-layout">
+        <div class="sim-canvas-wrap">
+          <canvas id="simCanvas" width="320" height="320"></canvas>
+        </div>
+        <div class="sim-controls">
+          <label>Classe<select id="simClass"></select></label>
+          <label>Apparence<select id="simSkin"></select></label>
+          <label>Accessoire cosmétique<select id="simAccessory"></select></label>
+          <label>Monture<select id="simMount"></select></label>
+          <label class="sim-checkbox"><input type="checkbox" id="simIsMe" checked> Vue « mon personnage » (échelle pleine)</label>
+        </div>
+      </div>
+    </div>
+  </aside>
+  <div id="simOverlay" class="panel-overlay hidden"></div>
+
   <div id="toasts" class="toasts"></div>
 
-  <script src="/js/config.js?v=20260721-wyrm-mount"></script>
-  <script src="admin.js?v=4"></script>
+  <script src="/js/config.js?v=20260721-scale-harmonize"></script>
+  <script src="/js/render.js?v=20260721-scale-harmonize"></script>
+  <script src="/admin/admin.js?v=5"></script>
 </body>
 </html>

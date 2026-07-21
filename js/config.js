@@ -233,7 +233,7 @@ const GOLD_PACKS = [
 const PA_SCROLL_COST_MOONSTONES = 5;
 const PA_SCROLL_COOLDOWN_MS = 12 * 60 * 60 * 1000;
 
-const SKIN_ASSET_REV = '20260719b';
+const SKIN_ASSET_REV = '20260721-flip';
 
 const CLASS_SKIN_SCALE = {
   RENARD_VOLEUR: 1,
@@ -433,7 +433,15 @@ const ACCESSORY_ITEMS = {
 };
 
 /* Les montures encadrent le groupe cavalier sans modifier son échelle : la
- * monture est derrière, puis sa partie basse est redessinée devant les jambes. */
+ * monture est derrière, puis sa partie basse est redessinée devant les jambes.
+ *
+ * `shop` (optionnel) rend la monture achetable en boutique contre or ou
+ * Écailles Lunaires (voir buyMount côté serveur et build_shop côté client) —
+ * absent, la monture n'est obtenue que par le loot rare ou l'admin (comme le
+ * Rejeton du Wyrm Ancestral ci-dessous). Dimensions `world` volontairement
+ * homogènes pour les montures « simples » ci-dessous : à ajuster par animal
+ * une fois les vrais assets importés (même exercice que pour les ailes/le
+ * Wyrm — cf. loadCleanImage). */
 const MOUNT_ITEMS = {
   wyrm_ancestral_hatchling: {
     id: 'wyrm_ancestral_hatchling',
@@ -447,6 +455,37 @@ const MOUNT_ITEMS = {
       riderOffsetY: -38,
       frontClip: 0.5,
     },
+  },
+  mount_cheval: {
+    id: 'mount_cheval',
+    label: 'Cheval',
+    asset: 'assets/mounts/cheval.png',
+    world: { maxW: 140, maxH: 100, groundOffset: 10, riderOffsetX: 10, riderOffsetY: -34, frontClip: 0.5 },
+  },
+  mount_loup: {
+    id: 'mount_loup',
+    label: 'Loup',
+    asset: 'assets/mounts/loup.png',
+    world: { maxW: 140, maxH: 100, groundOffset: 10, riderOffsetX: 10, riderOffsetY: -34, frontClip: 0.5 },
+  },
+  mount_belier: {
+    id: 'mount_belier',
+    label: 'Bélier',
+    asset: 'assets/mounts/belier.png',
+    // Le point cavalier suit le centre visuel de la selle du PNG.
+    world: { maxW: 140, maxH: 100, groundOffset: 10, riderOffsetX: 22, riderOffsetY: -41, frontClip: 0.45 },
+  },
+  mount_tigre: {
+    id: 'mount_tigre',
+    label: 'Tigre',
+    asset: 'assets/mounts/tigre.png',
+    world: { maxW: 140, maxH: 100, groundOffset: 10, riderOffsetX: 10, riderOffsetY: -34, frontClip: 0.5 },
+  },
+  mount_panthere: {
+    id: 'mount_panthere',
+    label: 'Panthère',
+    asset: 'assets/mounts/panthere.png',
+    world: { maxW: 140, maxH: 100, groundOffset: 10, riderOffsetX: 10, riderOffsetY: -34, frontClip: 0.5 },
   },
 };
 

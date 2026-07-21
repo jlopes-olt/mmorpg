@@ -422,6 +422,7 @@ io.on('connection', (socket) => {
   socket.on('char:create', act((d) => game.createCharacter(player, String(d.speciesClass))));
   socket.on('char:switch', act((d) => game.switchCharacter(player, d.index)));
   socket.on('shop:buySkin', act((d) => game.buySkin(player, String(d.skinId))));
+  socket.on('shop:buyMount', act((d) => game.buyMount(player, String(d.mountId))));
   socket.on('shop:equipSkin', act((d) => game.equipSkin(player, d.skinId ? String(d.skinId) : null)));
   socket.on('accessory:equip', act((d) => game.equipAccessory(player, d.accessoryId ? String(d.accessoryId) : null)));
   socket.on('mount:equip', act((d) => game.equipMount(player, d.mountId ? String(d.mountId) : null)));

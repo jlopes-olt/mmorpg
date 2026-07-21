@@ -207,6 +207,32 @@ td.name-cell { font-weight: 700; white-space: normal; }
 
 .empty-state { padding: 30px; text-align: center; color: #8992a3; }
 
+/* ---------- Simulateur d'apparence ---------- */
+.sim-panel {
+  top: 50%;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  transform: translate(-50%, -50%);
+  width: min(680px, 94vw);
+  max-height: 90vh;
+  border-radius: 16px;
+  border: 1px solid rgba(228, 232, 238, 0.1);
+}
+.sim-panel h2 { margin: 0 0 4px; font-size: 20px; padding-right: 30px; }
+.sim-layout { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 16px; }
+.sim-canvas-wrap {
+  flex: 0 0 320px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #12151b;
+}
+#simCanvas { display: block; width: 320px; height: 320px; }
+.sim-controls { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 14px; }
+.sim-controls label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #8992a3; }
+.sim-controls label.sim-checkbox { flex-direction: row; align-items: center; gap: 8px; font-size: 13px; }
+.sim-controls select { width: 100%; }
+
 /* ---------- Toasts ---------- */
 .toasts {
   position: fixed;

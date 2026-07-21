@@ -194,6 +194,7 @@ class RemoteServer {
   createCharacter(speciesClass) { return this.req('char:create', { speciesClass }); }
   switchCharacter(index) { return this.req('char:switch', { index }); }
   buySkin(skinId) { return this.req('shop:buySkin', { skinId }); }
+  buyMount(mountId) { return this.req('shop:buyMount', { mountId }); }
   equipSkin(skinId) { return this.req('shop:equipSkin', { skinId }); }
   equipAccessory(accessoryId) { return this.req('accessory:equip', { accessoryId }); }
   equipMount(mountId) { return this.req('mount:equip', { mountId }); }

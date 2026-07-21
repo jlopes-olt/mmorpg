@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v51-mount-fade';
+const VERSION = 'wildrift-v59-scale-harmonize';
 
 const CORE = [
   '/',
@@ -29,6 +29,11 @@ const CORE = [
   '/assets/bosses/wyrm_ancestral.png',
   '/assets/accessories/wyrm_wings.png',
   '/assets/mounts/rejeton_wyrm_ancestral.png',
+  '/assets/mounts/cheval.png',
+  '/assets/mounts/loup.png',
+  '/assets/mounts/belier.png',
+  '/assets/mounts/tigre.png',
+  '/assets/mounts/panthere.png',
   '/manifest.webmanifest',
   '/assets/icons/icon-192.png',
   '/assets/icons/icon-512.png',

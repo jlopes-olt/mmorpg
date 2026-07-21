@@ -419,6 +419,26 @@ class Game {
     return { ok: true };
   }
 
+  /* Monture « simple » en vente contre or/Écailles (item.shop) — pas de
+   * restriction de classe, contrairement aux skins : une monture est
+   * indépendante du personnage actif. Les montures rares (item.shop absent,
+   * ex. Rejeton du Wyrm Ancestral) restent hors boutique, loot/admin uniquement. */
+  buyMount(p, mountId) {
+    const item = MOUNT_ITEMS[String(mountId || '')];
+    if (!item || !item.shop) return { ok: false, error: 'Monture inconnue.' };
+    if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
+    if (p.ownedMounts.includes(item.id)) return { ok: false, error: 'Monture déjà possédée.' };
+    const walletKey = item.shop.currency === PREMIUM_CURRENCY.key ? PREMIUM_CURRENCY.key : 'gold';
+    const balance = Number(p[walletKey] || 0);
+    if (balance < item.shop.price) {
+      return { ok: false, error: walletKey === 'gold' ? 'Pas assez d’or.' : ('Pas assez de ' + PREMIUM_CURRENCY.label.toLowerCase() + '.') };
+    }
+    p[walletKey] = balance - item.shop.price;
+    p.ownedMounts.push(item.id);
+    this.pushSelf(p);
+    return { ok: true };
+  }
+
   // Achète un Parchemin d'Endurance : payé en monnaie premium, stocké en
   // inventaire (pas d'effet immédiat) — le joueur l'utilise quand il veut
   // depuis l'Inventaire (voir consume(), cas 'pa_refill'), où s'applique le

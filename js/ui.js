@@ -1911,6 +1911,7 @@ showDungeonPopup(tile, onEnter) {
     const me = this.server.me;
     const goldSkins = SKIN_SHOP_ITEMS.filter((item) => item.currency === 'gold');
     const premiumSkins = SKIN_SHOP_ITEMS.filter((item) => item.currency === PREMIUM_CURRENCY.key);
+    const shopMounts = Object.values(MOUNT_ITEMS).filter((item) => item.shop);
     const moneyCard =
       '<div class="shop-wallets">' +
         '<div class="shop-wallet">' + this.currencyIcon('gold', 'large') + '<span><span class="shop-wallet-label">Or</span><b>' +
@@ -1933,6 +1934,12 @@ showDungeonPopup(tile, onEnter) {
         '<div class="upg-head"><b>Garde-robe des aventuriers</b><span class="dim">Skins contre or</span></div>' +
         '<div class="shop-grid">' + goldSkins.map((item) => this.shopSkinCard(me, item)).join('') + '</div>' +
       '</div>' +
+      (shopMounts.length ?
+        '<div class="shop-section">' +
+          '<div class="upg-head"><b>Écuries</b><span class="dim">Montures contre or</span></div>' +
+          '<div class="shop-grid">' + shopMounts.map((item) => this.shopMountCard(me, item)).join('') + '</div>' +
+        '</div>'
+        : '') +
       '<div class="shop-section premium">' +
         '<div class="upg-head"><b>Collection premium</b><span class="dim">' + PREMIUM_CURRENCY.label + ' ' + this.currencyIcon('premium', 'small') + '</span></div>' +
         '<div class="shop-grid">' + premiumSkins.map((item) => this.shopSkinCard(me, item)).join('') + '</div>' +
@@ -1948,6 +1955,19 @@ showDungeonPopup(tile, onEnter) {
         const value = btn.dataset.shopEquip === 'base' ? null : btn.dataset.shopEquip;
         const r = await Promise.resolve(this.server.equipSkin(value));
         this.toast(r.ok ? 'Apparence mise à jour.' : r.error);
+      });
+    });
+    body.querySelectorAll('[data-mount-buy]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.buyMount(btn.dataset.mountBuy));
+        this.toast(r.ok ? 'Monture achetée.' : r.error);
+      });
+    });
+    body.querySelectorAll('[data-mount]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const mountId = btn.dataset.mount || null;
+        const r = await Promise.resolve(this.server.equipMount(mountId));
+        this.toast(r.ok ? 'Monture mise à jour.' : r.error);
       });
     });
     body.querySelectorAll('[data-buy-pack]').forEach((btn) => {
@@ -2037,6 +2057,32 @@ showDungeonPopup(tile, onEnter) {
           '</div>' +
           '<div class="shop-card-state">' +
             (equipped ? 'Équipé' : owned ? 'Possédé' : compatible ? (canAfford ? 'Disponible' : 'Fonds insuffisants') : 'Active cette classe pour l’utiliser') +
+          '</div>' +
+        '</div>' +
+        '<div class="shop-card-actions">' + cta + '</div>' +
+      '</article>'
+    );
+  }
+
+  shopMountCard(me, item) {
+    const owned = (me.ownedMounts || []).includes(item.id);
+    const equipped = me.mountId === item.id;
+    const canAfford = Number(me[item.shop.currency] || 0) >= item.shop.price;
+    let cta = '';
+    if (equipped) cta = '<button class="btn shop-btn" data-mount="">À pied</button>';
+    else if (owned) cta = '<button class="btn primary shop-btn" data-mount="' + esc(item.id) + '">Monter</button>';
+    else cta = '<button class="btn primary shop-btn" data-mount-buy="' + esc(item.id) + '"' + (canAfford ? '' : ' disabled') + '>Acheter</button>';
+    return (
+      '<article class="shop-card' + (equipped ? ' equipped' : '') + (owned ? ' owned' : '') + '">' +
+        '<div class="shop-card-art mount-shop-art"><img src="' + esc(item.asset) + '" alt="' + esc(item.label) + '"></div>' +
+        '<div class="shop-card-copy">' +
+          '<div class="shop-card-top"><b>' + esc(item.label) + '</b></div>' +
+          '<div class="shop-card-meta">Monture cosmétique</div>' +
+          '<div class="shop-card-price ' + (item.shop.currency === PREMIUM_CURRENCY.key ? 'premium' : 'gold') + '">' +
+            (item.shop.currency === PREMIUM_CURRENCY.key ? this.currencyIcon('premium') : this.currencyIcon('gold')) + ' ' + item.shop.price +
+          '</div>' +
+          '<div class="shop-card-state">' +
+            (equipped ? 'Active' : owned ? 'Possédée' : (canAfford ? 'Disponible' : 'Fonds insuffisants')) +
           '</div>' +
         '</div>' +
         '<div class="shop-card-actions">' + cta + '</div>' +
@@ -2376,9 +2422,20 @@ showDungeonPopup(tile, onEnter) {
         if (reward.gold) bits.push(reward.gold + ' or');
         if (reward.moonstones) bits.push(reward.moonstones + ' ' + PREMIUM_CURRENCY.label.toLowerCase());
         if (reward.title) bits.push('titre « ' + reward.title + ' »');
+        // En dessous de 1, il n'y a pas de progression intermédiaire à montrer
+        // (ex. « Rejoindre une guilde ») — juste débloqué ou non.
+        let progressHtml = '';
+        if (!done && a.target > 1) {
+          const prog = achievementProgress(a, me);
+          const frac = Math.max(0, Math.min(1, prog.current / prog.target));
+          progressHtml =
+            '<div class="ach-progress-track"><div class="ach-progress-fill" style="width:' + (frac * 100) + '%"></div></div>' +
+            '<small class="ach-progress-label">' + prog.current.toLocaleString('fr-FR') + ' / ' + prog.target.toLocaleString('fr-FR') + '</small>';
+        }
         return '<div class="ach-item' + (done ? ' unlocked' : '') + '">' +
           '<span class="ach-status">' + (done ? '✓' : '—') + '</span>' +
           '<span class="ach-copy"><b>' + esc(a.label) + '</b>' +
+          progressHtml +
           (bits.length ? '<small>' + esc(bits.join(' · ')) + '</small>' : '') +
           '</span>' +
         '</div>';

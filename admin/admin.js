@@ -287,6 +287,99 @@ function renderPlayerPanel(p) {
   });
 }
 
+/* ---------- Simulateur d'apparence (classe/skin/accessoire/monture) ----------
+ * Réutilise le VRAI Renderer du jeu (render.js) pour un aperçu fidèle au
+ * rendu en jeu, sans avoir à créer/modifier un compte réel pour vérifier
+ * une combinaison. Le personnage prévisualisé est un objet local, jamais
+ * envoyé au serveur — purement un aperçu côté client. */
+let simRenderer = null;
+let simSettleTimer = null;
+
+function refreshSimSkinOptions() {
+  const cls = $('simClass').value;
+  const skins = SKIN_SHOP_ITEMS.filter((s) => s.speciesClass === cls);
+  $('simSkin').innerHTML = '<option value="">Tenue de base</option>' +
+    skins.map((s) => '<option value="' + esc(s.id) + '">' + esc(s.label) + '</option>').join('');
+}
+
+function populateSimSelectors() {
+  $('simClass').innerHTML = Object.entries(CLASSES)
+    .map(([id, c]) => '<option value="' + id + '">' + esc(c.label) + '</option>').join('');
+  $('simAccessory').innerHTML = '<option value="">Aucun</option>' +
+    Object.values(ACCESSORY_ITEMS).map((a) => '<option value="' + esc(a.id) + '">' + esc(a.label) + '</option>').join('');
+  $('simMount').innerHTML = '<option value="">À pied</option>' +
+    Object.values(MOUNT_ITEMS).map((m) => '<option value="' + esc(m.id) + '">' + esc(m.label) + '</option>').join('');
+  refreshSimSkinOptions();
+}
+
+function simFakePlayer() {
+  return {
+    id: 'sim-preview', username: 'Aperçu', bot: false, mapId: 'world', status: 'IDLE',
+    pos: { x: 0, y: 0 },
+    speciesClass: $('simClass').value,
+    skinId: $('simSkin').value || null,
+    accessoryId: $('simAccessory').value || null,
+    mountId: $('simMount').value || null,
+    activeTitle: null, guildName: null,
+  };
+}
+
+function drawSimPreview() {
+  if (!simRenderer) return;
+  simRenderer.resize();
+  const ctx = simRenderer.ctx, w = simRenderer.w, h = simRenderer.h;
+  ctx.clearRect(0, 0, w, h);
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, '#232833');
+  grad.addColorStop(1, '#12151b');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+  // pos (0,0) + caméra à l'origine (par défaut à la construction du Renderer)
+  // => isoX/isoY(0,0) = 0, donc le personnage tombe pile au centre du canvas.
+  simRenderer.drawPlayer(simFakePlayer(), $('simIsMe').checked, { x: 0, y: 0 }, 1);
+}
+
+// Les sprites (skin/accessoire/monture) se chargent de façon async — pas
+// d'évènement global "tout est prêt", donc on redessine en rafale pendant
+// ~3 s après chaque changement pour capter leur arrivée sans crayon fantôme.
+function scheduleSimRedraws() {
+  drawSimPreview();
+  if (simSettleTimer) clearInterval(simSettleTimer);
+  let ticks = 0;
+  simSettleTimer = setInterval(() => {
+    drawSimPreview();
+    if (++ticks > 20) { clearInterval(simSettleTimer); simSettleTimer = null; }
+  }, 150);
+}
+
+function openSimPanel() {
+  $('simOverlay').classList.remove('hidden');
+  $('simPanel').classList.remove('hidden');
+  if (!simRenderer) {
+    populateSimSelectors();
+    // Construit APRÈS l'affichage du panneau : resize() lit clientWidth/Height,
+    // qui valent 0 tant que le canvas est dans un ancêtre display:none.
+    simRenderer = new Renderer($('simCanvas'), undefined, new Set());
+    ['simClass', 'simSkin', 'simAccessory', 'simMount', 'simIsMe'].forEach((id) => {
+      $(id).addEventListener('change', () => {
+        if (id === 'simClass') refreshSimSkinOptions();
+        scheduleSimRedraws();
+      });
+    });
+  }
+  scheduleSimRedraws();
+}
+
+function closeSimPanel() {
+  $('simOverlay').classList.add('hidden');
+  $('simPanel').classList.add('hidden');
+  if (simSettleTimer) { clearInterval(simSettleTimer); simSettleTimer = null; }
+}
+
+$('openSimulatorBtn').addEventListener('click', openSimPanel);
+$('simPanelClose').addEventListener('click', closeSimPanel);
+$('simOverlay').addEventListener('click', closeSimPanel);
+
 /* ---------- Démarrage ---------- */
 
 if (token) {

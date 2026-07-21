@@ -327,6 +327,23 @@ class ServerSim {
     return { ok: true };
   }
 
+  buyMount(mountId) {
+    const me = this.me;
+    const item = MOUNT_ITEMS[String(mountId || '')];
+    if (!item || !item.shop) return { ok: false, error: 'Monture inconnue.' };
+    if (me.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
+    if (me.ownedMounts.includes(item.id)) return { ok: false, error: 'Monture déjà possédée.' };
+    const walletKey = item.shop.currency === PREMIUM_CURRENCY.key ? PREMIUM_CURRENCY.key : 'gold';
+    const balance = Number(me[walletKey] || 0);
+    if (balance < item.shop.price) {
+      return { ok: false, error: walletKey === 'gold' ? 'Pas assez d’or.' : ('Pas assez de ' + PREMIUM_CURRENCY.label.toLowerCase() + '.') };
+    }
+    me[walletKey] = balance - item.shop.price;
+    me.ownedMounts.push(item.id);
+    this.emit('self', me);
+    return { ok: true };
+  }
+
   setActiveTitle(title) {
     const me = this.me;
     const t = title ? String(title).slice(0, 40) : null;
