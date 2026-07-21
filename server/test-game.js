@@ -932,7 +932,7 @@ console.log('Montures : possession contrôlée ✔, équipement public indépend
 // --- Nouvelles montures hors boutique : obtention laissée à définir ---
 assert.ok(!g.buyMount(alice, wyrmMountId).ok, 'monture rare non listée en boutique refusée à l’achat');
 assert.ok(!g.buyMount(alice, 'monture_inconnue').ok, 'monture inconnue refusée');
-for (const mountId of ['mount_cheval', 'mount_loup', 'mount_belier', 'mount_tigre', 'mount_panthere']) {
+for (const mountId of ['mount_cheval', 'mount_loup', 'mount_tigre', 'mount_panthere']) {
   assert.ok(MOUNT_ITEMS[mountId], mountId + ' configurée');
   assert.ok(!MOUNT_ITEMS[mountId].shop, mountId + ' sans prix provisoire');
   assert.ok(!g.buyMount(alice, mountId).ok, mountId + ' non achetable avant définition de son obtention');

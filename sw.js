@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v59-scale-harmonize';
+const VERSION = 'wildrift-v65-bear-align';
 
 const CORE = [
   '/',
@@ -31,9 +31,9 @@ const CORE = [
   '/assets/mounts/rejeton_wyrm_ancestral.png',
   '/assets/mounts/cheval.png',
   '/assets/mounts/loup.png',
-  '/assets/mounts/belier.png',
   '/assets/mounts/tigre.png',
   '/assets/mounts/panthere.png',
+  '/assets/mounts/sac_voyage.png',
   '/manifest.webmanifest',
   '/assets/icons/icon-192.png',
   '/assets/icons/icon-512.png',

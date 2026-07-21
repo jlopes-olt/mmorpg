@@ -244,6 +244,17 @@ const CLASS_SKIN_SCALE = {
   CORBEAU_NECROMANCIEN: 1,
 };
 
+/* Correction ponctuelle par skin (pixels, avant mise à l'échelle) : certains
+ * arts ont une arme/prop tenue d'un côté qui élargit leur boîte alpha sans
+ * élargir le buste symétriquement — centrer CETTE boîte (comme fait
+ * drawWorldSprite) décale alors visuellement le buste par rapport aux
+ * autres classes/skins, dont la boîte est, elle, équilibrée autour du buste.
+ * Absent ou à 0 : comportement inchangé (centré normalement). */
+const SKIN_OFFSET_X = {
+  'base:OURS_GUERRIER': 10,
+  skin_ours_sentinelle: 10,
+};
+
 const CLASS_BASE_SKINS = {
   RENARD_VOLEUR: 'assets/skins_coherent/renard_voleur/renard_voleur_base.png',
   CERF_DRUIDE: 'assets/skins_coherent/cerf_druide/cerf_druide_base.png',
@@ -468,13 +479,6 @@ const MOUNT_ITEMS = {
     asset: 'assets/mounts/loup.png',
     world: { maxW: 140, maxH: 100, groundOffset: 10, riderOffsetX: 10, riderOffsetY: -34, frontClip: 0.5 },
   },
-  mount_belier: {
-    id: 'mount_belier',
-    label: 'Bélier',
-    asset: 'assets/mounts/belier.png',
-    // Le point cavalier suit le centre visuel de la selle du PNG.
-    world: { maxW: 140, maxH: 100, groundOffset: 10, riderOffsetX: 22, riderOffsetY: -41, frontClip: 0.45 },
-  },
   mount_tigre: {
     id: 'mount_tigre',
     label: 'Tigre',
@@ -487,6 +491,18 @@ const MOUNT_ITEMS = {
     asset: 'assets/mounts/panthere.png',
     world: { maxW: 140, maxH: 100, groundOffset: 10, riderOffsetX: 10, riderOffsetY: -34, frontClip: 0.5 },
   },
+};
+
+/* Sacoche de voyage : accessoire décoratif UNIQUE, réutilisé sur TOUTE
+ * monture (pas de config par monture) — dessinée centrée sous le cavalier,
+ * pour camoufler la jonction nette entre son buste et le dos de la monture
+ * plutôt que d'essayer de faire dépasser une jambe (cf. essais montures qui
+ * n'ont pas abouti : le sprite du cavalier ne descend jamais assez bas pour ça). */
+const MOUNT_SADDLE_PROP = {
+  asset: 'assets/mounts/sac_voyage.png',
+  width: 40,
+  height: 40,
+  groundMargin: 0.08, // fraction de la hauteur dessinée de la monture, au-dessus du sol (évite de toucher l'ombre)
 };
 
 function skinAssetUrl(path) {
@@ -804,8 +820,8 @@ if (typeof module !== 'undefined' && module.exports) {
     TERRAINS, TIER_COLORS, XP_LEVELS, UPGRADE_RECIPES, SPRITE_CELLS,
     RESOURCE_EMOJI, MONSTER_EMOJI, CHARACTER_FIELDS,
     PREMIUM_CURRENCY, MOONSTONE_PACKS, GOLD_PACKS, PA_SCROLL_COST_MOONSTONES, PA_SCROLL_COOLDOWN_MS, VAPID_PUBLIC_KEY,
-    SKIN_SHOP_ITEMS, SKIN_BY_ID, SKIN_ASSET_REV, CLASS_SKIN_SCALE, CLASS_BASE_SKINS,
-    WORLD_BOSS, ACCESSORY_ITEMS, MOUNT_ITEMS,
+    SKIN_SHOP_ITEMS, SKIN_BY_ID, SKIN_ASSET_REV, CLASS_SKIN_SCALE, SKIN_OFFSET_X, CLASS_BASE_SKINS,
+    WORLD_BOSS, ACCESSORY_ITEMS, MOUNT_ITEMS, MOUNT_SADDLE_PROP,
     skinFor, skinAssetUrl, classSkinScale, baseSkinAsset, equipmentAsset,
     levelFromXp, playerForce, maxHp, hpLossReduction, stackKey, parseStackKey, resourceFamily,
     newCharacter, syncActiveCharacter, applyCharacter, rollGoldLoot,

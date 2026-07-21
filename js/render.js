@@ -213,6 +213,7 @@ class Renderer {
     this.playerSkins = {};
     this.accessorySprites = {};
     this.mountSprites = {};
+    this.saddlePropSprite = null;
     // Boîtes écran des structures (capitale/village/donjon/château) du frame
     // courant — recalculées dans draw(), lues par drawPlayer() pour estomper
     // une monture qui les chevaucherait (voir STRUCTURE_KINDS plus bas).
@@ -269,6 +270,7 @@ class Renderer {
     for (const [mountId, src] of Object.entries(MOUNT_FILES)) {
       this.mountSprites[mountId] = this.loadCleanImage(src);
     }
+    this.saddlePropSprite = this.loadCleanImage(MOUNT_SADDLE_PROP.asset);
   }
 
   setCastleInfo(list) {
@@ -697,13 +699,22 @@ class Renderer {
     return { dw, dh, topY: groundY - dh, left: cx - dw / 2, groundY };
   }
 
-  redrawWorldSpriteFront(image, drawInfo, clipFrom) {
+  // legFrom/legTo (fractions 0-1 de la largeur dessinée, par défaut toute la
+  // largeur) : ne recouvrent qu'une bande verticale plutôt que tout le bas de
+  // la monture — laisse dépasser la jambe du cavalier côté non couvert (celle
+  // qui serait visible sur le flanc proche) tout en cachant l'autre (tuck
+  // contre le flanc opposé). Sans ces bornes, comportement inchangé.
+  redrawWorldSpriteFront(image, drawInfo, clipFrom, legFrom, legTo) {
     if (!image || !image.ready || !image.processed || !image.bounds || !drawInfo) return;
     const b = image.bounds;
     const clipY = drawInfo.topY + drawInfo.dh * Math.max(0, Math.min(1, clipFrom));
+    const from = legFrom == null ? 0 : Math.max(0, Math.min(1, legFrom));
+    const to = legTo == null ? 1 : Math.max(0, Math.min(1, legTo));
+    const clipX = drawInfo.left + drawInfo.dw * from;
+    const clipW = drawInfo.dw * (to - from);
     this.ctx.save();
     this.ctx.beginPath();
-    this.ctx.rect(drawInfo.left - 1, clipY, drawInfo.dw + 2, drawInfo.groundY - clipY + 2);
+    this.ctx.rect(clipX - 1, clipY, clipW + 2, drawInfo.groundY - clipY + 2);
     this.ctx.clip();
     this.ctx.drawImage(
       image.processed,
@@ -711,6 +722,17 @@ class Renderer {
       drawInfo.left, drawInfo.topY, drawInfo.dw, drawInfo.dh
     );
     this.ctx.restore();
+  }
+
+  // Une seule sacoche, centrée sous le cavalier (pas sur les flancs) — camoufle
+  // la jonction nette buste/monture juste là où elle se voit, sans réglage
+  // par monture (voir MOUNT_SADDLE_PROP : la position suit riderCx et les
+  // dimensions déjà connues de mountDrawn).
+  drawSaddleProp(mountDrawn, riderCx) {
+    const sprite = this.saddlePropSprite;
+    if (!sprite || !sprite.ready) return;
+    const groundY = mountDrawn.groundY - mountDrawn.dh * MOUNT_SADDLE_PROP.groundMargin;
+    this.drawWorldSprite(sprite, riderCx, groundY, MOUNT_SADDLE_PROP.width, MOUNT_SADDLE_PROP.height, 0, 0, 1);
   }
 
   /* Case vide de donjon : losange quasi noir, plus sombre que le fond */
@@ -1444,7 +1466,8 @@ if (c.kind === 'dungeon') {
     }
 
     let topY = riderCy - 34;
-    const skinSprite = this.playerSkins[p.skinId || ('base:' + p.speciesClass)] || null;
+    const skinId = p.skinId || ('base:' + p.speciesClass);
+    const skinSprite = this.playerSkins[skinId] || null;
     const skinScale = classSkinScale(p.speciesClass);
     // La largeur n'est volontairement pas plafonnée serré : drawWorldSprite prend
     // le ratio le plus contraignant (largeur OU hauteur), donc un skin au buste
@@ -1454,7 +1477,7 @@ if (c.kind === 'dungeon') {
     // la feuille de sprites de base, qui fixe toujours une hauteur (dh) fixe.
     const skinDrawn = this.drawWorldSprite(
       skinSprite,
-      riderCx,
+      riderCx + (SKIN_OFFSET_X[skinId] || 0),
       riderCy + 8,
       104,
       56,
@@ -1491,7 +1514,8 @@ if (c.kind === 'dungeon') {
     }
 
     if (mountDrawn && mountWorld) {
-      this.redrawWorldSpriteFront(mountSprite, mountDrawn, mountWorld.frontClip);
+      this.redrawWorldSpriteFront(mountSprite, mountDrawn, mountWorld.frontClip, mountWorld.legFrom, mountWorld.legTo);
+      this.drawSaddleProp(mountDrawn, riderCx);
     }
     ctx.globalAlpha = 1;
 
