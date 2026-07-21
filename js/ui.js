@@ -1210,6 +1210,39 @@ showDungeonPopup(tile, onEnter) {
     $('popup').classList.add('hidden');
   }
 
+  /* ---------- Guide du débutant ----------
+   * Ouvert automatiquement à la toute première création de personnage
+   * (voir server.justCreated dans js/net.js, câblé depuis js/main.js), et
+   * réouvrable à tout moment via #helpBtn — même contenu dans les deux cas. */
+  showGuide() {
+    const steps = [
+      ['🧭', 'Explorer', 'Déplace-toi sur la carte pour dissiper le brouillard de guerre et découvrir villages, donjons et châteaux.'],
+      ['🌲', 'Récolter', 'Bois, minerai, plante… récolte les ressources que tu croises pour monter ton niveau de récolte et débloquer des tiers supérieurs.'],
+      ['⚔️', 'Combattre', 'Affronte un monstre seul ou forme un groupe (raid) pour les plus costauds — les donjons cachent des boss qui demandent du monde.'],
+      ['🍲', 'Cuisiner', 'À la Marmite (Capitale ou village), transforme tes ingrédients récoltés en buffs temporaires avant un combat.'],
+      ['🛡️', 'Équipement', 'Le Forgeron de la Capitale améliore ton arme et ton armure, tier par tier, avec les ressources récoltées.'],
+    ];
+    const more = [
+      ['🏆', 'Hauts faits', 'Des objectifs à débloquer (Profil) pour de l’or, des Écailles Lunaires, et des titres à afficher sous ton pseudo.'],
+      ['🤝', 'Social', 'Ajoute des amis, rejoins ou fonde une guilde, défie d’autres joueurs en duel amical.'],
+      ['🎨', 'Boutique', 'Skins et montures cosmétiques — jamais d’avantage en combat, juste pour le style.'],
+    ];
+    const stepHtml = (s) => '<div class="guide-step"><span class="guide-step-icon">' + s[0] + '</span>' +
+      '<span class="guide-step-copy"><b>' + s[1] + '</b><p>' + s[2] + '</p></span></div>';
+    // Le fond décoratif de .popup-card ne suit pas un contenu qui dépasse sa
+    // hauteur max (voir ::before en inset:0) — plutôt que de faire défiler la
+    // carte entière (le fond « manquerait » en bas), on cantonne le défilement
+    // à ce conteneur interne, qui reste toujours dans la zone couverte.
+    const body =
+      '<div class="guide-scroll">' +
+        '<div class="guide-section-title">Pour commencer</div>' +
+        steps.map(stepHtml).join('') +
+        '<div class="guide-section-title">Pour aller plus loin</div>' +
+        more.map(stepHtml).join('') +
+      '</div>';
+    this.popup('Bienvenue sur FERALIA', body, [{ label: 'Compris !', primary: true }], { kicker: 'Guide du débutant' });
+  }
+
   loadCombatFxAssets() {
     const img = new Image();
     img.onload = () => {

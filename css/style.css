@@ -1136,6 +1136,48 @@ html, body {
   z-index: 25;
 }
 
+#helpBtn {
+  position: absolute;
+  bottom: 86px;
+  left: 14px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--gold);
+  background: rgba(20, 24, 29, 0.82);
+  color: var(--gold);
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  z-index: 25;
+}
+
+.guide-scroll {
+  max-height: min(56vh, 480px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.guide-step {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  text-align: left;
+  margin-bottom: 14px;
+}
+.guide-step-icon { flex: 0 0 auto; font-size: 22px; line-height: 1.3; }
+.guide-step-copy b { display: block; margin-bottom: 2px; }
+.guide-step-copy p { margin: 0; }
+.guide-section-title {
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.65;
+  margin: 16px 0 8px;
+}
+.guide-section-title:first-child { margin-top: 0; }
+
 /* ---------- Navigation inférieure ---------- */
 #nav {
   position: absolute;

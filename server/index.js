@@ -361,7 +361,9 @@ io.on('connection', (socket) => {
     player.online = true;
     player.lastSeen = Date.now();
     saveAccountOf(player);
-    socket.emit('init', game.initPayload(player));
+    const payload = game.initPayload(player);
+    payload.created = created;
+    socket.emit('init', payload);
     if (!created) game.log(player.username + ' est de retour en jeu.');
   };
 

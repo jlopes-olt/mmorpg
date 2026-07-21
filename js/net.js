@@ -140,6 +140,7 @@ class RemoteServer {
     this.speed = d.speed || 1;
     this.wildSalt = d.wildSalt || 0;
     this.worldBoss = d.worldBoss || null;
+    this.justCreated = !!d.created;
     this.maps = generateGameMaps(d.seed);
     if (this.wildSalt > 0) {
       const world = this.maps.get('world');

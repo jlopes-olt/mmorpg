@@ -13,7 +13,7 @@
 
 (function () {
   const remote = typeof io !== 'undefined' && location.protocol.indexOf('http') === 0;
-  const SHELL_REV = '20260721-bear-align';
+  const SHELL_REV = '20260721-mount-skin-prices';
 
   // PWA : service worker (cache + installation sur l'écran d'accueil).
   // Échec silencieux en file:// / artifact.
@@ -475,6 +475,7 @@
   // même seuil de 12 px que la distinction tap/drag ci-dessous, pour ne rien
   // changer au comportement existant tant qu'on reste sous ce seuil.
   const recenterBtn = document.getElementById('recenterBtn');
+  document.getElementById('helpBtn').addEventListener('click', () => ui.showGuide());
   let downPos = null;
   let lastPos = null;
   let isPanning = false;
@@ -776,6 +777,9 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
         ui.toast('✦ Paiement reçu — vos Écailles Lunaires arrivent dans quelques instants.');
         history.replaceState(null, '', location.pathname);
       }
+      // Personnage tout juste créé (pas une reconnexion) : guide du débutant,
+      // après la disparition du splash pour ne pas se superposer à l'animation.
+      if (server.justCreated) setTimeout(() => ui.showGuide(), 1200);
     });
     let token = null;
     try { token = localStorage.getItem(TOKEN_KEY); } catch (e) { /* ignore */ }
@@ -793,6 +797,7 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
         server.join(name, cls);
         updateExplored();
         save();
+        setTimeout(() => ui.showGuide(), 1200);
       });
     }
   }

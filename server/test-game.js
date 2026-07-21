@@ -929,15 +929,24 @@ assert.strictEqual(g.publicPlayer(alice).mountId, wyrmMountId, 'monture transmis
 assert.ok(g.equipMount(alice, null).ok && !alice.mountId, 'retour à pied possible');
 console.log('Montures : possession contrôlée ✔, équipement public indépendant du skin ✔');
 
-// --- Nouvelles montures hors boutique : obtention laissée à définir ---
+// --- Montures « simples » en boutique (or) : rare (sans .shop) jamais achetable ---
 assert.ok(!g.buyMount(alice, wyrmMountId).ok, 'monture rare non listée en boutique refusée à l’achat');
 assert.ok(!g.buyMount(alice, 'monture_inconnue').ok, 'monture inconnue refusée');
 for (const mountId of ['mount_cheval', 'mount_loup', 'mount_tigre', 'mount_panthere']) {
   assert.ok(MOUNT_ITEMS[mountId], mountId + ' configurée');
-  assert.ok(!MOUNT_ITEMS[mountId].shop, mountId + ' sans prix provisoire');
-  assert.ok(!g.buyMount(alice, mountId).ok, mountId + ' non achetable avant définition de son obtention');
+  assert.ok(MOUNT_ITEMS[mountId].shop, mountId + ' prix de boutique défini');
 }
-console.log('Nouvelles montures : catalogue complet ✔, économie laissée à définir ✔');
+const cheval = MOUNT_ITEMS.mount_cheval;
+alice.gold = cheval.shop.price - 1;
+assert.ok(!g.buyMount(alice, 'mount_cheval').ok, 'achat de monture refusé sans assez d’or');
+assert.ok(!alice.ownedMounts.includes('mount_cheval'), 'rien débité/ajouté après un refus');
+alice.gold = cheval.shop.price + 50;
+const buyMountRes = g.buyMount(alice, 'mount_cheval');
+assert.ok(buyMountRes.ok, 'monture simple achetée avec assez d’or');
+assert.strictEqual(alice.gold, 50, 'prix de la monture débité exactement');
+assert.ok(alice.ownedMounts.includes('mount_cheval'), 'monture ajoutée à la possession');
+assert.ok(!g.buyMount(alice, 'mount_cheval').ok, 'rachat de la même monture refusé');
+console.log('Montures en boutique : rares non listées ✔, achat or (débit exact, anti-double achat) ✔');
 
 // --- Crédit Stripe (webhook) : appliqué même hors ligne, comptes/montants invalides refusés ---
 alice.online = false;

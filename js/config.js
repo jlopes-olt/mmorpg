@@ -303,7 +303,7 @@ const SKIN_SHOP_ITEMS = [
     label: 'Corsaire cramoisi',
     asset: 'assets/skins_coherent/renard_voleur/renard_voleur_corsaire_cramoisi.png',
     currency: 'gold',
-    price: 900,
+    price: 2000,
   },
   {
     id: 'skin_renard_duelliste',
@@ -319,7 +319,7 @@ const SKIN_SHOP_ITEMS = [
     label: 'Sage fleuri',
     asset: 'assets/skins_coherent/cerf_druide/cerf_druide_sage_fleuri.png',
     currency: 'gold',
-    price: 900,
+    price: 2000,
   },
   {
     id: 'skin_cerf_chaman',
@@ -335,7 +335,7 @@ const SKIN_SHOP_ITEMS = [
     label: 'Astromancien pourpre',
     asset: 'assets/skins_coherent/chat_magicien/chat_magicien_astromancien_pourpre.png',
     currency: 'gold',
-    price: 900,
+    price: 2000,
   },
   {
     id: 'skin_chat_enchanteresse',
@@ -351,7 +351,7 @@ const SKIN_SHOP_ITEMS = [
     label: 'Berserker des glaces',
     asset: 'assets/skins_coherent/ours_guerrier/ours_guerrier_berserker_des_glaces.png',
     currency: 'gold',
-    price: 900,
+    price: 2000,
   },
   {
     id: 'skin_ours_sentinelle',
@@ -367,7 +367,7 @@ const SKIN_SHOP_ITEMS = [
     label: 'Croisé royal cramoisi',
     asset: 'assets/skins_coherent/lion_paladin/lion_paladin_croise_royal_cramoisi.png',
     currency: 'gold',
-    price: 900,
+    price: 2000,
   },
   {
     id: 'skin_lion_templier',
@@ -383,7 +383,7 @@ const SKIN_SHOP_ITEMS = [
     label: 'Oracle de peste',
     asset: 'assets/skins_coherent/corbeau_necromancien/corbeau_necromancien_oracle_de_peste.png',
     currency: 'gold',
-    price: 900,
+    price: 2000,
   },
   {
     id: 'skin_corbeau_cultiste',
@@ -471,24 +471,28 @@ const MOUNT_ITEMS = {
     id: 'mount_cheval',
     label: 'Cheval',
     asset: 'assets/mounts/cheval.png',
+    shop: { currency: 'gold', price: 3000 },
     world: { maxW: 140, maxH: 100, groundOffset: 10, riderOffsetX: 10, riderOffsetY: -34, frontClip: 0.5 },
   },
   mount_loup: {
     id: 'mount_loup',
     label: 'Loup',
     asset: 'assets/mounts/loup.png',
+    shop: { currency: 'gold', price: 3000 },
     world: { maxW: 140, maxH: 100, groundOffset: 10, riderOffsetX: 10, riderOffsetY: -34, frontClip: 0.5 },
   },
   mount_tigre: {
     id: 'mount_tigre',
     label: 'Tigre',
     asset: 'assets/mounts/tigre.png',
+    shop: { currency: 'gold', price: 3000 },
     world: { maxW: 140, maxH: 100, groundOffset: 10, riderOffsetX: 10, riderOffsetY: -34, frontClip: 0.5 },
   },
   mount_panthere: {
     id: 'mount_panthere',
     label: 'Panthère',
     asset: 'assets/mounts/panthere.png',
+    shop: { currency: 'gold', price: 3000 },
     world: { maxW: 140, maxH: 100, groundOffset: 10, riderOffsetX: 10, riderOffsetY: -34, frontClip: 0.5 },
   },
 };
