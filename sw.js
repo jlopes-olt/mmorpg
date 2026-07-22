@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v76-ghostclick';
+const VERSION = 'wildrift-v77-charslots';
 
 const CORE = [
   '/',

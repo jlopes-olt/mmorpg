@@ -372,6 +372,21 @@ class ServerSim {
     return { ok: true, gold: pack.gold, cost: pack.moonstones };
   }
 
+  buyCharSlot() {
+    const me = this.me;
+    if ((me.charSlots || 0) >= MAX_PLAYER_CHAR_SLOTS) {
+      return { ok: false, error: 'Déjà au maximum d’emplacements disponibles.' };
+    }
+    const balance = Number(me[PREMIUM_CURRENCY.key] || 0);
+    if (balance < CHAR_SLOT_COST_MOONSTONES) {
+      return { ok: false, error: 'Il faut ' + CHAR_SLOT_COST_MOONSTONES + ' ' + PREMIUM_CURRENCY.label + '.' };
+    }
+    me[PREMIUM_CURRENCY.key] = balance - CHAR_SLOT_COST_MOONSTONES;
+    me.charSlots = (me.charSlots || 0) + 1;
+    this.emit('self', me);
+    return { ok: true, charSlots: me.charSlots };
+  }
+
   getCheckoutLink() {
     return { ok: false, error: 'Achats en argent réel disponibles en multijoueur réel.' };
   }

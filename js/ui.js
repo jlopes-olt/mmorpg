@@ -1950,6 +1950,10 @@ showDungeonPopup(tile, onEnter) {
         '<div class="shop-packs gold-packs">' + GOLD_PACKS.map((pack) => this.goldPackCard(pack)).join('') + '</div>' +
       '</div>' +
       '<div class="shop-section">' +
+        '<div class="upg-head"><b>Emplacements de personnage</b><span class="dim">Une classe de plus à incarner</span></div>' +
+        this.charSlotCardHtml(me) +
+      '</div>' +
+      '<div class="shop-section">' +
         '<div class="upg-head"><b>Garde-robe des aventuriers</b><span class="dim">Skins contre or</span></div>' +
         '<div class="shop-grid">' + goldSkins.map((item) => this.shopSkinCard(me, item)).join('') + '</div>' +
       '</div>' +
@@ -2003,6 +2007,14 @@ showDungeonPopup(tile, onEnter) {
         if (r.ok) this.showSheet('shop');
       });
     });
+    const charSlotBtn = body.querySelector('[data-buy-char-slot]');
+    if (charSlotBtn) {
+      charSlotBtn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.buyCharSlot());
+        this.toast(r.ok ? '👤 Nouvel emplacement de personnage débloqué !' : r.error);
+        if (r.ok) this.showSheet('shop');
+      });
+    }
   }
 
   moonstonePackCard(pack) {
@@ -2027,6 +2039,25 @@ showDungeonPopup(tile, onEnter) {
         pack.moonstones + ' ' + this.currencyIcon('premium', 'small') +
       '</button>' +
     '</article>';
+  }
+
+  // Aucun avantage en combat : juste une forme de plus à incarner (classe
+  // différente, maîtrises/équipement séparés) — voir buildCharactersSection
+  // pour le même plafond MAX_PLAYER_CHAR_SLOTS côté fiche personnage.
+  charSlotCardHtml(me) {
+    const current = me.charSlots || 0;
+    if (current >= MAX_PLAYER_CHAR_SLOTS) {
+      return '<div class="upg">' +
+        '<div class="upg-head"><b>👤 Emplacement de personnage</b><span class="tier t6">Max (' + current + ' / ' + MAX_PLAYER_CHAR_SLOTS + ')</span></div>' +
+        '<p class="dim small">Tous les emplacements disponibles sont débloqués.</p>' +
+      '</div>';
+    }
+    const canAfford = Number(me[PREMIUM_CURRENCY.key] || 0) >= CHAR_SLOT_COST_MOONSTONES;
+    return '<div class="upg">' +
+      '<div class="upg-head"><b>👤 Emplacement de personnage</b><span class="dim small">' + CHAR_SLOT_COST_MOONSTONES + ' ' + this.currencyIcon('premium', 'small') + '</span></div>' +
+      '<p class="dim small">Débloque une forme supplémentaire (' + current + ' / ' + MAX_PLAYER_CHAR_SLOTS + ' actuellement) — une classe différente par forme, à éveiller gratuitement ensuite à la Capitale ou dans un village.</p>' +
+      '<button class="btn primary wide" data-buy-char-slot' + (canAfford ? '' : ' disabled') + '>Acheter</button>' +
+    '</div>';
   }
 
   shopSkinCard(me, item) {
@@ -2279,6 +2310,9 @@ showDungeonPopup(tile, onEnter) {
     body.querySelectorAll('.char-create').forEach((btn) => {
       btn.addEventListener('click', () => this.showCharacterCreatePopup());
     });
+    body.querySelectorAll('.char-buy-slot').forEach((btn) => {
+      btn.addEventListener('click', () => this.showSheet('shop'));
+    });
     $('profileSkinBtn').addEventListener('click', () => this.showSkinWardrobePopup());
   }
 
@@ -2485,10 +2519,10 @@ showDungeonPopup(tile, onEnter) {
         '<small>Gratuit — à la Capitale ou dans un village</small></button>'
       );
     }
-    if (me.charSlots < MAX_CHAR_SLOTS) {
+    if (me.charSlots < MAX_PLAYER_CHAR_SLOTS) {
       cards.push(
-        '<div class="char-card locked">🔒 Emplacement supplémentaire' +
-        '<small>Bientôt disponible en boutique</small></div>'
+        '<button class="char-card locked char-buy-slot"><span>👤 Emplacement de personnage</span>' +
+        '<small>' + CHAR_SLOT_COST_MOONSTONES + ' ' + this.currencyIcon('premium', 'small') + ' en boutique</small></button>'
       );
     }
     return '<div class="chars-section">' +

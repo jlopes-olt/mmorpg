@@ -216,6 +216,7 @@ class RemoteServer {
   equipMount(mountId) { return this.req('mount:equip', { mountId }); }
   buyPaScroll() { return this.req('shop:buyPaScroll', {}); }
   buyGoldPack(packId) { return this.req('shop:buyGoldPack', { packId }); }
+  buyCharSlot() { return this.req('shop:buyCharSlot', {}); }
   getCheckoutLink(packId) { return this.req('shop:checkoutLink', { packId }); }
   subscribePush(subscription) { return this.req('push:subscribe', { subscription }); }
   unsubscribePush(endpoint) { return this.req('push:unsubscribe', { endpoint }); }

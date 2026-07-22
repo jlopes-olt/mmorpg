@@ -23,6 +23,12 @@ services:
       # n'atteint jamais le conteneur — Compose ne relaie que ce qui est listé
       # ici, il ne transmet pas automatiquement les variables de la stack.
       ADMIN_USERNAMES: ${ADMIN_USERNAMES:-}
+      # OTP par email (Resend) : même remarque — sans ces deux lignes, les
+      # variables positionnées dans Portainer/.env n'atteignent jamais le
+      # conteneur, et le code reste en mode de repli (code affiché à l'écran,
+      # jamais envoyé par email) même une fois la clé API et le domaine prêts.
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-}
     volumes:
       - mmorpg_state:/app/server/data
     restart: unless-stopped
@@ -32,6 +38,16 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+    networks:
+      - default
+      # Réseau partagé avec le Caddy d'un AUTRE stack déjà en place sur ce VPS
+      # (ports 80/443 déjà occupés par lui) : plutôt que d'activer le service
+      # "caddy" ci-dessous (qui entrerait en conflit), on rejoint ce réseau pour
+      # que cet autre Caddy puisse faire `reverse_proxy mmorpg:3000` vers ce
+      # conteneur. Réseau créé une fois manuellement : `docker network create
+      # shared_proxy` sur le VPS — external:true ci-dessous ne fait que le
+      # rejoindre, jamais le créer/détruire depuis ce stack.
+      - shared_proxy
 
   # Optionnel, désactivé par défaut : reverse proxy HTTPS (Let's Encrypt automatique).
   # Ne démarre PAS avec un simple "docker compose up" — il faut activer le profil
@@ -62,3 +78,9 @@ volumes:
   mmorpg_state:
   caddy_data:
   caddy_config:
+
+networks:
+  default: {}
+  shared_proxy:
+    name: shared_proxy
+    external: true

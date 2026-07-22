@@ -47,7 +47,7 @@ const CONFIG = {
 
   // Personnages multiples par compte : PA/PV(%)/position/inventaire au
   // compte, classe/maîtrises/équipement par forme. Slots supplémentaires
-  // prévus via la boutique.
+  // achetables en Écailles Lunaires (voir MAX_PLAYER_CHAR_SLOTS, buyCharSlot).
   FREE_CHAR_SLOTS: 2,
 
   // Combat probabiliste : P(victoire) = sigmoïde(K × (ratio − R0)),
@@ -120,6 +120,13 @@ const CLASSES = {
  * le nombre de classes existantes, quel que soit le nombre d'emplacements
  * achetés/offerts. */
 const MAX_CHAR_SLOTS = Object.keys(CLASSES).length;
+
+/* Plafond des emplacements ACHETABLES : exclut les classes admin-only (un
+ * joueur normal ne débloquera jamais Séraphin Royal, inutile de lui vendre un
+ * emplacement qu'il ne pourra jamais remplir). CONFIG.FREE_CHAR_SLOTS de base,
+ * le reste s'achète en Écailles Lunaires (voir buyCharSlot). */
+const MAX_PLAYER_CHAR_SLOTS = Object.values(CLASSES).filter((c) => !c.adminOnly).length;
+const CHAR_SLOT_COST_MOONSTONES = 25;
 
 /* Territoire de guilde : un château par biome. Le siège réutilise le combat
  * probabiliste existant (winChance/teamPowerOf) contre une force de défense
@@ -851,7 +858,7 @@ const MONSTER_EMOJI = { 1: '🐺', 2: '🐻', 3: '👻', 4: '🦎', 5: '🐉', 6
 /* Utilisable côté Node (backend) comme côté navigateur */
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    CONFIG, CLASSES, CLASS_GEAR, EQUIPMENT_ASSETS, MAX_CHAR_SLOTS, RESOURCES, MONSTERS, MONSTER_FORCE,
+    CONFIG, CLASSES, CLASS_GEAR, EQUIPMENT_ASSETS, MAX_CHAR_SLOTS, MAX_PLAYER_CHAR_SLOTS, CHAR_SLOT_COST_MOONSTONES, RESOURCES, MONSTERS, MONSTER_FORCE,
     CASTLE_TERRAINS, CASTLE_BASE_HP, CASTLE_HP_PER_LEVEL, CASTLE_MAX_LEVEL,
     CASTLE_CLAIM_COST_GOLD, CASTLE_REINFORCE_COST_GOLD, CASTLE_REPAIR_GOLD_PER_HP,
     CASTLE_DAMAGE_PER_ASSAULT, CASTLE_ZONE_GOLD_BONUS, CASTLE_SIEGE_COOLDOWN_MS, CASTLE_SIEGE_WINDOWS,

@@ -572,6 +572,7 @@ io.on('connection', (socket) => {
   socket.on('accessory:equip', act((d) => game.equipAccessory(player, d.accessoryId ? String(d.accessoryId) : null)));
   socket.on('mount:equip', act((d) => game.equipMount(player, d.mountId ? String(d.mountId) : null)));
   socket.on('shop:buyGoldPack', act((d) => game.buyGoldPack(player, String(d.packId || ''))));
+  socket.on('shop:buyCharSlot', act(() => game.buyCharSlot(player)));
   socket.on('shop:checkoutLink', act((d) => buildCheckoutLink(player, String(d.packId || ''))));
   socket.on('push:subscribe', act((d) => {
     const sub = d && d.subscription;

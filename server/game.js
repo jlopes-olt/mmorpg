@@ -628,6 +628,24 @@ class Game {
     return { ok: true, gold: pack.gold, cost: pack.moonstones };
   }
 
+  // Emplacement de personnage supplémentaire : payé en monnaie premium,
+  // plafonné aux classes réellement accessibles à un joueur normal (voir
+  // MAX_PLAYER_CHAR_SLOTS — jamais le slot admin-only de Séraphin Royal,
+  // qu'un joueur ne pourrait de toute façon jamais remplir).
+  buyCharSlot(p) {
+    if ((p.charSlots || 0) >= MAX_PLAYER_CHAR_SLOTS) {
+      return { ok: false, error: 'Déjà au maximum d’emplacements disponibles.' };
+    }
+    const balance = Number(p[PREMIUM_CURRENCY.key] || 0);
+    if (balance < CHAR_SLOT_COST_MOONSTONES) {
+      return { ok: false, error: 'Il faut ' + CHAR_SLOT_COST_MOONSTONES + ' ' + PREMIUM_CURRENCY.label + '.' };
+    }
+    p[PREMIUM_CURRENCY.key] = balance - CHAR_SLOT_COST_MOONSTONES;
+    p.charSlots = (p.charSlots || 0) + 1;
+    this.pushSelf(p);
+    return { ok: true, charSlots: p.charSlots };
+  }
+
   // Crédit de monnaie premium après un paiement Stripe confirmé (webhook) —
   // fonctionne même hors ligne : game.players contient TOUS les comptes
   // connus depuis le démarrage (load()), pas seulement les connectés.

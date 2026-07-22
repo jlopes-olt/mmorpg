@@ -7,7 +7,7 @@ process.env.SPEED = '1';
 const assert = require('assert');
 const { Game, CHAT_LOG_MAX } = require('./game.js');
 const {
-  CONFIG, CLASSES, MAX_CHAR_SLOTS, MONSTER_FORCE, playerForce, maxHp,
+  CONFIG, CLASSES, MAX_CHAR_SLOTS, MAX_PLAYER_CHAR_SLOTS, CHAR_SLOT_COST_MOONSTONES, MONSTER_FORCE, playerForce, maxHp,
   combatPower, teamPowerOf, winChance, BUFF_COMBATS,
   CASTLE_TERRAINS, CASTLE_BASE_HP, CASTLE_HP_PER_LEVEL, CASTLE_MAX_LEVEL,
   CASTLE_CLAIM_COST_GOLD, CASTLE_REINFORCE_COST_GOLD, CASTLE_REPAIR_GOLD_PER_HP,
@@ -967,6 +967,25 @@ assert.strictEqual(alice[PREMIUM_CURRENCY.key], 4, 'coût premium débité exact
 assert.strictEqual(alice.gold, goldBeforePack + goldPack.gold, 'or crédité immédiatement');
 assert.ok(!g.buyGoldPack(alice, 'pack_inconnu').ok, 'pack d’or inconnu refusé');
 console.log('Packs d’or : débit Écailles Lunaires + crédit or atomiques ✔');
+
+// --- Emplacement de personnage (boutique) : payé en Écailles Lunaires,
+// plafonné aux classes réellement accessibles (jamais Séraphin Royal) ---
+const slotsBeforeBuy = alice.charSlots;
+alice[PREMIUM_CURRENCY.key] = CHAR_SLOT_COST_MOONSTONES - 1;
+let slotRes = g.buyCharSlot(alice);
+assert.ok(!slotRes.ok, 'achat refusé sans assez d’Écailles Lunaires');
+assert.strictEqual(alice.charSlots, slotsBeforeBuy, 'aucun emplacement accordé après un refus');
+alice[PREMIUM_CURRENCY.key] = CHAR_SLOT_COST_MOONSTONES + 3;
+slotRes = g.buyCharSlot(alice);
+assert.ok(slotRes.ok, 'emplacement acheté');
+assert.strictEqual(alice[PREMIUM_CURRENCY.key], 3, 'coût premium débité exactement');
+assert.strictEqual(alice.charSlots, slotsBeforeBuy + 1, 'emplacement supplémentaire accordé');
+// Carl (voir plus haut) a déjà MAX_CHAR_SLOTS (7, via don admin) — au-delà du
+// plafond ACHETABLE (6, sans le slot admin-only de Séraphin Royal).
+assert.ok(MAX_PLAYER_CHAR_SLOTS < MAX_CHAR_SLOTS, 'plafond achetable strictement sous le plafond admin (exclut Séraphin Royal)');
+carl[PREMIUM_CURRENCY.key] = CHAR_SLOT_COST_MOONSTONES * 5;
+assert.ok(!g.buyCharSlot(carl).ok, 'achat refusé une fois le plafond joueur atteint');
+console.log('Emplacement de personnage : achat en Écailles Lunaires ✔, plafonné hors classe admin-only ✔');
 
 // --- Monture cosmétique : possession obligatoire, équipement indépendant du skin ---
 const wyrmMountId = 'wyrm_ancestral_hatchling';
