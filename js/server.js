@@ -193,6 +193,7 @@ class ServerSim {
   sendFriendRequest(username) { return { ok: false, error: 'Amis disponibles en multijoueur réel.' }; }
   respondFriendRequest(fromId, accept) { return { ok: false, error: 'Amis disponibles en multijoueur réel.' }; }
   removeFriend(username) { return { ok: false, error: 'Amis disponibles en multijoueur réel.' }; }
+  joinFriend(username) { return { ok: false, error: 'Amis disponibles en multijoueur réel.' }; }
   friendsList() { return { ok: true, list: [] }; }
   castlesInfo() { return { ok: true, list: [] }; }
   claimCastle(terrain) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
@@ -725,7 +726,7 @@ class ServerSim {
     const victory = this.rng() < chance;
     const druid = victory && members.some((p) => p.speciesClass === 'CERF_DRUIDE');
     const rampart = members.some((p) => p.speciesClass === 'OURS_GUERRIER');
-    let myHpLoss = 0, myXp = 0, myGold = 0, myFood = null, myBoosted = false;
+    let myHpLoss = 0, myXp = 0, myGold = 0, myFood = null, myBoosted = false, myDied = false;
 
     for (const p of members) {
       p.status = 'IDLE';
@@ -744,15 +745,26 @@ class ServerSim {
       }
 
       // Victoire : usure (réduite par l'armure, le Rempart et le Bouillon),
-      // soignée par la Sève
+      // puis soignée par la Sève — dans cet ordre, pour qu'elle puisse encore
+      // sauver d'une blessure autrement fatale. Gagner le combat ne protège
+      // plus d'une mort par blessure : une victoire trop coûteuse en PV reste
+      // mortelle (même traitement qu'une défaite — rapatriement, PV réduits).
       let loss = 4 + monster.tier * 3;
       loss *= hpLossReduction(p);
       if (rampart) loss *= 0.7;
       loss *= buffLossReduction(p);
       loss = Math.max(1, Math.round(loss));
-      p.hp = Math.max(1, p.hp - loss);
-      if (druid) p.hp = Math.min(maxHp(p), p.hp + Math.round(maxHp(p) * CONFIG.COMBAT.DRUID_HEAL_PCT));
       if (p.id === this.meId) myHpLoss = loss;
+      let hpAfterLoss = p.hp - loss;
+      if (druid) hpAfterLoss = Math.min(maxHp(p), hpAfterLoss + Math.round(maxHp(p) * CONFIG.COMBAT.DRUID_HEAL_PCT));
+      if (hpAfterLoss <= 0) {
+        p.hp = Math.max(1, Math.ceil(maxHp(p) * CONFIG.COMBAT.DEATH_HP_PCT));
+        if (p.bot) p.pos = { ...p.home };
+        else { p.mapId = 'world'; p.pos = { x: 0, y: 0 }; }
+        if (p.id === this.meId) myDied = true;
+      } else {
+        p.hp = hpAfterLoss;
+      }
 
       if (victory && !p.bot) {
         // Les monstres lâchent de l'or (+ XP) et, parfois, un ingrédient
@@ -797,7 +809,7 @@ class ServerSim {
     }
     this.emit('result', {
       victory,
-      died: !victory,
+      died: !victory || myDied,
       chance,
       label: raid.label,
       monsterType: monster.type,

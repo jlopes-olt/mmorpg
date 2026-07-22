@@ -1536,6 +1536,9 @@ showDungeonPopup(tile, onEnter) {
     if (r.victory) {
       lines.push('<p><span class="battle-label">PV perdus</span> <b class="hp-c">−' + r.hpLoss + '</b>' +
         (r.druid ? ' <span class="ok-c">(Sève : +15 % des PV max)</span>' : '') + '</p>');
+      if (r.died) {
+        lines.push('<p class="hp-c"><b>☠ Vos blessures ont eu raison de vous.</b> Rapatriement à la Capitale — reposez-vous à la fontaine avant de repartir.</p>');
+      }
       if (r.gold) lines.push('<p><span class="battle-label">Or</span> <b class="gold-c">+' + r.gold + ' ' + this.currencyIcon('gold', 'small') + '</b></p>');
       if (r.food) {
         const pf = parseStackKey(r.food);
@@ -1566,12 +1569,13 @@ showDungeonPopup(tile, onEnter) {
     } else {
       lines.push('<p class="hp-c"><b>☠ Vous êtes mort.</b> Rapatriement à la Capitale — reposez-vous à la fontaine avant de repartir.</p>');
     }
+    const lethalVictory = r.victory && r.died;
     this.popup(
-      r.victory ? (r.worldBoss ? 'Victoire légendaire !' : 'Victoire') : 'Défaite',
+      r.victory ? (lethalVictory ? 'Victoire à mort' : (r.worldBoss ? 'Victoire légendaire !' : 'Victoire')) : 'Défaite',
       lines.join(''),
       [{ label: 'Continuer', primary: true }],
       {
-        className: 'popup-card action-popup result-popup tone-' + (r.victory ? 'harvest' : 'danger'),
+        className: 'popup-card action-popup result-popup tone-' + (r.victory && !lethalVictory ? 'harvest' : 'danger'),
         kicker: r.worldBoss ? 'Boss de raid mondial' : 'Rapport de bataille',
         heroHtml: this.buildActionHero({
           mediaSrc: monsterSrc,
@@ -1695,12 +1699,20 @@ showDungeonPopup(tile, onEnter) {
       this.emphasizeDesktopPanel('desktopRight');
       return;
     }
+    const body = $('sheetBody');
+    // Un rafraîchissement de la même sheet (déclenché par un évènement 'self'
+    // pendant qu'on la parcourt — achat, équipement…) ne doit pas ramener en
+    // haut : on restaure le défilement après le rendu synchrone. (La sheet
+    // 'social', asynchrone, a son propre mécanisme équivalent — voir
+    // pendingSocialScrollTop.)
+    const samePane = this.openSheet === name && !$('sheet').classList.contains('hidden');
+    const prevScrollTop = samePane ? body.scrollTop : 0;
     this.openSheet = name;
     const titles = { inventory: 'Inventaire', shop: 'Boutique', profile: 'Profil', map: 'Carte du monde', social: 'Social', capital: 'Capitale — PNJ Artisans', marmite: 'La Marmite — Cuisine' };
     $('sheetTitle').textContent = titles[name];
-    const body = $('sheetBody');
     body.innerHTML = '';
     this['build_' + name](body);
+    body.scrollTop = prevScrollTop;
     $('sheet').classList.remove('hidden');
     document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.panel === name));
   }
@@ -1931,7 +1943,8 @@ showDungeonPopup(tile, onEnter) {
     const me = this.server.me;
     const goldSkins = SKIN_SHOP_ITEMS.filter((item) => item.currency === 'gold');
     const premiumSkins = SKIN_SHOP_ITEMS.filter((item) => item.currency === PREMIUM_CURRENCY.key);
-    const shopMounts = Object.values(MOUNT_ITEMS).filter((item) => item.shop);
+    const goldMounts = Object.values(MOUNT_ITEMS).filter((item) => item.shop && item.shop.currency === 'gold');
+    const premiumMounts = Object.values(MOUNT_ITEMS).filter((item) => item.shop && item.shop.currency === PREMIUM_CURRENCY.key);
     const moneyCard =
       '<div class="shop-wallets">' +
         '<div class="shop-wallet">' + this.currencyIcon('gold', 'large') + '<span><span class="shop-wallet-label">Or</span><b>' +
@@ -1957,16 +1970,22 @@ showDungeonPopup(tile, onEnter) {
         '<div class="upg-head"><b>Garde-robe des aventuriers</b><span class="dim">Skins contre or</span></div>' +
         '<div class="shop-grid">' + goldSkins.map((item) => this.shopSkinCard(me, item)).join('') + '</div>' +
       '</div>' +
-      (shopMounts.length ?
+      (goldMounts.length ?
         '<div class="shop-section">' +
           '<div class="upg-head"><b>Écuries</b><span class="dim">Montures contre or</span></div>' +
-          '<div class="shop-grid">' + shopMounts.map((item) => this.shopMountCard(me, item)).join('') + '</div>' +
+          '<div class="shop-grid">' + goldMounts.map((item) => this.shopMountCard(me, item)).join('') + '</div>' +
         '</div>'
         : '') +
       '<div class="shop-section premium">' +
         '<div class="upg-head"><b>Collection premium</b><span class="dim">' + PREMIUM_CURRENCY.label + ' ' + this.currencyIcon('premium', 'small') + '</span></div>' +
         '<div class="shop-grid">' + premiumSkins.map((item) => this.shopSkinCard(me, item)).join('') + '</div>' +
-      '</div>';
+      '</div>' +
+      (premiumMounts.length ?
+        '<div class="shop-section premium">' +
+          '<div class="upg-head"><b>Montures premium</b><span class="dim">' + PREMIUM_CURRENCY.label + ' ' + this.currencyIcon('premium', 'small') + '</span></div>' +
+          '<div class="shop-grid">' + premiumMounts.map((item) => this.shopMountCard(me, item)).join('') + '</div>' +
+        '</div>'
+        : '');
     body.querySelectorAll('[data-shop-buy]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const r = await Promise.resolve(this.server.buySkin(btn.dataset.shopBuy));
@@ -2698,9 +2717,14 @@ showDungeonPopup(tile, onEnter) {
   // par « Chargement… » et re-fetch guilde/amis — ça évitait le clignotement
   // à chaque changement d'onglet.
   renderSocial(body, me, guild, friends, castles) {
-    // L'onglet actif est sous les yeux : plus la peine d'y signaler du non-lu.
+    this._socialData = { body, me, guild, friends, castles };
+    // L'onglet actif est sous les yeux : plus la peine d'y signaler du non-lu
+    // (la pastille par ami, elle, reste tant que son fil précis n'est pas ouvert).
     this.chatUnread[this.chatChannel] = false;
     this.markChatSeen(this.chatChannel);
+    if (this.chatWhisperTarget && !friends.some((f) => f.username === this.chatWhisperTarget)) {
+      this.chatWhisperTarget = null;
+    }
 
     const tabs = [
       { key: 'general', label: 'Général' },
@@ -2712,21 +2736,41 @@ showDungeonPopup(tile, onEnter) {
         t.label + '<span class="chat-tab-badge' + (this.chatUnread[t.key] ? '' : ' hidden') + '"></span></button>').join('') +
     '</div>';
 
-    let whisperBarHtml = '';
-    if (this.chatChannel === 'whisper') {
+    // MP : liste des conversations (une ligne par ami, pastille si non lu —
+    // voir isFriendChatUnread) tant qu'aucun ami précis n'est ouvert, plutôt
+    // que l'ancien menu déroulant où il fallait tout parcourir pour savoir
+    // qui avait écrit.
+    const isWhisperList = this.chatChannel === 'whisper' && !this.chatWhisperTarget;
+    let whisperListHtml = '';
+    if (isWhisperList) {
       if (!friends.length) {
-        whisperBarHtml = '<p class="dim small chat-whisper-hint">Ajoutez un ami pour lui écrire en privé.</p>';
-        this.chatWhisperTarget = null;
+        whisperListHtml = '<p class="dim small chat-whisper-hint">Ajoutez un ami pour lui écrire en privé.</p>';
       } else {
-        if (!this.chatWhisperTarget || !friends.some((f) => f.username === this.chatWhisperTarget)) {
-          this.chatWhisperTarget = friends[0].username;
-        }
-        whisperBarHtml = '<div class="chat-whisper-bar"><select id="whisperTargetSelect">' +
-          friends.map((f) => '<option value="' + esc(f.username) + '"' + (f.username === this.chatWhisperTarget ? ' selected' : '') + '>' +
-            (f.online ? '🟢 ' : '⚪ ') + esc(f.username) + '</option>').join('') +
-        '</select></div>';
+        const sorted = [...friends].sort((a, b) => {
+          const ua = this.isFriendChatUnread(a.username) ? 1 : 0;
+          const ub = this.isFriendChatUnread(b.username) ? 1 : 0;
+          if (ua !== ub) return ub - ua;
+          if (!!a.online !== !!b.online) return a.online ? -1 : 1;
+          return a.username.localeCompare(b.username);
+        });
+        whisperListHtml = '<div class="friend-list whisper-conv-list">' +
+          sorted.map((f) => {
+            const unread = this.isFriendChatUnread(f.username);
+            return '<button type="button" class="friend-row whisper-conv-row' + (unread ? ' unread' : '') + '" data-whisper-open="' + esc(f.username) + '">' +
+              '<span class="admin-dot ' + (f.online ? 'on' : 'off') + '"></span>' +
+              '<span class="friend-name">' + esc(f.username) + '</span>' +
+              (unread ? '<span class="chat-tab-badge"></span>' : '') +
+            '</button>';
+          }).join('') +
+        '</div>';
       }
     }
+    const whisperThreadHeadHtml = (this.chatChannel === 'whisper' && this.chatWhisperTarget)
+      ? '<div class="chat-whisper-thread-head">' +
+          '<span class="friend-name">' + esc(this.chatWhisperTarget) + '</span>' +
+          '<button type="button" class="whisper-close-btn" id="whisperBackBtn" title="Fermer la conversation" aria-label="Fermer la conversation">✕</button>' +
+        '</div>'
+      : '';
 
     const canType = this.chatChannel !== 'whisper' ? true : !!(this.chatWhisperTarget && friends.length);
     const placeholder = this.chatChannel === 'general' ? 'Écrire dans le canal général…'
@@ -2735,12 +2779,13 @@ showDungeonPopup(tile, onEnter) {
 
     body.innerHTML =
       tabsHtml +
-      whisperBarHtml +
-      '<div id="feed" class="feed"></div>' +
-      '<div class="chat-row">' +
-        '<input id="chatInput" type="text" maxlength="120" placeholder="' + esc(placeholder) + '"' + (canType ? '' : ' disabled') + ' autocomplete="off">' +
-        '<button id="chatSend" class="btn primary"' + (canType ? '' : ' disabled') + '>Envoyer</button>' +
-      '</div>' +
+      whisperThreadHeadHtml +
+      (isWhisperList ? whisperListHtml :
+        '<div id="feed" class="feed"></div>' +
+        '<div class="chat-row">' +
+          '<input id="chatInput" type="text" maxlength="120" placeholder="' + esc(placeholder) + '"' + (canType ? '' : ' disabled') + ' autocomplete="off">' +
+          '<button id="chatSend" class="btn primary"' + (canType ? '' : ' disabled') + '>Envoyer</button>' +
+        '</div>') +
       '<div class="section-divider">✦</div>' +
       this.buildGuildSectionHtml(me, guild, castles) +
       '<div class="section-divider">✦</div>' +
@@ -2751,26 +2796,33 @@ showDungeonPopup(tile, onEnter) {
     body.querySelectorAll('[data-chat-tab]').forEach((btn) => {
       btn.addEventListener('click', () => { this.chatChannel = btn.dataset.chatTab; this.renderSocial(body, me, guild, friends, castles); });
     });
-    const whisperSelect = $('whisperTargetSelect');
-    if (whisperSelect) {
-      whisperSelect.addEventListener('change', () => {
-        this.chatWhisperTarget = whisperSelect.value;
+    body.querySelectorAll('[data-whisper-open]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.chatWhisperTarget = btn.dataset.whisperOpen;
+        this.markChatSeen('whisper:' + this.chatWhisperTarget);
         this.renderSocial(body, me, guild, friends, castles);
       });
-    }
+    });
+    const backBtn = $('whisperBackBtn');
+    if (backBtn) backBtn.addEventListener('click', () => {
+      this.chatWhisperTarget = null;
+      this.renderSocial(body, me, guild, friends, castles);
+    });
 
-    const send = () => {
-      const input = $('chatInput');
-      const text = input.value.trim();
-      if (!text || !canType) return;
-      input.value = '';
-      const target = this.chatChannel === 'whisper' ? this.chatWhisperTarget : undefined;
-      Promise.resolve(this.server.say(text, this.chatChannel, target)).then((r) => {
-        if (!r.ok) this.toast(r.error);
-      });
-    };
-    $('chatSend').addEventListener('click', send);
-    $('chatInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+    if (!isWhisperList) {
+      const send = () => {
+        const input = $('chatInput');
+        const text = input.value.trim();
+        if (!text || !canType) return;
+        input.value = '';
+        const target = this.chatChannel === 'whisper' ? this.chatWhisperTarget : undefined;
+        Promise.resolve(this.server.say(text, this.chatChannel, target)).then((r) => {
+          if (!r.ok) this.toast(r.error);
+        });
+      };
+      $('chatSend').addEventListener('click', send);
+      $('chatInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+    }
 
     this.wireGuildSection(body);
     this.wireFriendsSection(body);
@@ -2892,14 +2944,31 @@ showDungeonPopup(tile, onEnter) {
         '</div>' +
       '</div>'
     )).join('');
-    const rows = friends.map((f) => (
-      '<div class="friend-row">' +
+    // Une ligne par ami, condensée (voir retour utilisateur : la liste
+    // devient trop lourde en 2 lignes/ami) — classe réduite à sa puce
+    // d'initiales colorée (titre = nom complet au survol), localisation
+    // réduite à un chip compact qui SERT de bouton Rejoindre (pas de bouton
+    // séparé), rien du tout si hors ligne ou introuvable.
+    const rows = friends.map((f) => {
+      const cls = CLASSES[f.speciesClass];
+      const classChip = cls
+        ? '<span class="friend-class-chip" style="background:' + cls.color + '" title="' + esc(f.classLabel) + '">' + esc(cls.icon) + '</span>'
+        : '';
+      let locationHtml = '';
+      if (f.location && f.location.dungeon) {
+        locationHtml = '<span class="friend-locate-chip dim" title="En donjon (' + esc(this.terrainLabel(f.location.terrain)) + ')">🏰</span>';
+      } else if (f.location) {
+        const full = esc(this.terrainLabel(f.location.terrain)) + ' (' + f.location.x + ', ' + f.location.y + ') · ' + esc(this.directionLabel(f.location.x, f.location.y)) + ' — Rejoindre';
+        locationHtml = '<button class="friend-locate-chip" data-friend-join="' + esc(f.username) + '" title="' + full + '">📍 ' + f.location.x + ',' + f.location.y + '</button>';
+      }
+      return '<div class="friend-row">' +
         '<span class="admin-dot ' + (f.online ? 'on' : 'off') + '"></span>' +
         '<span class="friend-name">' + esc(f.username) + '</span>' +
-        '<span class="dim small friend-class">' + esc(f.classLabel) + '</span>' +
-        '<button class="btn btn-small" data-friend-remove="' + esc(f.username) + '">Retirer</button>' +
-      '</div>'
-    )).join('');
+        classChip +
+        locationHtml +
+        '<button class="friend-remove-btn" data-friend-remove="' + esc(f.username) + '" title="Retirer" aria-label="Retirer ' + esc(f.username) + '">✕</button>' +
+      '</div>';
+    }).join('');
     return '<div class="profile-sec-title">Amis <span class="sec-count">' + friends.length + '</span></div>' +
       requests +
       (friends.length ? '<div class="friend-list">' + rows + '</div>' : '<p class="dim small">Aucun ami pour l’instant.</p>') +
@@ -2923,6 +2992,12 @@ showDungeonPopup(tile, onEnter) {
       btn.addEventListener('click', async () => {
         const r = await Promise.resolve(this.server.removeFriend(btn.dataset.friendRemove));
         if (!r.ok) this.toast(r.error); else this.showSheet('social');
+      });
+    });
+    body.querySelectorAll('[data-friend-join]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.joinFriend(btn.dataset.friendJoin));
+        if (!r.ok) this.toast(r.error); else this.closeSheet();
       });
     });
     const addBtn = $('friendAddBtn');
@@ -3041,11 +3116,10 @@ showDungeonPopup(tile, onEnter) {
   pushFeed(msg) {
     this.feed.push(msg);
     if (this.feed.length > 120) this.feed.shift();
-    if (this.openSheet === 'social' || this.desktopPanelsActive()) this.renderFeed();
+    const socialVisible = this.openSheet === 'social' || this.desktopPanelsActive();
 
     if (msg.type === 'chat') {
       const ch = msg.channel || 'general';
-      const socialVisible = this.openSheet === 'social' || this.desktopPanelsActive();
       const inView = socialVisible && this.chatChannel === ch &&
         (ch !== 'whisper' || (this.chatWhisperTarget && (msg.from === this.chatWhisperTarget || msg.to === this.chatWhisperTarget)));
       if (inView) {
@@ -3053,21 +3127,55 @@ showDungeonPopup(tile, onEnter) {
         // retient la signature tout de suite pour qu'une reconnexion
         // immédiate après ne re-signale pas ce qu'on vient de voir.
         this.markChatSeen(ch);
+        if (ch === 'whisper') this.markChatSeen('whisper:' + (msg.self ? msg.to : msg.from));
       } else if (!msg.self) {
         this.chatUnread[ch] = true;
         this.updateChatBadges();
       }
+      // Liste des conversations MP ouverte (aucun fil précis affiché) : un
+      // nouveau message doit faire apparaître sa pastille tout de suite, pas
+      // seulement au prochain changement d'onglet — on rejoue le rendu avec
+      // les données déjà en mémoire (voir _socialData) pour éviter le
+      // clignotement « Chargement… » d'un refetch complet.
+      if (socialVisible && ch === 'whisper' && this.chatChannel === 'whisper' && !this.chatWhisperTarget && this._socialData) {
+        const { body, me, guild, friends, castles } = this._socialData;
+        this.renderSocial(body, me, guild, friends, castles);
+        return;
+      }
     }
+
+    if (socialVisible) this.renderFeed();
   }
 
   // Signature bon marché (sans horodatage côté serveur) du dernier message
   // d'un canal : compte + expéditeur + texte. Sert uniquement à détecter
   // « quelque chose a changé depuis la dernière lecture », pas à trier.
+  // 'whisper:<pseudo>' cible la conversation privée avec ce seul ami (voir
+  // isFriendChatUnread) plutôt que l'agrégat 'whisper' (tous amis confondus,
+  // utilisé pour la pastille de l'onglet MP).
   chatChannelSignature(channel) {
-    const msgs = this.feed.filter((m) => m.type === 'chat' && (m.channel || 'general') === channel);
+    let msgs;
+    if (channel.startsWith('whisper:')) {
+      const friend = channel.slice('whisper:'.length);
+      msgs = this.feed.filter((m) => m.type === 'chat' && (m.channel || 'general') === 'whisper' &&
+        (m.from === friend || m.to === friend));
+    } else {
+      msgs = this.feed.filter((m) => m.type === 'chat' && (m.channel || 'general') === channel);
+    }
     if (!msgs.length) return '';
     const last = msgs[msgs.length - 1];
     return msgs.length + '|' + (last.from || '') + '|' + (last.text || '');
+  }
+
+  // Pastille par ami dans la liste des conversations MP (voir renderSocial) —
+  // même mécanisme signature/chatSeen que les onglets, mais par destinataire
+  // plutôt que par canal entier, pour qu'on sache QUI a écrit sans ouvrir
+  // chaque fil un par un.
+  isFriendChatUnread(username) {
+    const sig = this.chatChannelSignature('whisper:' + username);
+    if (!sig) return false;
+    if (!this.chatSeen) this.chatSeen = this.loadChatSeen();
+    return sig !== (this.chatSeen['whisper:' + username] || '');
   }
 
   chatSeenStorageKey() {

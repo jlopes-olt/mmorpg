@@ -255,8 +255,47 @@ const aliceHeal = Math.round(maxHp(alice) * CONFIG.COMBAT.DRUID_HEAL_PCT);
 const caraHeal = Math.round(maxHp(cara) * CONFIG.COMBAT.DRUID_HEAL_PCT);
 assert.strictEqual(alice.hp, 50 - 13 + aliceHeal, 'Sève : +15 % des PV max après victoire');
 assert.strictEqual(cara.hp, 50 - 13 + caraHeal, 'Rempart + Sève profitent aussi à l’Ours');
+
+// 3) Victoire mortelle (rng → 0, sans Bob/Sève) : une usure trop lourde tue
+// malgré la victoire — plus de plancher à 1 PV.
+boss.content.inactiveUntil = 0;
+alice.pos = { x: boss.x - 1, y: boss.y };
+cara.pos = { x: boss.x + 1, y: boss.y };
+alice.pa = 50; cara.pa = 50;
+alice.hp = 10; cara.hp = 100;
+const goldBeforeLethalVictory = alice.gold;
+sent.length = 0;
+assert.ok(g.createRaid(alice, boss.x, boss.y).ok, 'troisième lobby T5 (sans Bob)');
+assert.ok(g.joinRaid(cara, boss.x + ',' + boss.y).ok);
+assert.ok(g.startRaidNow(alice, boss.x + ',' + boss.y).ok);
+g.tick(300);
+res = sent.filter((m) => m.ev === 'result').map((m) => m.data);
+assert.strictEqual(res.length, 2, 'résultats envoyés aux deux (victoire mortelle)');
+assert.ok(res[0].victory, 'combat gagné malgré la mort d’Alice');
+assert.ok(res[0].died, 'victoire trop coûteuse en PV = mort (plus de plancher à 1 PV)');
+assert.strictEqual(alice.hp, Math.ceil(maxHp(alice) * CONFIG.COMBAT.DEATH_HP_PCT), 'réveil à 25 % des PV malgré la victoire');
+assert.deepStrictEqual(alice.pos, { x: 0, y: 0 }, 'victoire mortelle → rapatriement Capitale');
+assert.strictEqual(alice.mapId, 'world', 'victoire mortelle → carte monde');
+assert.ok(alice.gold > goldBeforeLethalVictory, 'le butin reste acquis malgré une victoire mortelle');
+assert.ok(!res[1].died, 'Cara (PV hauts) survit à la même victoire');
+
+// 4) La Sève peut sauver d'une blessure autrement fatale (avec Bob)
+boss.content.inactiveUntil = 0;
+alice.pos = { x: boss.x - 1, y: boss.y };
+bob.pos = { x: boss.x + 1, y: boss.y };
+alice.pa = 50; bob.pa = 50;
+alice.hp = 5; bob.hp = 100;
+sent.length = 0;
+assert.ok(g.createRaid(alice, boss.x, boss.y).ok, 'quatrième lobby T5 (avec Bob)');
+assert.ok(g.joinRaid(bob, boss.x + ',' + boss.y).ok);
+assert.ok(g.startRaidNow(alice, boss.x + ',' + boss.y).ok);
+g.tick(300);
+res = sent.filter((m) => m.ev === 'result').map((m) => m.data);
+assert.strictEqual(res.length, 2, 'résultats envoyés aux deux (Sève sauve)');
+assert.ok(res[0].victory && !res[0].died, 'Sève évite la mort malgré une blessure autrement fatale');
+assert.ok(alice.hp > 0, 'Alice survit grâce à la Sève');
 g.rng = Math.random;
-console.log('Combat : mort en défaite ✔, Sève % ✔, Rempart ✔');
+console.log('Combat : mort en défaite ✔, Sève % ✔, Rempart ✔, victoire mortelle ✔, Sève sauve d’une blessure fatale ✔');
 
 // --- Ancres de la courbe de probabilité ---
 assert.ok(Math.abs(winChance(26, 26) - 0.71) < 0.02, 'parité (T0 vs T1) ≈ 70 %');
@@ -547,6 +586,51 @@ assert.strictEqual(alice.friendRequests.length, 0, 'la demande en attente est co
 assert.ok(g.removeFriend(alice, 'Bob').ok, 'retrait d’ami');
 assert.ok(!alice.friends.includes(bob.id) && !bob.friends.includes(alice.id), 'amitié rompue des deux côtés');
 console.log('Amis : demandes ✔, symétrie ✔, réciprocité automatique ✔, retrait ✔');
+
+// --- Localisation des amis + « Rejoindre » (Alice et Carl restent amis, voir plus haut) ---
+carl.online = true;
+carl.mapId = 'world';
+carl.pos = { x: 5, y: -3 };
+let friendsRes = g.friendsList(alice);
+let carlEntry = friendsRes.find((f) => f.username === 'Carl');
+assert.ok(carlEntry.location && carlEntry.location.mapId === 'world', 'localisation monde renvoyée pour un ami en ligne');
+assert.strictEqual(carlEntry.location.x, 5, 'coordonnée X transmise');
+assert.strictEqual(carlEntry.location.y, -3, 'coordonnée Y transmise');
+assert.ok(carlEntry.location.terrain, 'terrain renseigné');
+
+carl.online = false;
+carlEntry = g.friendsList(alice).find((f) => f.username === 'Carl');
+assert.strictEqual(carlEntry.location, null, 'aucune localisation pour un ami hors ligne (position obsolète)');
+carl.online = true;
+
+// Donjon : ni coordonnées (repère local, sans intérêt pour l’appelant) ni
+// bouton rejoindre (sinon on court-circuite la découverte de ce donjon).
+const dungeonMapId = [...g.maps.keys()].find((id) => id !== 'world');
+assert.ok(dungeonMapId, 'un donjon existe dans les cartes générées');
+carl.mapId = dungeonMapId;
+carlEntry = g.friendsList(alice).find((f) => f.username === 'Carl');
+assert.ok(carlEntry.location && carlEntry.location.dungeon, 'ami en donjon signalé comme tel');
+assert.strictEqual(carlEntry.location.x, undefined, 'pas de coordonnées transmises en donjon');
+assert.ok(!g.joinFriend(alice, 'Carl').ok, 'rejoindre un ami en donjon refusé');
+carl.mapId = 'world';
+
+// Rejoindre : refus hors amitié / hors ligne, téléportation exacte sinon
+assert.ok(!g.joinFriend(alice, 'Bob').ok, 'rejoindre un non-ami refusé');
+carl.online = false;
+assert.ok(!g.joinFriend(alice, 'Carl').ok, 'rejoindre un ami hors ligne refusé');
+carl.online = true;
+alice.mapId = 'world'; alice.pos = { x: 0, y: 0 }; alice.status = 'IDLE';
+const expectedJoinPos = g.nearestWalkablePos(g.worldMap, carl.pos);
+const joinRes = g.joinFriend(alice, 'Carl');
+assert.ok(joinRes.ok, 'rejoindre un ami en ligne accepté');
+assert.deepStrictEqual(alice.pos, expectedJoinPos, 'téléportation sur la position de l’ami (ou la case libre la plus proche)');
+assert.strictEqual(alice.mapId, 'world', 'arrivée sur la carte du monde');
+console.log('Localisation amis : coordonnées monde ✔, masquée en donjon ✔, rejoindre (en ligne, même monde) ✔');
+
+// Carl reste hors ligne pour la suite de ces tests (voir plus haut) — on
+// restaure son état pour ne pas perturber les tests suivants.
+carl.online = false;
+carl.pos = { x: 0, y: 0 };
 
 // --- Canaux de discussion ---
 assert.ok(!g.say(alice, 'yo', 'guild').ok, 'canal guilde refusé hors guilde');
@@ -1018,6 +1102,23 @@ assert.strictEqual(alice.gold, 50, 'prix de la monture débité exactement');
 assert.ok(alice.ownedMounts.includes('mount_cheval'), 'monture ajoutée à la possession');
 assert.ok(!g.buyMount(alice, 'mount_cheval').ok, 'rachat de la même monture refusé');
 console.log('Montures en boutique : rares non listées ✔, achat or (débit exact, anti-double achat) ✔');
+
+// --- Montures premium (Écailles Lunaires) : licorne, araignée, phénix, cerf magique ---
+for (const mountId of ['mount_licorne', 'mount_araignee', 'mount_phenix', 'mount_cerf_magique']) {
+  assert.ok(MOUNT_ITEMS[mountId], mountId + ' configurée');
+  assert.strictEqual(MOUNT_ITEMS[mountId].shop.currency, PREMIUM_CURRENCY.key, mountId + ' payable en Écailles Lunaires');
+}
+const licorne = MOUNT_ITEMS.mount_licorne;
+alice[PREMIUM_CURRENCY.key] = licorne.shop.price - 1;
+assert.ok(!g.buyMount(alice, 'mount_licorne').ok, 'achat refusé sans assez d’Écailles Lunaires');
+assert.ok(!alice.ownedMounts.includes('mount_licorne'), 'rien débité/ajouté après un refus');
+alice[PREMIUM_CURRENCY.key] = licorne.shop.price + 7;
+const buyPremiumMountRes = g.buyMount(alice, 'mount_licorne');
+assert.ok(buyPremiumMountRes.ok, 'monture premium achetée avec assez d’Écailles Lunaires');
+assert.strictEqual(alice[PREMIUM_CURRENCY.key], 7, 'prix en Écailles Lunaires débité exactement (pas d’or touché)');
+assert.ok(alice.ownedMounts.includes('mount_licorne'), 'monture premium ajoutée à la possession');
+assert.ok(!g.buyMount(alice, 'mount_licorne').ok, 'rachat de la même monture premium refusé');
+console.log('Montures premium : configuration ✔, achat Écailles Lunaires (débit exact, anti-double achat) ✔');
 
 // --- Crédit Stripe (webhook) : appliqué même hors ligne, comptes/montants invalides refusés ---
 alice.online = false;

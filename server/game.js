@@ -1619,13 +1619,47 @@ class Game {
     return p.friends.map((id) => {
       const f = this.players.get(id);
       if (!f) return null;
+      // Localisation affichée seulement si en ligne — la dernière position
+      // connue d'un ami hors ligne ne veut rien dire pour « le rejoindre ».
+      // En donjon : ni coordonnées (repère local, sans intérêt pour l'appelant)
+      // ni bouton rejoindre (on n'y accède qu'en marchant sur son entrée
+      // dans le monde — sinon on court-circuite la découverte de ce donjon).
+      let location = null;
+      if (f.online) {
+        const mapId = f.mapId || 'world';
+        if (mapId === 'world') {
+          const tile = this.worldMap.tiles.get(tileKey(f.pos.x, f.pos.y));
+          location = { mapId: 'world', x: f.pos.x, y: f.pos.y, terrain: (tile && tile.terrain) || null };
+        } else {
+          const map = this.mapOf(mapId);
+          location = { mapId, dungeon: true, terrain: (map && map.terrain) || null };
+        }
+      }
       return {
         id: f.id,
         username: f.username,
         online: !!f.online,
+        speciesClass: f.speciesClass,
         classLabel: (CLASSES[f.speciesClass] && CLASSES[f.speciesClass].label) || f.speciesClass,
+        location,
       };
     }).filter(Boolean);
+  }
+
+  joinFriend(p, targetUsername) {
+    if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
+    const target = this.findAccountByUsername(targetUsername);
+    if (!target) return { ok: false, error: 'Joueur introuvable.' };
+    if (!p.friends.includes(target.id)) return { ok: false, error: 'Vous n’êtes pas amis.' };
+    if (!target.online) return { ok: false, error: target.username + ' n’est pas en ligne.' };
+    if ((target.mapId || 'world') !== 'world') return { ok: false, error: 'Impossible de rejoindre un ami en donjon.' };
+    this.resetTravelState(p);
+    p.mapId = 'world';
+    p.pos = this.nearestWalkablePos(this.worldMap, target.pos);
+    this.pushMap(p);
+    this.pushSelf(p);
+    this.toast(p, 'Vous avez rejoint ' + target.username + '.');
+    return { ok: true };
   }
 
   /* ---------- Historique de discussion (coordination asynchrone) ---------- */
@@ -1952,6 +1986,7 @@ class Game {
 
     const rewards = new Map();   // accountId -> { loot, gold, xp }
     const lossById = new Map();  // accountId -> PV perdus (victoire)
+    const diedById = new Set();  // accountId -> victoire mais blessure mortelle
     for (const p of members) {
       p.status = 'IDLE';
       p.raidKey = null;
@@ -1970,15 +2005,26 @@ class Game {
       }
 
       // Victoire : usure (réduite par l'armure, le Rempart et le Bouillon),
-      // soignée par la Sève
+      // puis soignée par la Sève — dans cet ordre, pour qu'elle puisse encore
+      // sauver d'une blessure autrement fatale. Gagner le combat ne protège
+      // plus d'une mort par blessure : une victoire trop coûteuse en PV reste
+      // mortelle (même traitement qu'une défaite — rapatriement, PV réduits).
       let loss = 4 + monster.tier * 3;
       loss *= hpLossReduction(p);
       if (rampart) loss *= 0.7;
       loss *= buffLossReduction(p);
       loss = Math.max(1, Math.round(loss));
-      p.hp = Math.max(1, p.hp - loss);
       if (!p.bot) lossById.set(p.id, loss);
-      if (druid) p.hp = Math.min(maxHp(p), p.hp + Math.round(maxHp(p) * CONFIG.COMBAT.DRUID_HEAL_PCT));
+      let hpAfterLoss = p.hp - loss;
+      if (druid) hpAfterLoss = Math.min(maxHp(p), hpAfterLoss + Math.round(maxHp(p) * CONFIG.COMBAT.DRUID_HEAL_PCT));
+      if (hpAfterLoss <= 0) {
+        p.hp = Math.max(1, Math.ceil(maxHp(p) * CONFIG.COMBAT.DEATH_HP_PCT));
+        if (p.bot) p.pos = { ...p.home };
+        else { p.mapId = 'world'; p.pos = { x: 0, y: 0 }; }
+        if (!p.bot) diedById.add(p.id);
+      } else {
+        p.hp = hpAfterLoss;
+      }
 
       if (victory && !p.bot) {
         // Les monstres lâchent de l'or (+ XP) et, parfois, un ingrédient
@@ -2074,7 +2120,7 @@ class Game {
       const rw = rewards.get(p.id);
       this.send(p.id, 'result', {
         victory,
-        died: !victory,
+        died: !victory || diedById.has(p.id),
         chance,
         label: raid.label,
         monsterType: monster.type,

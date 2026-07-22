@@ -95,12 +95,28 @@ async function sendOtpEmail(to, code, kind) {
   const intro = kind === 'reset'
     ? 'Voici ton code pour réinitialiser ton mot de passe :'
     : 'Voici ton code de connexion :';
+  // Palette alignée sur le jeu (--bg/--ink/--gold, voir css/style.css) — logo
+  // servi en statique par l'appli elle-même (express.static), donc en URL
+  // absolue vers le domaine de prod (jamais chargé tant que USING_SANDBOX_SENDER
+  // est vrai de toute façon, voir plus bas : pas d'envoi réel avant domaine prêt).
   const html =
-    '<div style="font-family:sans-serif;max-width:420px;margin:0 auto;padding:24px;">' +
-      '<h2 style="color:#c89a3a;margin-bottom:4px;">FERALIA Online</h2>' +
-      '<p>' + intro + '</p>' +
-      '<p style="font-size:32px;font-weight:800;letter-spacing:0.12em;color:#14181d;">' + code + '</p>' +
-      '<p style="color:#666;font-size:13px;">Ce code expire dans quelques minutes. Si tu n’es pas à l’origine de cette demande, ignore cet email.</p>' +
+    '<div style="background:#14181d;padding:32px 16px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">' +
+      '<div style="max-width:420px;margin:0 auto;background:#1c2128;border:1px solid #2c333d;border-radius:16px;overflow:hidden;">' +
+        '<div style="background:#14181d;padding:28px 24px 16px;text-align:center;border-bottom:1px solid #2c333d;">' +
+          '<img src="https://feraliaonline.fr/assets/feralia_online_logo.png" alt="FERALIA Online" width="72" height="72" style="display:block;margin:0 auto 12px;border-radius:14px;">' +
+          '<div style="color:#e8b23f;font-size:20px;font-weight:800;letter-spacing:0.03em;">FERALIA ONLINE</div>' +
+        '</div>' +
+        '<div style="padding:28px 24px;text-align:center;">' +
+          '<p style="color:#e8ecf1;font-size:15px;margin:0 0 20px;">' + intro + '</p>' +
+          '<div style="display:inline-block;background:#14181d;border:1px solid #e8b23f;border-radius:12px;padding:16px 28px;margin-bottom:20px;">' +
+            '<span style="font-size:34px;font-weight:800;letter-spacing:0.14em;color:#e8b23f;">' + code + '</span>' +
+          '</div>' +
+          '<p style="color:#8a94a3;font-size:12px;margin:0;">Ce code expire dans quelques minutes. Si tu n’es pas à l’origine de cette demande, ignore cet email.</p>' +
+        '</div>' +
+        '<div style="background:#14181d;padding:14px 24px;text-align:center;border-top:1px solid #2c333d;">' +
+          '<span style="color:#565f6b;font-size:11px;">FERALIA Online — feraliaonline.fr</span>' +
+        '</div>' +
+      '</div>' +
     '</div>';
 
   if (!RESEND_API_KEY) {
@@ -640,6 +656,7 @@ io.on('connection', (socket) => {
   socket.on('friend:request', act((d) => game.sendFriendRequest(player, String(d.username))));
   socket.on('friend:respond', act((d) => game.respondFriendRequest(player, String(d.fromId), !!d.accept)));
   socket.on('friend:remove', act((d) => game.removeFriend(player, String(d.username))));
+  socket.on('friend:join', act((d) => game.joinFriend(player, String(d.username))));
   socket.on('friend:list', (payload, ack) => {
     if (typeof ack !== 'function') ack = () => {};
     if (!player || !game.players.has(player.id)) return ack({ ok: false, error: 'Non authentifié.' });

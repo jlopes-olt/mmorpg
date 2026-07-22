@@ -548,6 +548,35 @@ const MOUNT_ITEMS = {
     shop: { currency: 'gold', price: 3000 },
     world: { maxW: 140, maxH: 100, groundOffset: 10, riderOffsetX: 10, riderOffsetY: -34, frontClip: 0.5 },
   },
+  // Montures premium (Écailles Lunaires)
+  mount_licorne: {
+    id: 'mount_licorne',
+    label: 'Licorne',
+    asset: 'assets/mounts/licorne.png',
+    shop: { currency: PREMIUM_CURRENCY.key, price: 45 },
+    world: { maxW: 140, maxH: 100, groundOffset: 10, riderOffsetX: 10, riderOffsetY: -34, frontClip: 0.5 },
+  },
+  mount_araignee: {
+    id: 'mount_araignee',
+    label: 'Araignée géante',
+    asset: 'assets/mounts/araignee_geante.png',
+    shop: { currency: PREMIUM_CURRENCY.key, price: 45 },
+    world: { maxW: 150, maxH: 92, groundOffset: 7, riderOffsetX: 8, riderOffsetY: -26, frontClip: 0.5 },
+  },
+  mount_phenix: {
+    id: 'mount_phenix',
+    label: 'Phénix',
+    asset: 'assets/mounts/phoenix.png',
+    shop: { currency: PREMIUM_CURRENCY.key, price: 45 },
+    world: { maxW: 146, maxH: 92, groundOffset: 8, riderOffsetX: 6, riderOffsetY: -24, frontClip: 0.5 },
+  },
+  mount_cerf_magique: {
+    id: 'mount_cerf_magique',
+    label: 'Cerf magique',
+    asset: 'assets/mounts/cerf_magique.png',
+    shop: { currency: PREMIUM_CURRENCY.key, price: 45 },
+    world: { maxW: 140, maxH: 96, groundOffset: 8, riderOffsetX: 8, riderOffsetY: -28, frontClip: 0.5 },
+  },
 };
 
 /* Sacoche de voyage : accessoire décoratif UNIQUE, réutilisé sur TOUTE

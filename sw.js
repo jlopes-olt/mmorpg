@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v77-charslots';
+const VERSION = 'wildrift-v81-mp-friends-condense';
 
 const CORE = [
   '/',
