@@ -78,6 +78,12 @@ const CONFIG = {
 /* baseHp suit le type d'armure de CLASS_GEAR (Plaques > Cuir > Étoffe),
  * lui-même aligné sur le rôle : le Tank encaisse, le mage trinque. */
 const CLASSES = {
+  SERAPHIN_ROYAL: {
+    label: 'Séraphin Royal', icon: 'SR', color: '#f4e6a2', baseForce: 99993, baseHp: 99999,
+    role: 'Divin',
+    bonus: 'Mandat céleste : forme strictement réservée aux administrateurs, investie d’une puissance absolue.',
+    adminOnly: true,
+  },
   LION_PALADIN: {
     label: 'Lion Paladin', icon: 'LP', color: '#e8b23f', baseForce: 20, baseHp: 115,
     role: 'Soutien',
@@ -132,6 +138,45 @@ const CASTLE_REINFORCE_COST_GOLD = 400;
 const CASTLE_REPAIR_GOLD_PER_HP = 2;
 const CASTLE_DAMAGE_PER_ASSAULT = 150;
 const CASTLE_ZONE_GOLD_BONUS = 1.15;
+// Capturer un château de niveau max (1400 PS / 150 par assaut) prend environ
+// 10 assauts — sans ce délai, une guilde peut les enchaîner en quelques
+// minutes (30 s de lobby chacun) sans laisser aux défenseurs le temps de
+// réagir (rallier, réparer). Horloge murale (Date.now()), pas this.now, pour
+// rester valable même en dev accéléré (voir WORLD_BOSS pour le même choix).
+const CASTLE_SIEGE_COOLDOWN_MS = 5 * 60 * 1000;
+
+// Fenêtre de vulnérabilité (heure de Paris — joueurs FR) : un château ne peut
+// être assiégé qu'à l'intérieur de sa plage. Sans ça, une guilde peut vider
+// les PS d'un château pendant la nuit sans que personne ne puisse jamais le
+// défendre — avec, la défense dépend de la force réelle des deux guildes sur
+// des heures où tout le monde peut légitimement être en ligne (voir Albion
+// Online / EVE Online pour le même principe). Par château (pas une constante
+// unique) pour pouvoir différencier plus tard par type de structure sans
+// réécrire — les 4 démarrent avec la même plage.
+const CASTLE_SIEGE_WINDOWS = {
+  FORET: { startHour: 19, endHour: 23 },
+  PLAINE: { startHour: 19, endHour: 23 },
+  MONTAGNE: { startHour: 19, endHour: 23 },
+  MARECAGE: { startHour: 19, endHour: 23 },
+};
+
+// Heure du jour à Paris (0-23), indépendante du fuseau horaire de la machine
+// qui exécute le code (serveur en UTC, navigateur du joueur, peu importe) —
+// hourCycle 'h23' plutôt que hour12:false, plus fiable à minuit selon l'ICU.
+function parisHour(ts) {
+  return parseInt(
+    new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Paris', hour: 'numeric', hourCycle: 'h23' }).format(ts || Date.now()),
+    10
+  );
+}
+
+// Gère aussi les plages traversant minuit (ex: 22h -> 2h), pour une future
+// fenêtre nocturne sur un autre type de structure.
+function isWithinSiegeWindow(win, ts) {
+  if (!win) return true;
+  const h = parisHour(ts);
+  return win.startHour <= win.endHour ? (h >= win.startHour && h < win.endHour) : (h >= win.startHour || h < win.endHour);
+}
 
 // Renfort/réparation coûtent aussi des ressources (en plus de l'or) — la
 // ressource du biome du château (bois en Forêt, minerai en Montagne, etc.),
@@ -236,6 +281,7 @@ const PA_SCROLL_COOLDOWN_MS = 12 * 60 * 60 * 1000;
 const SKIN_ASSET_REV = '20260721-flip';
 
 const CLASS_SKIN_SCALE = {
+  SERAPHIN_ROYAL: 1,
   RENARD_VOLEUR: 1,
   CERF_DRUIDE: 1,
   CHAT_MAGICIEN: 1,
@@ -256,6 +302,7 @@ const SKIN_OFFSET_X = {
 };
 
 const CLASS_BASE_SKINS = {
+  SERAPHIN_ROYAL: 'assets/skins_coherent/seraphin_royal/seraphin_royal_base_v2.png',
   RENARD_VOLEUR: 'assets/skins_coherent/renard_voleur/renard_voleur_base.png',
   CERF_DRUIDE: 'assets/skins_coherent/cerf_druide/cerf_druide_base.png',
   CHAT_MAGICIEN: 'assets/skins_coherent/chat_magicien/chat_magicien_base.png',
@@ -266,6 +313,7 @@ const CLASS_BASE_SKINS = {
 
 /* Arme et armure uniques, liées à la classe, évolutives T0→T5 */
 const CLASS_GEAR = {
+  SERAPHIN_ROYAL:        { weapon: 'Bâton',   armor: 'Étoffe' },
   LION_PALADIN:         { weapon: 'Épée',    armor: 'Plaques' },
   OURS_GUERRIER:        { weapon: 'Hache',   armor: 'Plaques' },
   RENARD_VOLEUR:        { weapon: 'Dagues',  armor: 'Cuir' },
@@ -294,6 +342,12 @@ const EQUIPMENT_ASSETS = {
 
 function equipmentAsset(slot, type) {
   return (EQUIPMENT_ASSETS[slot] && EQUIPMENT_ASSETS[slot][type]) || '';
+}
+
+function classAvailableToRole(speciesClass, role) {
+  const cls = CLASSES[speciesClass];
+  if (!cls) return false;
+  return !cls.adminOnly || role === 'admin';
 }
 
 const SKIN_SHOP_ITEMS = [
@@ -817,7 +871,8 @@ if (typeof module !== 'undefined' && module.exports) {
     CONFIG, CLASSES, CLASS_GEAR, EQUIPMENT_ASSETS, MAX_CHAR_SLOTS, RESOURCES, MONSTERS, MONSTER_FORCE,
     CASTLE_TERRAINS, CASTLE_BASE_HP, CASTLE_HP_PER_LEVEL, CASTLE_MAX_LEVEL,
     CASTLE_CLAIM_COST_GOLD, CASTLE_REINFORCE_COST_GOLD, CASTLE_REPAIR_GOLD_PER_HP,
-    CASTLE_DAMAGE_PER_ASSAULT, CASTLE_ZONE_GOLD_BONUS,
+    CASTLE_DAMAGE_PER_ASSAULT, CASTLE_ZONE_GOLD_BONUS, CASTLE_SIEGE_COOLDOWN_MS, CASTLE_SIEGE_WINDOWS,
+    parisHour, isWithinSiegeWindow,
     CASTLE_TERRAIN_RESOURCE, CASTLE_REINFORCE_RESOURCES, castleRepairResourceTier, CASTLE_REPAIR_HP_PER_RESOURCE,
     SIEGE_ENGINE_ITEM, SIEGE_ENGINE_RECIPES, SIEGE_ENGINE_FORCE, SIEGE_ENGINE_DAMAGE, SIEGE_ENGINES,
     CASTLE_MAX_FORT_LEVEL, CASTLE_FORTIFY_COST_GOLD, CASTLE_FORTIFY_BONUS_PER_LEVEL, CASTLE_FORTIFY_RESOURCES,
@@ -826,7 +881,7 @@ if (typeof module !== 'undefined' && module.exports) {
     PREMIUM_CURRENCY, MOONSTONE_PACKS, GOLD_PACKS, PA_SCROLL_COST_MOONSTONES, PA_SCROLL_COOLDOWN_MS, VAPID_PUBLIC_KEY,
     SKIN_SHOP_ITEMS, SKIN_BY_ID, SKIN_ASSET_REV, CLASS_SKIN_SCALE, SKIN_OFFSET_X, CLASS_BASE_SKINS,
     WORLD_BOSS, ACCESSORY_ITEMS, MOUNT_ITEMS, MOUNT_SADDLE_PROP,
-    skinFor, skinAssetUrl, classSkinScale, baseSkinAsset, equipmentAsset,
+    skinFor, skinAssetUrl, classSkinScale, baseSkinAsset, equipmentAsset, classAvailableToRole,
     levelFromXp, playerForce, maxHp, hpLossReduction, stackKey, parseStackKey, resourceFamily,
     newCharacter, syncActiveCharacter, applyCharacter, rollGoldLoot,
     combatPower, teamPowerOf, winChance,

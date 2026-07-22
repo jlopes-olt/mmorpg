@@ -13,7 +13,7 @@
 
 (function () {
   const remote = typeof io !== 'undefined' && location.protocol.indexOf('http') === 0;
-  const SHELL_REV = '20260721-mount-skin-prices';
+  const SHELL_REV = '20260722-siege-window';
 
   // PWA : service worker (cache + installation sur l'écran d'accueil).
   // Échec silencieux en file:// / artifact.
@@ -245,8 +245,10 @@
     const kicker = opts && opts.kicker ? opts.kicker : 'Déplacement';
     const badge = opts && opts.badge ? opts.badge : (ui.terrainLabel(tile.terrain) + ' · (' + x + ', ' + y + ')');
     const hasVisual = !!(opts && (opts.mediaSrc || opts.emblem));
+    const extraHtml = (opts && opts.extraHtml) || '';
     ui.confirm(
       title || 'Se déplacer ?',
+      extraHtml +
       '<p>Voulez-vous aller sur la case <b>(' + x + ', ' + y + ')</b> ?</p>' +
       '<p>Terrain : <b>' + ui.terrainLabel(tile.terrain) + '</b></p>' +
       '<p>Coût : <b>' + path.length + ' PA</b> <span class="dim">(' + me.pa + ' disponibles)</span></p>' +
@@ -323,13 +325,38 @@
 
     if (c && c.kind === 'castle') {
       if (me.pos.x === tx && me.pos.y === ty) ui.showCastlePopup(tile);
-      else confirmWalk(tx, ty, {
-        title: 'Aller au château ?',
-        kicker: 'Territoire',
-        mediaSrc: ui.getSpriteSrc(renderer.worldIcons.castle[renderer.castleLevels[tile.terrain] || 0]),
-        mediaClass: 'structure',
-        badge: 'Château (' + tile.terrain + ')',
-      });
+      else {
+        const level = renderer.castleLevels[tile.terrain] || 0;
+        const owner = renderer.castleOwners[tile.terrain];
+        const stats = renderer.castleStats[tile.terrain];
+        const pct = stats && stats.hpMax ? Math.max(0, Math.min(100, Math.round(100 * stats.hp / stats.hpMax))) : 0;
+        // Même repère visuel (badges + barre) que la modale du château une
+        // fois sur place (showCastlePopup) — consultable à distance, sans
+        // avoir à s'y déplacer juste pour connaître son état.
+        const siegeWindow = CASTLE_SIEGE_WINDOWS[tile.terrain];
+        const withinSiegeWindow = isWithinSiegeWindow(siegeWindow);
+        const siegeWindowHtml = '<p class="dim small">🕐 Assiégeable de ' + siegeWindow.startHour + 'h à ' + siegeWindow.endHour + 'h (heure de Paris)' +
+          (owner ? (withinSiegeWindow ? ' — <span class="ok-c">dans la plage en ce moment</span>' : ' — <span class="hp-c">hors plage en ce moment</span>') : '') +
+          '.</p>';
+        const extraHtml = (owner
+          ? '<p>Tenu par <b>' + esc(owner) + '</b></p>' +
+            '<div class="castle-badges">' +
+              '<span class="tier t' + level + '">Niveau ' + level + ' / ' + CASTLE_MAX_LEVEL + '</span>' +
+              (stats && stats.fortLevel ? '<span class="tier t' + stats.fortLevel + '">🛡 Fortification ' + stats.fortLevel + ' / ' + CASTLE_MAX_FORT_LEVEL + '</span>' : '') +
+            '</div>' +
+            '<div class="xp-track"><div class="xp-fill" style="width:' + pct + '%"></div></div>' +
+            '<p class="dim small">' + (stats ? stats.hp : 0) + ' / ' + (stats ? stats.hpMax : 0) + ' points de structure</p>'
+          : '<p class="dim">Libre — aucune guilde ne le tient.</p>') +
+          siegeWindowHtml;
+        confirmWalk(tx, ty, {
+          title: 'Aller au château ?',
+          kicker: 'Territoire',
+          mediaSrc: ui.getSpriteSrc(renderer.worldIcons.castle[level]),
+          mediaClass: 'structure',
+          badge: 'Château (' + tile.terrain + ')',
+          extraHtml,
+        });
+      }
       return;
     }
 
@@ -754,8 +781,12 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
       hideSplash(1100);
       ui.showAuth({
         login: (username, password) => server.login(username, password),
-        register: (username, password, cls) => server.register(username, password, cls),
+        register: (username, password, cls, email) => server.register(username, password, cls, email),
       });
+    });
+    server.on('otpRequired', (d) => {
+      hideSplash(1100);
+      ui.showOtpStep(d || {});
     });
     server.on('ready', () => {
       document.getElementById('creation').classList.add('hidden');

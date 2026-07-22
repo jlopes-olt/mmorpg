@@ -79,6 +79,7 @@ class RemoteServer {
       if (d && d.error) this.emit('toast', { text: d.error });
       this.emit('creation');
     });
+    s.on('otpRequired', (d) => this.emit('otpRequired', d));
     s.on('init', (d) => this.onInit(d));
     s.on('map', (d) => {
       this.applyMapStates(d.mapStates || {});
@@ -109,6 +110,10 @@ class RemoteServer {
     s.on('raids', (list) => {
       this.raids = new Map(list.map((r) => [r.key, r]));
     });
+    // Mort/réveil du boss mondial : sans ce câblage, un client déjà connecté
+    // au moment de la transition ne le saurait jamais (this.worldBoss ne
+    // serait sinon posé qu'une fois, à la connexion — voir onInit ci-dessous).
+    s.on('worldBoss', (d) => { this.worldBoss = d; });
     s.on('time', (d) => { this.now = d.now; this.speed = d.speed || 1; });
     s.on('world:wildSalt', (d) => {
       this.wildSalt = d.salt || 0;
@@ -161,13 +166,23 @@ class RemoteServer {
     if (this.trade) this.emit('trade', this.trade);
   }
 
-  register(username, password, speciesClass) {
-    this.socket.emit('register', { username, password, speciesClass });
+  register(username, password, speciesClass, email) {
+    this.socket.emit('register', { username, password, speciesClass, email });
   }
 
   login(username, password) {
     this.socket.emit('login', { username, password });
   }
+
+  // --- OTP par email (connexion) : voir 'otpRequired' câblé dans js/main.js ---
+  setEmail(accountId, email) { return this.req('auth:setEmail', { accountId, email }); }
+  verifyOtp(accountId, code) { return this.req('auth:verifyOtp', { accountId, code }); }
+  resendOtp(accountId) { return this.req('auth:resendOtp', { accountId }); }
+
+  // --- Mot de passe oublié ---
+  forgotPassword(username) { return this.req('auth:forgotPassword', { username }); }
+  resendPasswordReset(username) { return this.req('auth:resendPasswordReset', { username }); }
+  resetPassword(username, code, newPassword) { return this.req('auth:resetPassword', { username, code, newPassword }); }
 
   req(ev, payload) {
     return new Promise((resolve) => {

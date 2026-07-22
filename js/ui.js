@@ -13,6 +13,10 @@ function esc(s) {
   ));
 }
 
+function availableClassEntries(role) {
+  return Object.entries(CLASSES).filter(([key]) => classAvailableToRole(key, role));
+}
+
 // Conversion standard clé VAPID (base64url) -> Uint8Array attendu par
 // PushManager.subscribe({ applicationServerKey: ... }).
 function urlBase64ToUint8Array(base64String) {
@@ -449,6 +453,14 @@ showDungeonPopup(tile, onEnter) {
     const activeSiege = (me.guildId && c.ownerGuildId) ? this.server.raids.get(siegeKey) : null;
     const alreadyInSiege = !!(activeSiege && me.raidKey === siegeKey);
 
+    const siegeWindow = CASTLE_SIEGE_WINDOWS[terrain];
+    const withinSiegeWindow = isWithinSiegeWindow(siegeWindow);
+    // Fenêtre de vulnérabilité : toujours affichée (même non revendié, utile
+    // avant de fonder) — voir CASTLE_SIEGE_WINDOWS côté serveur pour le blocage réel.
+    const siegeWindowHtml = '<p class="dim small">🕐 Assiégeable de ' + siegeWindow.startHour + 'h à ' + siegeWindow.endHour + 'h (heure de Paris)' +
+      (c.ownerGuildName ? (withinSiegeWindow ? ' — <span class="ok-c">dans la plage en ce moment</span>' : ' — <span class="hp-c">hors plage en ce moment</span>') : '') +
+      '.</p>';
+
     const statusHtml =
       (c.ownerGuildName
         ? '<p>Tenu par <b>' + esc(c.ownerGuildName) + '</b></p>' +
@@ -459,7 +471,8 @@ showDungeonPopup(tile, onEnter) {
           '<div class="xp-track"><div class="xp-fill" style="width:' + pct + '%"></div></div>' +
           '<p class="dim small">' + c.hp + ' / ' + c.hpMax + ' points de structure</p>'
         : '<p class="dim">Libre — aucune guilde ne le tient.</p>') +
-      '<p class="dim small">Le tenir offre à la guilde +' + bonusPct + ' % d’or sur toute la zone ' + terrainName + '.</p>';
+      '<p class="dim small">Le tenir offre à la guilde +' + bonusPct + ' % d’or sur toute la zone ' + terrainName + '.</p>' +
+      siegeWindowHtml;
 
     let costHtml = '';
     if (!me.guildId) {
@@ -2552,7 +2565,7 @@ showDungeonPopup(tile, onEnter) {
         '<div class="class-grid"></div>' +
       '</div>';
     const grid = card.querySelector('.class-grid');
-    for (const [key, c] of Object.entries(CLASSES)) {
+    for (const [key, c] of availableClassEntries(me.role)) {
       if (owned.has(key)) continue;
       const btn = document.createElement('button');
       btn.className = 'class-card';
@@ -3139,6 +3152,7 @@ showDungeonPopup(tile, onEnter) {
   /* ---------- Inscription / connexion (mode connecté) ---------- */
   showAuth(handlers) {
     const overlay = $('creation');
+    this._authHandlers = handlers;   // pour revenir ici depuis l'OTP / mot de passe oublié
 
     // Le serveur a refusé (mauvais mot de passe, nom pris…) : l'écran est
     // déjà affiché avec les saisies de l'utilisateur — on réactive juste
@@ -3151,7 +3165,7 @@ showDungeonPopup(tile, onEnter) {
     }
     overlay.dataset.mode = 'auth';
 
-    const cards = Object.entries(CLASSES).map(([key, c]) =>
+    const cards = availableClassEntries().map(([key, c]) =>
       '<button class="class-card" data-class="' + key + '">' +
         this.spriteAvatar(key, 'big') +
         '<span class="class-info"><b>' + c.label + ' <span class="role-chip">' + c.role + '</span></b><small>' + c.bonus + '</small></span>' +
@@ -3169,9 +3183,11 @@ showDungeonPopup(tile, onEnter) {
           '<input id="loginName" type="text" maxlength="16" placeholder="Nom d’aventurier…" autocomplete="username">' +
           '<input id="loginPass" type="password" maxlength="64" placeholder="Mot de passe" autocomplete="current-password">' +
           '<button id="loginBtn" class="btn primary wide" disabled>Se connecter</button>' +
+          '<button id="forgotPasswordLink" class="link-btn" type="button">Mot de passe oublié ?</button>' +
         '</div>' +
         '<div id="paneRegister" class="hidden">' +
           '<input id="regName" type="text" maxlength="16" placeholder="Nom d’aventurier (3 caractères min.)" autocomplete="username">' +
+          '<input id="regEmail" type="email" maxlength="254" placeholder="Adresse email" autocomplete="email">' +
           '<input id="regPass" type="password" maxlength="64" placeholder="Mot de passe (4 caractères min.)" autocomplete="new-password">' +
           '<input id="regPass2" type="password" maxlength="64" placeholder="Confirmez le mot de passe" autocomplete="new-password">' +
           '<p id="regHint" class="hp-c small hidden"></p>' +
@@ -3205,13 +3221,16 @@ showDungeonPopup(tile, onEnter) {
     $('loginPass').addEventListener('input', refreshLogin);
     $('loginPass').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitLogin(); });
     $('loginBtn').addEventListener('click', submitLogin);
+    $('forgotPasswordLink').addEventListener('click', () => this.showForgotPassword());
 
     // --- Inscription ---
     let chosen = null;
+    const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const refreshRegister = () => {
       $('registerBtn').disabled =
         !chosen ||
         $('regName').value.trim().length < 3 ||
+        !EMAIL_RE.test($('regEmail').value.trim()) ||
         $('regPass').value.length < 4 ||
         !$('regPass2').value;
     };
@@ -3222,7 +3241,7 @@ showDungeonPopup(tile, onEnter) {
         refreshRegister();
       });
     });
-    for (const id of ['regName', 'regPass', 'regPass2']) {
+    for (const id of ['regName', 'regEmail', 'regPass', 'regPass2']) {
       $(id).addEventListener('input', () => {
         $('regHint').classList.add('hidden');
         refreshRegister();
@@ -3236,14 +3255,162 @@ showDungeonPopup(tile, onEnter) {
       }
       $('registerBtn').disabled = true;
       $('registerBtn').textContent = 'Création…';
-      handlers.register($('regName').value.trim(), $('regPass').value, chosen);
+      handlers.register($('regName').value.trim(), $('regPass').value, chosen, $('regEmail').value.trim());
     });
+  }
+
+  /* ---------- OTP par email (connexion) ----------
+   * Appelé depuis js/main.js sur l'évènement 'otpRequired' — deux variantes
+   * (need-email pour les comptes créés avant l'OTP, otp pour la saisie du
+   * code), toutes deux affichées sur le même overlay #creation. */
+  showOtpStep(data) {
+    const overlay = $('creation');
+    overlay.dataset.mode = 'otp';
+    const isNeedEmail = data.stage === 'need-email';
+    overlay.innerHTML =
+      '<div class="creation-card">' +
+        '<img class="auth-logo" src="assets/feralia_online_logo.png" alt="FERALIA Online">' +
+        (isNeedEmail ?
+          '<h2>Ajoute ton email</h2>' +
+          '<p class="dim small">Ton compte a été créé avant l’ajout de la vérification par email — il en faut une pour continuer à te connecter.</p>' +
+          '<input id="otpEmail" type="email" maxlength="254" placeholder="ton@email.com" autocomplete="email">'
+        :
+          '<h2>Code de connexion</h2>' +
+          '<p class="dim small">Un code a été envoyé à ' + esc(data.email || '') + '.</p>' +
+          (data.devCode ? '<p class="dim small otp-dev-code">Domaine email pas encore configuré — code : <b>' + esc(data.devCode) + '</b></p>' : '') +
+          '<input id="otpCode" type="text" inputmode="numeric" maxlength="6" placeholder="Code à 6 chiffres">'
+        ) +
+        '<p id="otpHint" class="hp-c small hidden"></p>' +
+        '<button id="otpSubmitBtn" class="btn primary wide">' + (isNeedEmail ? 'Continuer' : 'Valider') + '</button>' +
+        (isNeedEmail ? '' : '<button id="otpResendBtn" class="btn wide" type="button">Renvoyer le code</button>') +
+        '<button id="otpBackBtn" class="link-btn" type="button">Retour</button>' +
+      '</div>';
+    overlay.classList.remove('hidden');
+
+    const hint = (msg) => { $('otpHint').textContent = msg; $('otpHint').classList.remove('hidden'); };
+
+    $('otpSubmitBtn').addEventListener('click', async () => {
+      $('otpSubmitBtn').disabled = true;
+      if (isNeedEmail) {
+        const email = $('otpEmail').value.trim();
+        const r = await this.server.setEmail(data.accountId, email);
+        if (!r.ok) { $('otpSubmitBtn').disabled = false; hint(r.error || 'Erreur.'); return; }
+        // Succès : le serveur enchaîne aussitôt sur un nouvel 'otpRequired' (stage 'otp').
+      } else {
+        const code = $('otpCode').value.trim();
+        const r = await this.server.verifyOtp(data.accountId, code);
+        if (!r.ok) { $('otpSubmitBtn').disabled = false; hint(r.error || 'Code invalide.'); return; }
+        // Succès : le serveur enchaîne sur 'init' (voir js/main.js).
+      }
+    });
+
+    if (!isNeedEmail) {
+      let cooldown = false;
+      $('otpResendBtn').addEventListener('click', async () => {
+        if (cooldown) return;
+        cooldown = true;
+        $('otpResendBtn').disabled = true;
+        const r = await this.server.resendOtp(data.accountId);
+        if (r.ok) {
+          this.toast('Code renvoyé.');
+          if (r.devCode) hint('Domaine email pas encore configuré — nouveau code : ' + r.devCode);
+        } else {
+          hint(r.error || 'Erreur.');
+        }
+        setTimeout(() => { cooldown = false; $('otpResendBtn').disabled = false; }, 45000);
+      });
+    }
+
+    $('otpBackBtn').addEventListener('click', () => {
+      overlay.dataset.mode = '';
+      this.showAuth(this._authHandlers);
+    });
+  }
+
+  /* ---------- Mot de passe oublié ---------- */
+  showForgotPassword() {
+    const overlay = $('creation');
+    overlay.dataset.mode = 'forgot';
+    let username = '';
+
+    const renderUsernameStage = () => {
+      overlay.innerHTML =
+        '<div class="creation-card">' +
+          '<img class="auth-logo" src="assets/feralia_online_logo.png" alt="FERALIA Online">' +
+          '<h2>Mot de passe oublié</h2>' +
+          '<p class="dim small">Indique ton nom d’aventurier — si le compte a un email enregistré, un code de réinitialisation lui sera envoyé.</p>' +
+          '<input id="forgotName" type="text" maxlength="16" placeholder="Nom d’aventurier…" autocomplete="username">' +
+          '<p id="forgotHint" class="hp-c small hidden"></p>' +
+          '<button id="forgotSubmitBtn" class="btn primary wide">Envoyer le code</button>' +
+          '<button id="forgotBackBtn" class="link-btn" type="button">Retour</button>' +
+        '</div>';
+      overlay.classList.remove('hidden');
+      const hint = (msg) => { $('forgotHint').textContent = msg; $('forgotHint').classList.remove('hidden'); };
+      $('forgotSubmitBtn').addEventListener('click', async () => {
+        const name = $('forgotName').value.trim();
+        if (!name) return;
+        $('forgotSubmitBtn').disabled = true;
+        const r = await this.server.forgotPassword(name);
+        $('forgotSubmitBtn').disabled = false;
+        if (!r.ok) { hint(r.error || 'Erreur.'); return; }
+        username = name;
+        renderCodeStage(r.message, r.devCode);
+      });
+      $('forgotBackBtn').addEventListener('click', () => { overlay.dataset.mode = ''; this.showAuth(this._authHandlers); });
+    };
+
+    const renderCodeStage = (message, devCode) => {
+      overlay.innerHTML =
+        '<div class="creation-card">' +
+          '<img class="auth-logo" src="assets/feralia_online_logo.png" alt="FERALIA Online">' +
+          '<h2>Nouveau mot de passe</h2>' +
+          '<p class="dim small">' + esc(message || '') + '</p>' +
+          (devCode ? '<p class="dim small otp-dev-code">Domaine email pas encore configuré — code : <b>' + esc(devCode) + '</b></p>' : '') +
+          '<input id="resetCode" type="text" inputmode="numeric" maxlength="6" placeholder="Code à 6 chiffres">' +
+          '<input id="resetPass" type="password" maxlength="64" placeholder="Nouveau mot de passe (4 caractères min.)" autocomplete="new-password">' +
+          '<p id="resetHint" class="hp-c small hidden"></p>' +
+          '<button id="resetSubmitBtn" class="btn primary wide">Réinitialiser</button>' +
+          '<button id="resetResendBtn" class="btn wide" type="button">Renvoyer le code</button>' +
+          '<button id="forgotBackBtn2" class="link-btn" type="button">Retour</button>' +
+        '</div>';
+      overlay.classList.remove('hidden');
+      const hint = (msg) => { $('resetHint').textContent = msg; $('resetHint').classList.remove('hidden'); };
+      $('resetSubmitBtn').addEventListener('click', async () => {
+        const code = $('resetCode').value.trim();
+        const pass = $('resetPass').value;
+        if (!code || pass.length < 4) { hint('Code et mot de passe (4 caractères min.) requis.'); return; }
+        $('resetSubmitBtn').disabled = true;
+        const r = await this.server.resetPassword(username, code, pass);
+        $('resetSubmitBtn').disabled = false;
+        if (!r.ok) { hint(r.error || 'Erreur.'); return; }
+        this.toast('Mot de passe mis à jour — connecte-toi.');
+        overlay.dataset.mode = '';
+        this.showAuth(this._authHandlers);
+      });
+      let cooldown = false;
+      $('resetResendBtn').addEventListener('click', async () => {
+        if (cooldown) return;
+        cooldown = true;
+        $('resetResendBtn').disabled = true;
+        const r = await this.server.resendPasswordReset(username);
+        if (r.ok) {
+          this.toast('Code renvoyé.');
+          if (r.devCode) hint('Domaine email pas encore configuré — nouveau code : ' + r.devCode);
+        } else {
+          hint(r.error || 'Erreur.');
+        }
+        setTimeout(() => { cooldown = false; $('resetResendBtn').disabled = false; }, 45000);
+      });
+      $('forgotBackBtn2').addEventListener('click', () => { overlay.dataset.mode = ''; this.showAuth(this._authHandlers); });
+    };
+
+    renderUsernameStage();
   }
 
   showCreation(onDone) {
     const overlay = $('creation');
     overlay.dataset.mode = 'creation';
-    const cards = Object.entries(CLASSES).map(([key, c]) =>
+    const cards = availableClassEntries().map(([key, c]) =>
       '<button class="class-card" data-class="' + key + '">' +
         this.spriteAvatar(key, 'big') +
         '<span class="class-info"><b>' + c.label + ' <span class="role-chip">' + c.role + '</span></b><small>' + c.bonus + '</small></span>' +

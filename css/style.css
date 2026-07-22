@@ -3209,6 +3209,31 @@ html, body {
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
 }
 .creation-card > p { margin-bottom: 16px; font-size: 13px; }
+.creation-card h2 {
+  position: relative;
+  z-index: 1;
+  margin: 0 0 10px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 19px;
+  font-weight: 700;
+  color: #f4cd6e;
+  text-align: center;
+}
+.otp-dev-code { color: #f4cd6e; }
+.link-btn {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px;
+  border: none;
+  background: none;
+  color: rgba(232, 236, 241, 0.6);
+  font-size: 12.5px;
+  text-align: center;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.link-btn:hover { color: rgba(232, 236, 241, 0.9); }
 .creation-card input {
   width: 100%;
   padding: 13px 14px;

@@ -247,6 +247,7 @@ class ServerSim {
   }
 
   join(username, speciesClass) {
+    if (!classAvailableToRole(speciesClass, 'user')) throw new Error('Classe réservée aux administrateurs.');
     const p = {
       id: this.meId, username, bot: false,
       mapId: 'world',
@@ -297,6 +298,7 @@ class ServerSim {
   createCharacter(speciesClass) {
     const me = this.me;
     if (!CLASSES[speciesClass]) return { ok: false, error: 'Classe invalide.' };
+    if (!classAvailableToRole(speciesClass, me.role)) return { ok: false, error: 'Classe réservée aux administrateurs.' };
     if (me.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
     if (!this.atSanctuary(me)) return { ok: false, error: 'L’éveil d’une nouvelle forme se fait à la Capitale ou dans un village.' };
     if (me.characters.length >= me.charSlots) return { ok: false, error: 'Tous vos emplacements sont occupés.' };
@@ -522,7 +524,7 @@ class ServerSim {
 
   spawnBots() {
     for (let i = 0; i < CONFIG.BOT_COUNT; i++) {
-      const classes = Object.keys(CLASSES);
+      const classes = Object.keys(CLASSES).filter((cls) => classAvailableToRole(cls, 'user'));
       const cls = classes[Math.floor(Math.random() * classes.length)];
       const tier = 1 + Math.floor(Math.random() * 3);
       let x = 0, y = 0, tries = 0;

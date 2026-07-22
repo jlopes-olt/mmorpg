@@ -210,6 +210,7 @@ class Renderer {
     this.worldIcons = { resource: {}, monster: {}, capital: null, village: {}, dungeon: {}, castle: {} };
     this.castleLevels = {};
     this.castleOwners = {};
+    this.castleStats = {};   // terrain -> { hp, hpMax, fortLevel } (null si non revendiqué), voir setCastleInfo
     this.playerSkins = {};
     this.accessorySprites = {};
     this.mountSprites = {};
@@ -227,6 +228,10 @@ class Renderer {
     if (server && typeof server.on === 'function') {
       server.on('ready', () => this.refreshCastleLevels());
     }
+    // Les PV du château évoluent en cours de siège (assauts/réparations) sans
+    // qu'aucun événement dédié ne soit diffusé — un sondage régulier suffit,
+    // pas besoin d'un canal temps réel pour un affichage indicatif sur la carte.
+    if (server) setInterval(() => this.refreshCastleLevels(), 4000);
   }
 
   resize() {
@@ -279,6 +284,13 @@ class Renderer {
       const level = active ? Number(castle.level) || 1 : 0;
       this.castleLevels[castle.terrain] = Math.max(0, Math.min(5, level));
       this.castleOwners[castle.terrain] = (castle.ownerGuildId && castle.ownerGuildName) || null;
+      this.castleStats[castle.terrain] = active
+        ? {
+          hp: Number(castle.hp) || 0,
+          hpMax: Number(castle.hpMax) || 1,
+          fortLevel: Number(castle.fortLevel) || 0,
+        }
+        : null;
     }
   }
 
@@ -1083,7 +1095,8 @@ if (c.kind === 'dungeon') {
         stroke: 'rgba(211, 106, 82, 0.5)',
         glow: 'rgba(211, 106, 82, 0.22)',
       });
-      const level = this.castleLevels[c.terrain || tile.terrain] || 0;
+      const terrainKey = c.terrain || tile.terrain;
+      const level = this.castleLevels[terrainKey] || 0;
       const sprite = this.worldIcons.castle[level] || this.worldIcons.castle[0];
       const drawn = sprite && this.drawWorldSprite(
         sprite,
@@ -1100,9 +1113,13 @@ if (c.kind === 'dungeon') {
         ctx.textBaseline = 'middle';
         ctx.fillText('🏰', cx, cy - 2);
       }
+      const stats = this.castleStats[terrainKey];
+      const owner = this.castleOwners[terrainKey];
+      if (stats) {
+        const topY = drawn ? drawn.topY : cy - size.h + size.groundOffset;
+        this.drawCastleHud(cx, topY, owner, level, stats);
+      }
       this.label(cx, cy + TH2 + 12, 'CHÂTEAU', '#e8a48f', 9);
-      const owner = this.castleOwners[c.terrain || tile.terrain];
-      if (owner) this.label(cx, cy + TH2 + 23, '<' + owner + '>', '#f1e1ad', 9);
       ctx.globalAlpha = 1;
       return;
     }
@@ -1125,7 +1142,11 @@ if (c.kind === 'dungeon') {
       return;
     }
 
-    const inactive = s.now < c.inactiveUntil;
+    // Le boss mondial suit une horloge murale à lui (s.worldBoss, voir
+    // tick()/resolveRaid() côté serveur) — jamais c.inactiveUntil, qui reste
+    // à 0 pour lui (le blocage y passe uniquement côté serveur, dans
+    // createRaid), sinon rien ne le distinguerait visuellement une fois endormi.
+    const inactive = c.worldBoss ? !(s.worldBoss && s.worldBoss.alive) : (s.now < c.inactiveUntil);
     ctx.globalAlpha = (visible ? 1 : 0.35) * (inactive ? 0.4 : 1);
 
     if (c.kind === 'resource') {
@@ -1210,7 +1231,16 @@ if (c.kind === 'dungeon') {
         ctx.fillText(MONSTER_EMOJI[c.tier], cx, cy - 2);
       }
       if (inactive) {
-        this.label(cx, cy + 28, 'REP ' + Math.ceil((c.inactiveUntil - s.now) / 1000) + ' s', '#c8d0da', 9);
+        let repLabel;
+        if (c.worldBoss) {
+          // Horloge murale (heures), pas de simples secondes : 36h de repos.
+          const totalMin = Math.max(0, Math.ceil(((s.worldBoss && s.worldBoss.nextSpawnAt) - Date.now()) / 60000));
+          const h = Math.floor(totalMin / 60), m = totalMin % 60;
+          repLabel = 'REP ' + (h > 0 ? h + 'h ' : '') + m + 'min';
+        } else {
+          repLabel = 'REP ' + Math.ceil((c.inactiveUntil - s.now) / 1000) + ' s';
+        }
+        this.label(cx, cy + 28, repLabel, '#c8d0da', 9);
       } else {
         this.badge(cx, cy + 28, 'T' + c.tier, TIER_COLORS[c.tier]);
       }
@@ -1361,13 +1391,64 @@ if (c.kind === 'dungeon') {
     ctx.restore();
   }
 
+  // Panneau HUD au-dessus d'un château revendiqué : fond sombre + bordure,
+  // pour rester lisible sur n'importe quel terrain (herbe, sable, désert…) —
+  // du texte nu sans fond (version précédente) se noyait dans le décor dès
+  // que la case sous-jacente était claire ou chargée. Regroupe propriétaire,
+  // niveau/renfort (badges colorés) et PV (barre + texte en surimpression)
+  // en un seul repère visuel, plutôt que trois lignes de texte éparses.
+  drawCastleHud(cx, topY, owner, level, stats) {
+    const ctx = this.ctx;
+    const barW = 62, barH = 12;
+    const padX = 8, padY = 7, rowGap = 4;
+    const ownerRowH = owner ? 12 : 0;
+    const badgeRowH = 16;
+    const panelW = Math.max(barW, 100) + padX * 2;
+    const panelH = padY * 2 + ownerRowH + (owner ? rowGap : 0) + badgeRowH + rowGap + barH;
+    const panelTop = topY - 8 - panelH;
+    const left = cx - panelW / 2;
+
+    ctx.fillStyle = 'rgba(12,15,20,0.8)';
+    this.roundRect(left, panelTop, panelW, panelH, 9);
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(232,164,143,0.55)';
+    this.roundRect(left, panelTop, panelW, panelH, 9);
+    ctx.stroke();
+
+    let y = panelTop + padY;
+    if (owner) {
+      this.label(cx, y + ownerRowH / 2, '<' + owner + '>', '#f1e1ad', 9);
+      y += ownerRowH + rowGap;
+    }
+
+    this.badge(cx - 20, y + badgeRowH / 2, 'Nv ' + level, TIER_COLORS[level] || '#9aa5b1');
+    this.badge(cx + 20, y + badgeRowH / 2, '🛡 ' + stats.fortLevel, '#5f96b8');
+    y += badgeRowH + rowGap;
+
+    const frac = stats.hpMax > 0 ? Math.max(0, Math.min(1, stats.hp / stats.hpMax)) : 0;
+    const color = frac > 0.5 ? '#58b368' : frac > 0.2 ? '#e8b23f' : '#d15757';
+    ctx.fillStyle = 'rgba(20,24,29,0.9)';
+    ctx.fillRect(cx - barW / 2, y, barW, barH);
+    ctx.fillStyle = color;
+    ctx.fillRect(cx - barW / 2 + 1, y + 1, Math.max(0, (barW - 2) * frac), barH - 2);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.strokeRect(cx - barW / 2 + 0.5, y + 0.5, barW - 1, barH - 1);
+    this.label(cx, y + barH / 2 + 0.5, Math.round(stats.hp) + '/' + stats.hpMax + ' PV', '#f5f7fa', 8);
+  }
+
+  // Largeur dynamique (mesurée) plutôt que fixe : les badges château
+  // ("Nv 5", "🛡 3") sont plus longs que les badges tier monstre ("T6") qui
+  // utilisent aussi ce helper — un pill trop étroit tronquerait leur texte.
   badge(cx, cy, text, color) {
     const ctx = this.ctx;
+    ctx.font = '800 8px system-ui, sans-serif';
+    const w = Math.max(22, ctx.measureText(text).width + 10);
     ctx.fillStyle = color;
-    this.roundRect(cx - 11, cy - 6, 22, 12, 6);
+    this.roundRect(cx - w / 2, cy - 6, w, 12, 6);
     ctx.fill();
     ctx.fillStyle = '#14181d';
-    ctx.font = '800 8px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(text, cx, cy + 0.5);

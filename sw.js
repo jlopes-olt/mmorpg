@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v67-mount-skin-prices';
+const VERSION = 'wildrift-v72-siege-window';
 
 const CORE = [
   '/',
