@@ -105,7 +105,30 @@ class UI {
       if (!r.ok) this.toast(r.error);
     });
     $('lobbyDeployEngine').addEventListener('click', () => this.showDeployEnginePicker());
-    $('popup').addEventListener('click', (e) => {
+
+    // Anti-« clic fantôme » mobile : un tap qui ouvre une popup (menu de
+    // téléportation depuis un village, récolte, raid…) peut être suivi par un
+    // clic synthétique du navigateur au même point d'écran, qui tombe alors
+    // sur le bouton qui vient d'apparaître sous le doigt (ex : le premier choix
+    // de téléportation) et déclenche l'action sans que le joueur l'ait
+    // vraiment choisie — d'où le rapport « ça me téléporte d'office ». Le
+    // MutationObserver capte l'ouverture de N'IMPORTE quelle popup (elles ne
+    // passent pas toutes par popup(), voir showVillagePopup et consorts) sans
+    // avoir à instrumenter chaque constructeur ; le listener en phase de
+    // capture s'exécute avant tout listener 'click' posé sur un bouton du
+    // contenu et avale l'évènement tant qu'on est sous ce délai.
+    const popupEl = $('popup');
+    this.popupOpenedAt = 0;
+    new MutationObserver(() => { this.popupOpenedAt = Date.now(); }).observe(popupEl, { childList: true });
+    const GHOST_CLICK_GUARD_MS = 400;
+    popupEl.addEventListener('click', (e) => {
+      if (Date.now() - this.popupOpenedAt < GHOST_CLICK_GUARD_MS) {
+        e.stopPropagation();
+        e.preventDefault();
+      }
+    }, true);
+
+    popupEl.addEventListener('click', (e) => {
       if (e.target.id === 'popup' && this.popupMode !== 'trade') this.closePopup();
     });
     document.querySelectorAll('#nav button').forEach((btn) => {

@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v75-regain-v3';
+const VERSION = 'wildrift-v76-ghostclick';
 
 const CORE = [
   '/',
