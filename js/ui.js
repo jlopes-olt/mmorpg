@@ -68,14 +68,12 @@ class UI {
       RAGOUT: 'assets/item_ragout_du_chasseur.png',
       BOUILLON: 'assets/item_bouillon_decailles.png',
       POTION_SEVE: 'assets/item_potion_de_seve.png',
-      PARCHEMIN_ENDURANCE: 'assets/item_parchemin_endurance.png',
     };
     this.currencyIconSrc = {
       gold: 'assets/currency_gold.png',
       premium: 'assets/currency_moon_scale.png',
     };
     this.harvestFxTimer = null;
-    this.inventoryCooldownTimer = null;
     this.popupMode = null;
     this.tradeDraft = null;
     this.tradeUiState = { filter: 'ALL', scrollTop: 0 };
@@ -221,7 +219,7 @@ class UI {
     });
   }
 
-  /* ---------- Notifications push (Endurance pleine, siège, ami, MP) ---------- */
+  /* ---------- Notifications push (Regain au maximum, siège, ami, MP) ---------- */
   async checkPushSupport() {
     this.pushSupported = !!(this.server.remote && typeof Notification !== 'undefined' &&
       'serviceWorker' in navigator && 'PushManager' in window);
@@ -1081,10 +1079,15 @@ showDungeonPopup(tile, onEnter) {
     $('hpFill').style.width = (100 * me.hp / mhp) + '%';
     $('hpText').textContent = me.hp + ' / ' + mhp + ' PV';
     $('paFill').style.width = (100 * me.pa / CONFIG.PA.MAX) + '%';
-    $('paText').textContent = me.pa + ' / ' + CONFIG.PA.MAX + ' PA';
+    $('paText').textContent = me.pa + ' / ' + CONFIG.PA.MAX + ' Regain';
     $('posText').textContent = '(' + me.pos.x + ', ' + me.pos.y + ')';
-    const nextIn = Math.ceil((CONFIG.PA.REGEN_MS - me.paMs) / 1000);
-    $('paNext').textContent = me.pa >= CONFIG.PA.MAX ? 'PA max' : '+1 PA dans ' + nextIn + ' s';
+    // Intervalle de regen en minutes (6 min/point) : un compte à rebours en
+    // secondes serait illisible sur une aussi longue période.
+    const nextInSec = Math.ceil((CONFIG.PA.REGEN_MS - me.paMs) / 1000);
+    const nextMin = Math.floor(nextInSec / 60), nextSec = nextInSec % 60;
+    $('paNext').textContent = me.pa >= CONFIG.PA.MAX
+      ? 'Regain max'
+      : '+1 Regain dans ' + nextMin + ' min ' + String(nextSec).padStart(2, '0') + ' s';
 
     // Bouton contextuel : PNJ de la Capitale (monde uniquement — l'entrée
     // d'un donjon est aussi en (0,0))
@@ -1515,12 +1518,12 @@ showDungeonPopup(tile, onEnter) {
         const pf = parseStackKey(r.food);
         lines.push('<p><span class="battle-label">Trouvaille</span> ' + (RESOURCE_EMOJI[pf.type] || '❔') + ' 1× ' + resourceLabel(pf.type, pf.tier) + '</p>');
       }
-      lines.push('<p><span class="battle-label">Maîtrise</span> +' + r.xp + ' XP d’arme</p>');
+      lines.push('<p><span class="battle-label">Maîtrise</span> +' + r.xp + ' XP d’arme' +
+        (r.regainBoosted ? ' <span class="ok-c">(✨ Regain : doublée)</span>' : '') + '</p>');
       if (r.worldBoss && r.worldBossBonus) {
         const b = r.worldBossBonus;
         const bonusBits = [];
         if (b.moonstones) bonusBits.push('+' + b.moonstones + ' ' + PREMIUM_CURRENCY.label.toLowerCase());
-        if (b.paScroll) bonusBits.push('1× Parchemin d’Endurance');
         if (bonusBits.length) lines.push('<p class="ok-c"><span class="battle-label">Butin rare</span> ' + esc(bonusBits.join(' · ')) + '</p>');
         if (b.accessory) {
           const accessory = ACCESSORY_ITEMS[WORLD_BOSS.accessoryId];
@@ -1670,7 +1673,6 @@ showDungeonPopup(tile, onEnter) {
       return;
     }
     this.openSheet = name;
-    this.stopInventoryCooldownTimer();
     const titles = { inventory: 'Inventaire', shop: 'Boutique', profile: 'Profil', map: 'Carte du monde', social: 'Social', capital: 'Capitale — PNJ Artisans', marmite: 'La Marmite — Cuisine' };
     $('sheetTitle').textContent = titles[name];
     const body = $('sheetBody');
@@ -1681,7 +1683,6 @@ showDungeonPopup(tile, onEnter) {
   }
 
   closeSheet() {
-    this.stopInventoryCooldownTimer();
     this.openSheet = null;
     $('sheet').classList.add('hidden');
     document.querySelectorAll('#nav button').forEach((b) => b.classList.remove('active'));
@@ -1794,7 +1795,7 @@ showDungeonPopup(tile, onEnter) {
       '</div>';
     const keys = Object.keys(inv).sort();
     if (!keys.length) {
-      body.innerHTML = goldHtml + '<p class="empty">Inventaire vide. Récoltez des ressources sur la carte (2 PA).</p>';
+      body.innerHTML = goldHtml + '<p class="empty">Inventaire vide. Récoltez des ressources sur la carte.</p>';
       return;
     }
     const typeOrder = {
@@ -1827,22 +1828,17 @@ showDungeonPopup(tile, onEnter) {
       const cons = CONSUMABLES[p.type];
       if (cons) {
         const consSrc = this.getConsumableTargetSrc(p.type);
-        const isPaScroll = p.type === 'PARCHEMIN_ENDURANCE';
-        const cooldownMs = isPaScroll ? this.paScrollCooldownRemaining() : 0;
-        return '<button class="inv-card inv-consumable' + (cooldownMs > 0 ? ' is-cooling-down' : '') + '" data-consume="' + k + '"' +
-          (isPaScroll ? ' data-pa-scroll-cooldown' : '') + (cooldownMs > 0 ? ' disabled' : '') + '>' +
+        return '<button class="inv-card inv-consumable" data-consume="' + k + '">' +
           '<div class="inv-card-art-wrap">' +
             (consSrc
               ? '<img class="inv-card-art" src="' + consSrc + '" alt="">'
               : '<span class="inv-card-emoji">' + cons.icon + '</span>') +
             '<span class="tier t' + p.tier + ' inv-card-tier">T' + p.tier + '</span>' +
-            (isPaScroll ? '<span class="inv-cooldown-badge" data-cooldown-label>' +
-              (cooldownMs > 0 ? 'Recharge ' + this.formatCooldown(cooldownMs) : 'Disponible') + '</span>' : '') +
           '</div>' +
           '<div class="inv-card-name">' + cons.label + '</div>' +
           '<div class="inv-card-meta">' + consumableDesc(p.type, p.tier) + '</div>' +
           '<div class="inv-card-qty">×' + inv[k] + '</div>' +
-          '<div class="inv-card-use" data-consume-label>' + (cooldownMs > 0 ? 'En recharge' : 'Utiliser') + '</div>' +
+          '<div class="inv-card-use">Utiliser</div>' +
         '</button>';
       }
 
@@ -1906,51 +1902,6 @@ showDungeonPopup(tile, onEnter) {
         );
       });
     });
-    this.startInventoryCooldownTimer(body);
-  }
-
-  paScrollCooldownRemaining() {
-    const me = this.server.me;
-    const lastUsedAt = Number(me && me.lastPaScrollAt);
-    if (!Number.isFinite(lastUsedAt)) return 0;
-    return Math.max(0, PA_SCROLL_COOLDOWN_MS - (this.server.now - lastUsedAt));
-  }
-
-  formatCooldown(ms) {
-    const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-    return [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':');
-  }
-
-  startInventoryCooldownTimer(body) {
-    const card = body.querySelector('[data-pa-scroll-cooldown]');
-    if (!card) return;
-    const update = () => {
-      if (this.openSheet !== 'inventory' || !card.isConnected) {
-        this.stopInventoryCooldownTimer();
-        return;
-      }
-      const remainingMs = this.paScrollCooldownRemaining();
-      const badge = card.querySelector('[data-cooldown-label]');
-      const action = card.querySelector('[data-consume-label]');
-      const coolingDown = remainingMs > 0;
-      card.disabled = coolingDown;
-      card.classList.toggle('is-cooling-down', coolingDown);
-      if (badge) badge.textContent = coolingDown ? 'Recharge ' + this.formatCooldown(remainingMs) : 'Disponible';
-      if (action) action.textContent = coolingDown ? 'En recharge' : 'Utiliser';
-      if (!coolingDown) this.stopInventoryCooldownTimer();
-    };
-    update();
-    if (!card.disabled) return;
-    this.inventoryCooldownTimer = setInterval(update, 1000);
-  }
-
-  stopInventoryCooldownTimer() {
-    if (!this.inventoryCooldownTimer) return;
-    clearInterval(this.inventoryCooldownTimer);
-    this.inventoryCooldownTimer = null;
   }
 
   build_shop(body) {
@@ -1975,7 +1926,6 @@ showDungeonPopup(tile, onEnter) {
         '<div class="upg-head"><b>Obtenir des pièces d’or</b><span class="dim">Contre des ' + PREMIUM_CURRENCY.label + '</span></div>' +
         '<div class="shop-packs gold-packs">' + GOLD_PACKS.map((pack) => this.goldPackCard(pack)).join('') + '</div>' +
       '</div>' +
-      this.paScrollCardHtml(me) +
       '<div class="shop-section">' +
         '<div class="upg-head"><b>Garde-robe des aventuriers</b><span class="dim">Skins contre or</span></div>' +
         '<div class="shop-grid">' + goldSkins.map((item) => this.shopSkinCard(me, item)).join('') + '</div>' +
@@ -2030,14 +1980,6 @@ showDungeonPopup(tile, onEnter) {
         if (r.ok) this.showSheet('shop');
       });
     });
-    const paScrollBtn = body.querySelector('[data-buy-pa-scroll]');
-    if (paScrollBtn) {
-      paScrollBtn.addEventListener('click', async () => {
-        const r = await Promise.resolve(this.server.buyPaScroll());
-        this.toast(r.ok ? '📜 Parchemin ajouté à l’inventaire.' : r.error);
-        if (r.ok) this.showSheet('shop');
-      });
-    }
   }
 
   moonstonePackCard(pack) {
@@ -2062,21 +2004,6 @@ showDungeonPopup(tile, onEnter) {
         pack.moonstones + ' ' + this.currencyIcon('premium', 'small') +
       '</button>' +
     '</article>';
-  }
-
-  // Simple carte d'achat : le parchemin part en inventaire, pas d'effet
-  // immédiat — le cooldown d'utilisation s'affiche/s'applique depuis
-  // l'Inventaire (voir build_inventory), pas ici.
-  paScrollCardHtml(me) {
-    const canAfford = Number(me[PREMIUM_CURRENCY.key] || 0) >= PA_SCROLL_COST_MOONSTONES;
-    return '<div class="upg pa-scroll-card">' +
-      '<img class="pa-scroll-art" src="' + this.getConsumableTargetSrc('PARCHEMIN_ENDURANCE') + '" alt="Parchemin d’Endurance">' +
-      '<div class="pa-scroll-copy">' +
-        '<div class="upg-head"><b>Parchemin d’Endurance</b><span class="dim small">' + PA_SCROLL_COST_MOONSTONES + ' ' + this.currencyIcon('premium', 'small') + '</span></div>' +
-        '<p class="dim small">Recharge l’Endurance au maximum quand vous l’utilisez depuis l’Inventaire — limité à 1-2 utilisations par jour.</p>' +
-        '<button class="btn primary wide" data-buy-pa-scroll' + (canAfford ? '' : ' disabled') + '>Acheter</button>' +
-      '</div>' +
-    '</div>';
   }
 
   shopSkinCard(me, item) {
@@ -2255,7 +2182,7 @@ showDungeonPopup(tile, onEnter) {
       (this.pushSupported ?
         '<div class="section-divider">✦</div>' +
         '<div class="profile-sec-title">Notifications</div>' +
-        '<p class="dim small">Endurance pleine, résultat de siège, demande d’ami, message privé — même app fermée.</p>' +
+        '<p class="dim small">Regain au maximum, résultat de siège, demande d’ami, message privé — même app fermée.</p>' +
         '<button id="pushToggleBtn" class="btn wide">' +
           (this.pushSubscribed ? '🔕 Désactiver les notifications' : '🔔 Activer les notifications') +
         '</button>'
@@ -2544,7 +2471,7 @@ showDungeonPopup(tile, onEnter) {
     return '<div class="chars-section">' +
       '<div class="profile-sec-title">Mes personnages <span class="sec-count">' +
         me.characters.length + ' / ' + me.charSlots + '</span></div>' +
-      '<p class="dim small">PA, PV et inventaire sont partagés ; chaque forme garde ses maîtrises et son équipement. ' +
+      '<p class="dim small">Regain, PV et inventaire sont partagés ; chaque forme garde ses maîtrises et son équipement. ' +
       'La métamorphose se fait à la Capitale ou dans un village.</p>' +
       '<div class="char-list">' + cards.join('') + '</div>' +
     '</div>';
@@ -3029,7 +2956,6 @@ showDungeonPopup(tile, onEnter) {
         '<p class="dim">Tier maximum atteint.</p></div></div>';
     }
     const recipe = UPGRADE_RECIPES[slot][target];
-    const paCost = CONFIG.COSTS.UPGRADE[target];
     let allOk = true;
     const needs = Object.entries(recipe).map(([k, n]) => {
       const p = parseStackKey(k);
@@ -3041,8 +2967,6 @@ showDungeonPopup(tile, onEnter) {
     });
     const masteryOk = me.weaponMastery >= target;
     if (!masteryOk) allOk = false;
-    const paOk = me.pa >= paCost;
-    if (!paOk) allOk = false;
 
     return '<div class="upg equipment-upgrade-card">' +
       '<img class="equipment-art" src="' + art + '" alt="' + esc(name) + '">' +
@@ -3050,9 +2974,8 @@ showDungeonPopup(tile, onEnter) {
         '<div class="upg-head"><b>' + name + '</b><span><span class="tier t' + item.tier + '">T' + item.tier + '</span> → <span class="tier t' + target + '">T' + target + '</span></span></div>' +
         '<ul class="upg-needs">' + needs.join('') +
           '<li class="' + (masteryOk ? 'ok-c' : 'hp-c') + '">Maîtrise d’arme T' + target + ' <span class="dim">(actuelle : T' + me.weaponMastery + ')</span></li>' +
-          '<li class="' + (paOk ? 'ok-c' : 'hp-c') + '">' + paCost + ' PA</li>' +
         '</ul>' +
-        '<button class="btn primary wide" data-upgrade="' + slot + '"' + (allOk ? '' : ' disabled') + '>⚒ Améliorer (' + paCost + ' PA)</button>' +
+        '<button class="btn primary wide" data-upgrade="' + slot + '"' + (allOk ? '' : ' disabled') + '>⚒ Améliorer</button>' +
       '</div>' +
     '</div>';
   }

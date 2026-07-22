@@ -22,17 +22,17 @@ const CONFIG = {
   // (caméra toujours verrouillée sur le héros) sans toucher au reste du code.
   CAMERA_PAN_ENABLED: true,
 
-  // Plafond pensé pour 1-3 sessions/jour : un réservoir vide se remplit en
-  // 12h (720 min à +1/min), donc personne n'a besoin de se reconnecter
-  // toutes les 2-3h pour ne pas « perdre » de PA en dépassant le plafond.
-  PA: { MAX: 720, START: 720, REGEN_MS: 60000 },   // +1 PA / min
+  // Regain (ex-PA) : ne bloque plus aucune action (voir consumeRegainBonus
+  // côté serveur) — un stock disponible double simplement l'XP de récolte/raid
+  // au lieu de gater l'accès à l'action. Plafond volontairement petit et
+  // rapide à remplir (~6h à vide) : un « gros bonus rare » à la connexion,
+  // pas un réservoir qu'on doit économiser pour continuer à jouer.
+  PA: { MAX: 60, START: 60, REGEN_MS: 360000 },    // +1 Regain / 6 min
   HP: { REGEN_MS: 30000 },                         // +1 PV / 30 s
 
   COSTS: {
-    MOVE: 1,
-    HARVEST: 2,
-    RAID: 5,                                       // créer OU rejoindre un lobby
-    UPGRADE: { 1: 5, 2: 10, 3: 25, 4: 50, 5: 100, 6: 280 }, // PA par tier cible
+    HARVEST: 2,   // Regain consommé pour doubler l'XP de récolte, si dispo
+    RAID: 5,      // Regain consommé pour doubler l'XP de raid, si dispo
   },
 
   HARVEST_MS: 3000,
@@ -271,13 +271,6 @@ const GOLD_PACKS = [
   { id: 'hoard', gold: 7500, moonstones: 40, bonusLabel: '+25 %' },
 ];
 
-// Parchemin d'Endurance : recharge les PA au maximum instantanément, payé en
-// Écailles Lunaires (monnaie premium plutôt que l'or, pour ne pas dépendre
-// d'une économie d'or qui peut devenir abondante) — un cooldown borne
-// volontairement l'usage à 1-2 fois par jour pour éviter le pay-to-win.
-const PA_SCROLL_COST_MOONSTONES = 5;
-const PA_SCROLL_COOLDOWN_MS = 12 * 60 * 60 * 1000;
-
 const SKIN_ASSET_REV = '20260721-flip';
 
 const CLASS_SKIN_SCALE = {
@@ -474,7 +467,6 @@ const WORLD_BOSS = {
   moonstoneChance: 0.25,
   moonstoneMin: 1,
   moonstoneMax: 2,
-  paScrollChance: 0.08,
   accessoryChance: 0.02,
   accessoryId: 'wyrm_wings',
   mountChance: 0.01,
@@ -613,11 +605,6 @@ const CONSUMABLES = {
   RAGOUT:      { label: 'Ragoût du chasseur', icon: '🍲', kind: 'buff',    role: 'Offensif' },
   BOUILLON:    { label: 'Bouillon d’écailles', icon: '🛡️', kind: 'buff',    role: 'Défensif' },
   POTION_SEVE: { label: 'Potion de sève',      icon: '❤️', kind: 'instant', role: 'Soin' },
-  // Acheté à la Boutique contre des Écailles Lunaires (pas cuisiné à la
-  // Marmite comme les trois plats ci-dessus) — stocké en inventaire, utilisé
-  // quand on veut. Le cooldown (voir PA_SCROLL_COOLDOWN_MS) s'applique à
-  // l'UTILISATION, pas à l'achat : on peut en garder plusieurs en réserve.
-  PARCHEMIN_ENDURANCE: { label: 'Parchemin d’Endurance', icon: '📜', kind: 'pa_refill', role: 'Recharge PA' },
 };
 
 /* Effets par tier : RAGOUT = +puissance, BOUILLON = −usure de PV,
@@ -643,10 +630,6 @@ const CONSUMABLE_RECIPES = {
 };
 
 function consumableDesc(type, tier) {
-  if (type === 'PARCHEMIN_ENDURANCE') {
-    return 'Recharge l’Endurance au maximum (' + CONFIG.PA.MAX + ' PA) — 1 utilisation toutes les ' +
-      Math.round(PA_SCROLL_COOLDOWN_MS / 3600000) + ' h maximum';
-  }
   const pct = Math.round(CONSUMABLE_EFFECTS[type][tier] * 100);
   if (type === 'RAGOUT') return '+' + pct + ' % de puissance pendant ' + BUFF_COMBATS + ' combats';
   if (type === 'BOUILLON') return '−' + pct + ' % d’usure de PV pendant ' + BUFF_COMBATS + ' combats';
@@ -878,7 +861,7 @@ if (typeof module !== 'undefined' && module.exports) {
     CASTLE_MAX_FORT_LEVEL, CASTLE_FORTIFY_COST_GOLD, CASTLE_FORTIFY_BONUS_PER_LEVEL, CASTLE_FORTIFY_RESOURCES,
     TERRAINS, TIER_COLORS, XP_LEVELS, UPGRADE_RECIPES, SPRITE_CELLS,
     RESOURCE_EMOJI, MONSTER_EMOJI, CHARACTER_FIELDS,
-    PREMIUM_CURRENCY, MOONSTONE_PACKS, GOLD_PACKS, PA_SCROLL_COST_MOONSTONES, PA_SCROLL_COOLDOWN_MS, VAPID_PUBLIC_KEY,
+    PREMIUM_CURRENCY, MOONSTONE_PACKS, GOLD_PACKS, VAPID_PUBLIC_KEY,
     SKIN_SHOP_ITEMS, SKIN_BY_ID, SKIN_ASSET_REV, CLASS_SKIN_SCALE, SKIN_OFFSET_X, CLASS_BASE_SKINS,
     WORLD_BOSS, ACCESSORY_ITEMS, MOUNT_ITEMS, MOUNT_SADDLE_PROP,
     skinFor, skinAssetUrl, classSkinScale, baseSkinAsset, equipmentAsset, classAvailableToRole,

@@ -83,6 +83,13 @@ function maskEmail(email) {
   return maskedUser + s.slice(at);
 }
 
+// Tant que RESEND_FROM_EMAIL n'a pas été configuré vers un domaine vérifié,
+// l'adresse sandbox par défaut de Resend ne délivre en général qu'à
+// l'adresse du compte Resend lui-même — mais l'API répond quand même 200 OK
+// pour n'importe quel destinataire. On ne peut donc PAS se fier à un envoi
+// « réussi » pour savoir si un joueur quelconque recevra vraiment l'email.
+const USING_SANDBOX_SENDER = RESEND_FROM_EMAIL.includes('resend.dev');
+
 async function sendOtpEmail(to, code, kind) {
   const subject = kind === 'reset' ? 'Code de réinitialisation — FERALIA Online' : 'Code de connexion — FERALIA Online';
   const intro = kind === 'reset'
@@ -110,6 +117,14 @@ async function sendOtpEmail(to, code, kind) {
       console.error('Échec envoi email Resend (' + res.status + ') : ' + (await res.text().catch(() => '')));
       console.log('[Repli — envoi échoué] Code ' + kind + ' pour ' + to + ' : ' + code);
       return { sent: false, devFallback: true };
+    }
+    // Resend renvoie 200 même quand l'adresse sandbox ne délivrera pas
+    // vraiment à ce destinataire (voir USING_SANDBOX_SENDER) — on affiche
+    // quand même le code par sécurité tant qu'aucun domaine n'est vérifié,
+    // sans quoi un joueur pourrait ne jamais recevoir son code nulle part.
+    if (USING_SANDBOX_SENDER) {
+      console.log('[Repli — domaine non vérifié] Code ' + kind + ' pour ' + to + ' : ' + code);
+      return { sent: true, devFallback: true };
     }
     return { sent: true, devFallback: false };
   } catch (e) {
@@ -186,16 +201,11 @@ function saveAccountOf(p) {
   }
 }
 
-// Identifiants valides (register()/login() déjà ok) → ce qui reste avant
-// finishAuth() : email manquant (comptes créés avant l'OTP, voir
-// game.js/load()) ou OTP à saisir. justRegistered traverse jusqu'à
-// finishAuth() pour préserver la distinction « bienvenue » / « de retour ».
-async function beginOtpFlow(socket, p, justRegistered) {
-  if (!p.email) {
-    socket.emit('otpRequired', { accountId: p.id, stage: 'need-email' });
-    return;
-  }
-  const { code } = game.beginLoginOtp(p, { justRegistered });
+// OTP requis uniquement à la création de compte (voir 'register' plus bas) —
+// les reconnexions ultérieures (mot de passe, token stocké) n'en redemandent
+// plus, seule l'inscription vérifie que l'email fourni est le bon.
+async function beginOtpFlow(socket, p) {
+  const { code } = game.beginLoginOtp(p, { justRegistered: true });
   const sendRes = await sendOtpEmail(p.email, code, 'login');
   socket.emit('otpRequired', {
     accountId: p.id,
@@ -454,24 +464,29 @@ io.on('connection', (socket) => {
   socket.on('register', async (data) => {
     const res = game.register(data || {});
     if (!res.ok) { socket.emit('creation', { error: res.error }); return; }
-    await beginOtpFlow(socket, res.player, true);
+    await beginOtpFlow(socket, res.player);
   });
 
-  socket.on('login', async (data) => {
+  socket.on('login', (data) => {
     const res = game.login(data || {});
     if (!res.ok) { socket.emit('creation', { error: res.error }); return; }
-    await beginOtpFlow(socket, res.player, false);
+    // Comptes créés avant l'email obligatoire : on force juste son ajout
+    // (nécessaire pour "mot de passe oublié"), sans code OTP — l'OTP ne sert
+    // plus qu'à la création de compte, pas aux reconnexions.
+    if (!res.player.email) { socket.emit('otpRequired', { accountId: res.player.id, stage: 'need-email' }); return; }
+    finishAuth(res.player, false);
   });
 
-  // --- Étapes intermédiaires avant finishAuth() : email manquant (comptes
-  // créés avant l'OTP) puis code reçu par email. Pas de wrapper act() ici :
-  // ces échanges précèdent l'authentification, `player` n'est pas encore posé. ---
-  socket.on('auth:setEmail', async (data, ack) => {
+  // --- Étape intermédiaire avant finishAuth() pour les comptes créés avant
+  // l'email obligatoire : ajout de l'email, sans OTP (voir 'login' ci-dessus).
+  // Pas de wrapper act() ici : cet échange précède l'authentification,
+  // `player` n'est pas encore posé. ---
+  socket.on('auth:setEmail', (data, ack) => {
     if (typeof ack !== 'function') ack = () => {};
     const res = game.setAccountEmail(String((data && data.accountId) || ''), data && data.email);
     if (!res.ok) { ack(res); return; }
-    await beginOtpFlow(socket, res.player, false);
     ack({ ok: true });
+    finishAuth(res.player, false);
   });
 
   socket.on('auth:verifyOtp', (data, ack) => {
@@ -556,7 +571,6 @@ io.on('connection', (socket) => {
   socket.on('shop:equipSkin', act((d) => game.equipSkin(player, d.skinId ? String(d.skinId) : null)));
   socket.on('accessory:equip', act((d) => game.equipAccessory(player, d.accessoryId ? String(d.accessoryId) : null)));
   socket.on('mount:equip', act((d) => game.equipMount(player, d.mountId ? String(d.mountId) : null)));
-  socket.on('shop:buyPaScroll', act(() => game.buyPaScroll(player)));
   socket.on('shop:buyGoldPack', act((d) => game.buyGoldPack(player, String(d.packId || ''))));
   socket.on('shop:checkoutLink', act((d) => buildCheckoutLink(player, String(d.packId || ''))));
   socket.on('push:subscribe', act((d) => {
@@ -662,9 +676,9 @@ io.on('connection', (socket) => {
 
 /* ---------- Boucles serveur ---------- */
 setInterval(() => game.tick(TICK_MS), TICK_MS);
-// Notifs push « Endurance pleine » : vérifiées indépendamment de la boucle de
-// jeu (qui ne fait progresser les PA que des comptes en ligne) — 30 s suffit,
-// ce n'est pas une action sensible au timing comme le reste du jeu.
+// Notifs push « Regain au maximum » : vérifiées indépendamment de la boucle de
+// jeu (qui ne fait progresser le Regain que des comptes en ligne) — 30 s
+// suffit, ce n'est pas une action sensible au timing comme le reste du jeu.
 setInterval(() => game.checkPaFullNotifications(), 30000);
 setInterval(() => io.emit('players', game.publicPlayers()), 500);
 setInterval(() => io.emit('raids', game.raidsPayload()), 500);

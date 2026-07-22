@@ -14,7 +14,7 @@ const {
   CASTLE_DAMAGE_PER_ASSAULT, CASTLE_ZONE_GOLD_BONUS,
   SIEGE_ENGINE_ITEM, SIEGE_ENGINE_RECIPES, SIEGE_ENGINE_FORCE, SIEGE_ENGINE_DAMAGE,
   CASTLE_FORTIFY_COST_GOLD, CASTLE_FORTIFY_BONUS_PER_LEVEL, stackKey,
-  PREMIUM_CURRENCY, GOLD_PACKS, PA_SCROLL_COST_MOONSTONES, PA_SCROLL_COOLDOWN_MS,
+  PREMIUM_CURRENCY, GOLD_PACKS,
   MOUNT_ITEMS,
 } = require('../js/config.js');
 const { ACHIEVEMENTS } = require('../js/achievements.js');
@@ -64,12 +64,11 @@ for (const [dx, dy] of [[1, 0], [0, 1], [-1, 0], [0, -1]]) {
   if (g.move(alice, dx, dy).ok) { moved = true; break; }
 }
 assert.ok(moved, 'déplacement');
-assert.strictEqual(alice.pa, CONFIG.PA.START - 1, '1 PA par case');
+assert.strictEqual(alice.pa, CONFIG.PA.START, 'déplacement gratuit — Regain inchangé');
 
 // --- Progression T0 -> T5 cohérente ---
 assert.strictEqual(alice.weapon.tier, 0, 'arme de départ T0');
 assert.strictEqual(alice.armor.tier, 0, 'armure de départ T0');
-assert.ok(Object.keys(CONFIG.COSTS.UPGRADE).includes('1'), 'craft T1 disponible');
 assert.ok(g.tiles, 'monde initialisé');
 
 for (let target = 1; target <= 5; target++) {
@@ -898,45 +897,61 @@ const expectedGold = Math.ceil((3 + foretMob.content.tier * 4) * CASTLE_ZONE_GOL
 assert.strictEqual(zoneResult.gold, expectedGold, 'or bonifié de +' + Math.round((CASTLE_ZONE_GOLD_BONUS - 1) * 100) + ' % pour la guilde propriétaire de la zone');
 console.log('Bonus de zone : or bonifié pour la guilde propriétaire ✔');
 
-// --- Parchemin d'Endurance : achat en inventaire (sans limite), utilisation cooldownée 1-2/jour ---
-alice.status = 'IDLE';
+// --- Regain (ex-PA) : ne bloque plus jamais récolte/raid, double juste l'XP ---
+// Récolte : Regain disponible → XP doublée, coût prélevé comme avant.
+let boostNode = null;
+for (const t of g.tiles.values()) {
+  if (t.content && t.content.kind === 'resource' && t.content.tier === 1 &&
+      t.content.inactiveUntil <= g.now && (t.x !== node.x || t.y !== node.y)) { boostNode = t; break; }
+}
+assert.ok(boostNode, 'un second gisement T1 est disponible pour le test de Regain');
+alice.pos = { x: boostNode.x - 1, y: boostNode.y };
 alice.pa = 10;
-alice[PREMIUM_CURRENCY.key] = 2;
-const scrollKey = stackKey('PARCHEMIN_ENDURANCE', 1);
-delete alice.inventory[scrollKey];
-let paScrollRes = g.buyPaScroll(alice);
-assert.ok(!paScrollRes.ok, 'achat refusé sans assez de monnaie premium');
-alice[PREMIUM_CURRENCY.key] = PA_SCROLL_COST_MOONSTONES * 3;
-paScrollRes = g.buyPaScroll(alice);
-assert.ok(paScrollRes.ok, 'achat réussi avec assez de monnaie premium');
-assert.strictEqual(alice.inventory[scrollKey], 1, 'le parchemin est stocké en inventaire, pas utilisé immédiatement');
-assert.strictEqual(alice.pa, 10, 'l’achat seul ne recharge pas l’endurance');
-paScrollRes = g.buyPaScroll(alice);
-assert.ok(paScrollRes.ok && alice.inventory[scrollKey] === 2, 'on peut en acheter plusieurs d’avance, sans limite à l’achat');
+let xpBefore = alice.harvestXp;
+assert.ok(g.harvest(alice, boostNode.x, boostNode.y).ok, 'récolte toujours acceptée avec du Regain');
+g.tick(CONFIG.HARVEST_MS + 200);
+const baseHarvestXp = 8 + Math.min(6, boostNode.content.tier) * 6;
+assert.strictEqual(alice.harvestXp - xpBefore, baseHarvestXp * 2, 'XP de récolte doublée quand du Regain est disponible');
+assert.strictEqual(alice.pa, 10 - CONFIG.COSTS.HARVEST, 'Regain consommé pour le bonus');
 
-alice.lastPaScrollAt = -PA_SCROLL_COOLDOWN_MS;   // hors cooldown, quel que soit g.now
-let useRes = g.consume(alice, scrollKey);
-assert.ok(useRes.ok, 'utilisation réussie hors cooldown');
-assert.strictEqual(alice.pa, CONFIG.PA.MAX, 'endurance rechargée au maximum à l’utilisation');
-assert.strictEqual(alice.inventory[scrollKey], 1, 'un seul parchemin consommé');
+// Récolte : Regain à 0 → récolte quand même acceptée, XP normale, PA inchangé.
+let dryNode = null;
+for (const t of g.tiles.values()) {
+  if (t.content && t.content.kind === 'resource' && t.content.tier === 1 &&
+      t.content.inactiveUntil <= g.now && (t.x !== node.x || t.y !== node.y) && (t.x !== boostNode.x || t.y !== boostNode.y)) { dryNode = t; break; }
+}
+assert.ok(dryNode, 'un troisième gisement T1 est disponible pour le test sans Regain');
+alice.pos = { x: dryNode.x - 1, y: dryNode.y };
+alice.pa = 0;
+xpBefore = alice.harvestXp;
+assert.ok(g.harvest(alice, dryNode.x, dryNode.y).ok, 'récolte acceptée même sans Regain (jamais bloquée)');
+g.tick(CONFIG.HARVEST_MS + 200);
+assert.strictEqual(alice.harvestXp - xpBefore, 8 + Math.min(6, dryNode.content.tier) * 6, 'XP de récolte normale (non doublée) sans Regain');
+assert.strictEqual(alice.pa, 0, 'Regain toujours à 0 (rien à consommer)');
 
-alice.pa = 5;   // redescend l'endurance pour isoler le test de cooldown
-useRes = g.consume(alice, scrollKey);
-assert.ok(!useRes.ok, 'refuse en plein cooldown malgré endurance basse et parchemin en stock');
-assert.strictEqual(alice.inventory[scrollKey], 1, 'le parchemin n’est pas consommé sur un essai refusé');
-g.now += PA_SCROLL_COOLDOWN_MS + 1;
-useRes = g.consume(alice, scrollKey);
-assert.ok(useRes.ok, 'de nouveau disponible une fois le cooldown écoulé');
-assert.strictEqual(alice.inventory[scrollKey], undefined, 'dernier parchemin consommé, la pile est retirée de l’inventaire');
-
-g.now += PA_SCROLL_COOLDOWN_MS + 1;
-assert.ok(!g.consume(alice, scrollKey).ok, 'refuse sans parchemin en stock');
-alice[PREMIUM_CURRENCY.key] = PA_SCROLL_COST_MOONSTONES;
-g.buyPaScroll(alice);
-useRes = g.consume(alice, scrollKey);
-assert.ok(!useRes.ok, 'refuse d’utiliser si l’endurance est déjà au maximum');
-assert.strictEqual(alice.inventory[scrollKey], 1, 'le parchemin n’est pas consommé si l’endurance était déjà pleine');
-console.log('Parchemin d’Endurance : achat en inventaire sans limite ✔, utilisation recharge au maximum ✔, cooldown 1-2/jour à l’usage ✔, jamais consommé sur un refus ✔');
+// Raid : même principe, sur le gain de maîtrise (weaponXp).
+let boostMob = null;
+for (const t of g.tiles.values()) {
+  if (t.content && t.content.kind === 'monster' && t.content.tier === 2 &&
+      t.content.inactiveUntil <= g.now && Math.max(Math.abs(t.x + 45), Math.abs(t.y + 45)) > 12) { boostMob = t; break; }
+}
+assert.ok(boostMob, 'un monstre T2 est disponible pour le test de Regain en raid');
+alice.pos = { x: boostMob.x - 1, y: boostMob.y };
+alice.pa = 50; alice.hp = maxHp(alice); alice.status = 'IDLE';
+let weaponXpBefore = alice.weaponXp;
+sent.length = 0;
+g.rng = () => 0;   // victoire garantie
+assert.ok(g.createRaid(alice, boostMob.x, boostMob.y).ok, 'raid toujours accepté avec du Regain');
+assert.ok(g.startRaidNow(alice, boostMob.x + ',' + boostMob.y).ok);
+g.tick(300);
+g.rng = Math.random;
+let boostResult = sent.filter((m) => m.ev === 'result' && m.id === alice.id).map((m) => m.data)[0];
+const baseRaidXp = 15 + Math.min(6, boostMob.content.tier) * 15;
+assert.strictEqual(boostResult.regainBoosted, true, 'rapport de raid signale le bonus de Regain');
+assert.strictEqual(boostResult.xp, baseRaidXp * 2, 'XP de maîtrise doublée quand du Regain est disponible');
+assert.strictEqual(alice.weaponXp - weaponXpBefore, baseRaidXp * 2, 'gain de maîtrise reflété sur le compte');
+assert.strictEqual(alice.pa, 50 - CONFIG.COSTS.RAID, 'Regain consommé pour le bonus de raid');
+console.log('Regain : ne bloque jamais récolte/raid ✔, double l’XP si disponible ✔, XP normale sinon ✔');
 
 // --- Packs d'or : conversion atomique des Écailles Lunaires en or ---
 const goldPack = GOLD_PACKS[1];
@@ -1032,7 +1047,7 @@ assert.ok(whisperOnline.ok && !whisperOnline.offline, 'MP envoyé, destinataire 
 assert.strictEqual(pushed.length, 0, 'pas de push si le destinataire est déjà en ligne (reçu en direct)');
 console.log('Notifications push : demande d’ami ✔, amitié auto-acceptée ✔, MP hors ligne uniquement ✔');
 
-// --- Notification push « Endurance pleine » : programmée à la déconnexion, ---
+// --- Notification push « Regain au maximum » : programmée à la déconnexion, ---
 // --- déclenchée une seule fois, seulement une fois vraiment échue ---
 pushF.pa = CONFIG.PA.MAX;
 g.schedulePaFullNotify(pushF);
@@ -1065,7 +1080,7 @@ pushF.online = true;
 pushed.length = 0;
 g.checkPaFullNotifications();
 assert.strictEqual(pushed.length, 0, 'aucun push pour un compte désormais en ligne, même échéance atteinte');
-console.log('Notifications push : Endurance pleine programmée à la déconnexion ✔, envoyée une seule fois ✔');
+console.log('Notifications push : Regain au maximum programmée à la déconnexion ✔, envoyée une seule fois ✔');
 
 // --- Brouillard de guerre (compte) : même carte explorée quel que soit l'appareil ---
 assert.deepStrictEqual(alice.exploredWorld, [], 'aucune tuile explorée par défaut');

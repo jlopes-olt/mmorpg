@@ -1369,33 +1369,6 @@ html, body {
   justify-content: center;
   margin-bottom: 8px;
 }
-.inv-cooldown-badge {
-  position: absolute;
-  left: 50%;
-  bottom: -2px;
-  z-index: 2;
-  min-width: 104px;
-  padding: 5px 9px;
-  transform: translateX(-50%);
-  border: 1px solid rgba(226, 181, 83, 0.72);
-  border-radius: 999px;
-  background: linear-gradient(180deg, rgba(65, 44, 24, 0.96), rgba(31, 21, 13, 0.98));
-  box-shadow: 0 4px 9px rgba(36, 23, 10, 0.28), inset 0 1px 0 rgba(255, 235, 184, 0.16);
-  color: #f3d991;
-  font-size: 10px;
-  font-weight: 900;
-  letter-spacing: 0.03em;
-  line-height: 1;
-  white-space: nowrap;
-}
-.inv-consumable.is-cooling-down {
-  cursor: not-allowed;
-  opacity: 0.82;
-}
-.inv-consumable.is-cooling-down .inv-card-art {
-  filter: grayscale(0.28) drop-shadow(0 8px 12px rgba(0,0,0,0.16));
-}
-.inv-consumable.is-cooling-down .inv-card-use { color: #8b6c44; }
 .inv-card-art {
   width: 72px;
   height: 72px;
@@ -2179,25 +2152,6 @@ html, body {
 .wardrobe-card .shop-card-copy {
   line-height: 1.25;
 }
-.pa-scroll-card {
-  display: grid;
-  grid-template-columns: 112px minmax(0, 1fr);
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-.pa-scroll-art {
-  width: 112px;
-  height: 112px;
-  object-fit: contain;
-  filter: drop-shadow(0 9px 10px rgba(58, 39, 18, 0.2));
-}
-.pa-scroll-copy { min-width: 0; }
-@media (max-width: 480px) {
-  .pa-scroll-card { grid-template-columns: 86px minmax(0, 1fr); gap: 9px; }
-  .pa-scroll-art { width: 86px; height: 86px; }
-}
-
 /* ---------- Boutons ---------- */
 .btn {
   min-height: 46px;

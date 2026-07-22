@@ -91,6 +91,12 @@ class ServerSim {
 
   log(text, type) { this.emit('chat', { from: null, text, type: type || 'event' }); }
   toast(text) { this.emit('toast', { text }); }
+  // Miroir de server/game.js consumeRegainBonus() : voir ce fichier pour le
+  // détail du raisonnement (Regain = bonus d'XP, plus un gate d'action).
+  consumeRegainBonus(me, cost) {
+    if (me.pa >= cost) { me.pa -= cost; return true; }
+    return false;
+  }
   resetTravelState(p) {
     p.status = 'IDLE';
     p.harvestKey = null;
@@ -257,7 +263,6 @@ class ServerSim {
       inventory: {},
       gold: 0,
       [PREMIUM_CURRENCY.key]: 24,
-      lastPaScrollAt: -PA_SCROLL_COOLDOWN_MS,   // « jamais utilisé » : disponible dès la création
       ownedSkins: [],
       ownedAccessories: [],
       accessoryId: null,
@@ -353,19 +358,6 @@ class ServerSim {
     me.activeTitle = t;
     this.emit('self', me);
     return { ok: true };
-  }
-
-  buyPaScroll() {
-    const me = this.me;
-    const balance = Number(me[PREMIUM_CURRENCY.key] || 0);
-    if (balance < PA_SCROLL_COST_MOONSTONES) {
-      return { ok: false, error: 'Il faut ' + PA_SCROLL_COST_MOONSTONES + ' ' + PREMIUM_CURRENCY.label + '.' };
-    }
-    me[PREMIUM_CURRENCY.key] = balance - PA_SCROLL_COST_MOONSTONES;
-    const key = stackKey('PARCHEMIN_ENDURANCE', 1);
-    me.inventory[key] = (me.inventory[key] || 0) + 1;
-    this.emit('self', me);
-    return { ok: true, cost: PA_SCROLL_COST_MOONSTONES };
   }
 
   buyGoldPack(packId) {
@@ -478,15 +470,6 @@ class ServerSim {
     if (!item) return { ok: false, error: 'Objet inconnu.' };
     if ((me.inventory[key] || 0) < 1) return { ok: false, error: 'Vous n’en avez plus.' };
 
-    if (item.kind === 'pa_refill') {
-      if (typeof me.lastPaScrollAt !== 'number') me.lastPaScrollAt = -PA_SCROLL_COOLDOWN_MS;
-      const remainingMs = PA_SCROLL_COOLDOWN_MS - (this.now - me.lastPaScrollAt);
-      if (remainingMs > 0) {
-        return { ok: false, error: 'Parchemin en recharge — encore ' + Math.ceil(remainingMs / 60000) + ' min.' };
-      }
-      if (me.pa >= CONFIG.PA.MAX) return { ok: false, error: 'Endurance déjà au maximum.' };
-    }
-
     me.inventory[key] -= 1;
     if (me.inventory[key] <= 0) delete me.inventory[key];
 
@@ -494,11 +477,6 @@ class ServerSim {
       const heal = Math.round(maxHp(me) * CONSUMABLE_EFFECTS[parsed.type][parsed.tier]);
       me.hp = Math.min(maxHp(me), me.hp + heal);
       this.toast(item.icon + ' +' + heal + ' PV');
-    } else if (item.kind === 'pa_refill') {
-      me.pa = CONFIG.PA.MAX;
-      me.paMs = 0;
-      me.lastPaScrollAt = this.now;
-      this.toast(item.icon + ' Endurance rechargée au maximum !');
     } else {
       me.buff = { type: parsed.type, tier: parsed.tier, combats: BUFF_COMBATS };
       this.toast(item.icon + ' ' + item.label + ' T' + parsed.tier + ' actif (' + BUFF_COMBATS + ' combats)');
@@ -592,11 +570,9 @@ class ServerSim {
     const tiles = this.tilesOf(me);
     if (me.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
     if (Math.abs(dx) > 1 || Math.abs(dy) > 1 || (dx === 0 && dy === 0)) return { ok: false, error: 'Case non adjacente.' };
-    if (me.pa < CONFIG.COSTS.MOVE) return { ok: false, error: 'Pas assez de PA.' };
     const nx = me.pos.x + dx;
     const ny = me.pos.y + dy;
     if (!isWalkable(tiles, nx, ny)) return { ok: false, error: 'Case bloquée.' };
-    me.pa -= CONFIG.COSTS.MOVE;
     me.pos = { x: nx, y: ny };
 
     // Marcher sur un village le « découvre » : téléporteur débloqué
@@ -627,8 +603,6 @@ class ServerSim {
     if (this.now < node.inactiveUntil) return { ok: false, error: 'Gisement épuisé.' };
     const reqTier = Math.min(6, node.tier);
     if (me.harvestLevel < reqTier) return { ok: false, error: 'Niveau de récolte insuffisant (T' + reqTier + ' requis).' };
-    if (me.pa < CONFIG.COSTS.HARVEST) return { ok: false, error: 'Pas assez de PA (2 requis).' };
-    me.pa -= CONFIG.COSTS.HARVEST;
     me.status = 'HARVESTING';
     me.harvestKey = this.raidId(me.mapId, x, y);
     me.harvestEndsAt = this.now + CONFIG.HARVEST_MS;
@@ -648,7 +622,8 @@ class ServerSim {
     me.inventory[invKey] = (me.inventory[invKey] || 0) + qty;
     node.inactiveUntil = this.now + (node.dungeonResource ? CONFIG.RESPAWN_DUNGEON_RESOURCE_MS : CONFIG.RESPAWN_RESOURCE_MS);
 
-    const xp = 8 + Math.min(6, node.tier) * 6;
+    const boosted = this.consumeRegainBonus(me, CONFIG.COSTS.HARVEST);
+    const xp = (8 + Math.min(6, node.tier) * 6) * (boosted ? 2 : 1);
     me.harvestXp += xp;
     this.log('+' + qty + ' ' + resourceLabel(node.type, node.tier) + ' (+' + xp + ' XP récolte)');
     this.checkLevelUp(me, 'harvest');
@@ -668,8 +643,6 @@ class ServerSim {
     if (this.raids.has(raidIdKey)) return this.joinRaid(raidIdKey);
     if (me.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
     if (this.chebyshev(me.pos, tile) > 1) return { ok: false, error: 'Trop loin — approchez-vous.' };
-    if (me.pa < CONFIG.COSTS.RAID) return { ok: false, error: 'Pas assez de PA (5 requis).' };
-    me.pa -= CONFIG.COSTS.RAID;
     me.status = 'LOBBY_COMBAT';
     me.raidKey = raidIdKey;
     this.raids.set(raidIdKey, {
@@ -695,8 +668,6 @@ class ServerSim {
     if (me.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
     const tile = this.tilesOf(me).get(raid.tileKey);
     if (this.chebyshev(me.pos, tile) > CONFIG.JOIN_RADIUS) return { ok: false, error: 'Trop loin pour rejoindre.' };
-    if (me.pa < CONFIG.COSTS.RAID) return { ok: false, error: 'Pas assez de PA (5 requis).' };
-    me.pa -= CONFIG.COSTS.RAID;
     me.status = 'LOBBY_COMBAT';
     me.raidKey = key;
     raid.participants.push(me.id);
@@ -739,7 +710,7 @@ class ServerSim {
     const victory = this.rng() < chance;
     const druid = victory && members.some((p) => p.speciesClass === 'CERF_DRUIDE');
     const rampart = members.some((p) => p.speciesClass === 'OURS_GUERRIER');
-    let myHpLoss = 0, myXp = 0, myGold = 0, myFood = null;
+    let myHpLoss = 0, myXp = 0, myGold = 0, myFood = null, myBoosted = false;
 
     for (const p of members) {
       p.status = 'IDLE';
@@ -771,7 +742,8 @@ class ServerSim {
       if (victory && !p.bot) {
         // Les monstres lâchent de l'or (+ XP) et, parfois, un ingrédient
         // de cuisine de leur tier.
-        const xp = 15 + Math.min(6, monster.tier) * 15;
+        const boosted = this.consumeRegainBonus(p, CONFIG.COSTS.RAID);
+        const xp = (15 + Math.min(6, monster.tier) * 15) * (boosted ? 2 : 1);
         // Chapardeur (Renard Voleur) : +50 % d'or pour lui
         const lootMult = p.speciesClass === 'RENARD_VOLEUR' ? 1.5 : 1;
         p.weaponXp += xp;
@@ -783,6 +755,7 @@ class ServerSim {
         }
         myXp = xp;
         myGold = gold;
+        if (p.id === this.meId) myBoosted = boosted;
         this.checkLevelUp(p, 'weapon');
         p.stats.monsterKills = (p.stats.monsterKills || 0) + 1;
         p.stats.kills[monster.type] = (p.stats.kills[monster.type] || 0) + 1;
@@ -821,6 +794,7 @@ class ServerSim {
       food: myFood,
       hpLoss: myHpLoss,
       xp: myXp,
+      regainBoosted: myBoosted,
       druid,
     });
     this.syncCurrentMap();
@@ -865,13 +839,10 @@ class ServerSim {
     for (const k in recipe) {
       if ((me.inventory[k] || 0) < recipe[k]) return { ok: false, error: 'Ressources insuffisantes.' };
     }
-    const paCost = CONFIG.COSTS.UPGRADE[target];
-    if (me.pa < paCost) return { ok: false, error: 'Pas assez de PA (' + paCost + ' requis).' };
     for (const k in recipe) {
       me.inventory[k] -= recipe[k];
       if (me.inventory[k] <= 0) delete me.inventory[k];
     }
-    me.pa -= paCost;
     item.tier = target;
     if (slot === 'armor') me.hp = Math.min(maxHp(me), me.hp + 15);
     for (const a of checkAchievements(me, ['Équipement'])) this.emit('achievementUnlocked', { id: a.id, label: a.label, category: a.category, reward: a.reward || {} });
@@ -1054,6 +1025,13 @@ class ServerSim {
     if (!p.guildInvite || typeof p.guildInvite !== 'object') p.guildInvite = null;
     if (!Array.isArray(p.friends)) p.friends = [];
     if (!Array.isArray(p.friendRequests)) p.friendRequests = [];
+    // Parchemin d'Endurance retiré du jeu (voir Regain) : purge les piles
+    // restantes d'une sauvegarde antérieure.
+    if (p.inventory) {
+      for (const k of Object.keys(p.inventory)) {
+        if (k.startsWith('PARCHEMIN_ENDURANCE_')) delete p.inventory[k];
+      }
+    }
     ensureAchievementState(p);
     // Vérification complète (toutes catégories) au chargement de la
     // sauvegarde : rattrape les hauts faits déjà mérités par une progression

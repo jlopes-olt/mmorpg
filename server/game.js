@@ -132,6 +132,14 @@ class Game {
   // pas juste retrouvés en faisant défiler le chat après coup. Jamais de
   // push ici : c'est réservé aux joueurs hors ligne (voir sendPush).
   worldNotify(text) { this.broadcast('toast', { text }); this.log(text); }
+  // Regain (ex-PA) : ne bloque plus jamais récolte/raid, il ne fait plus que
+  // doubler l'XP gagnée quand il y en a en réserve — voir finishHarvest() et
+  // resolveRaid(). Consommé au moment du gain d'XP (résolution), pas au
+  // lancement de l'action, pour que le bonus reflète l'état à l'instant T.
+  consumeRegainBonus(p, cost) {
+    if (p.pa >= cost) { p.pa -= cost; return true; }
+    return false;
+  }
   pushSelf(p) { this.send(p.id, 'self', p); this.onDirty(p); }
   notifyAchievements(p, list) {
     for (const a of list) {
@@ -246,7 +254,7 @@ class Game {
     this.notifyAchievements(p, checkAchievements(p));
   }
 
-  // Programme (à la déconnexion) l'instant réel où l'Endurance hors ligne
+  // Programme (à la déconnexion) l'instant réel où le Regain hors ligne
   // atteindra son plafond, pour la notification push — même hypothèse que
   // resumePlayer() (temps réel écoulé / REGEN_MS, sans le multiplicateur
   // SPEED de dev, qui ne vaut de toute façon que 1 en production).
@@ -265,7 +273,7 @@ class Game {
       if (p.bot || p.online || !p.pushPaFullAt || p.pushPaFullSent) continue;
       if (now >= p.pushPaFullAt) {
         p.pushPaFullSent = true;
-        this.sendPush(p.id, '⚡ Endurance pleine', 'Votre réservoir d’Endurance est plein — prêt à repartir à l’aventure !');
+        this.sendPush(p.id, '⚡ Regain au maximum', 'Votre Regain est au maximum — XP doublée sur votre prochaine récolte ou victoire !');
       }
     }
   }
@@ -310,7 +318,6 @@ class Game {
       inventory: {},
       gold: 0,
       [PREMIUM_CURRENCY.key]: 0,
-      lastPaScrollAt: -PA_SCROLL_COOLDOWN_MS,   // « jamais utilisé » : disponible dès la création
       pushSubscriptions: [],
       pushPaFullAt: null,
       pushPaFullSent: false,
@@ -608,23 +615,6 @@ class Game {
     p.ownedMounts.push(item.id);
     this.pushSelf(p);
     return { ok: true };
-  }
-
-  // Achète un Parchemin d'Endurance : payé en monnaie premium, stocké en
-  // inventaire (pas d'effet immédiat) — le joueur l'utilise quand il veut
-  // depuis l'Inventaire (voir consume(), cas 'pa_refill'), où s'applique le
-  // cooldown qui borne l'usage à 1-2 fois par jour. Rien n'empêche d'en
-  // acheter plusieurs d'avance : seule l'UTILISATION est limitée.
-  buyPaScroll(p) {
-    const balance = Number(p[PREMIUM_CURRENCY.key] || 0);
-    if (balance < PA_SCROLL_COST_MOONSTONES) {
-      return { ok: false, error: 'Il faut ' + PA_SCROLL_COST_MOONSTONES + ' ' + PREMIUM_CURRENCY.label + '.' };
-    }
-    p[PREMIUM_CURRENCY.key] = balance - PA_SCROLL_COST_MOONSTONES;
-    const key = stackKey('PARCHEMIN_ENDURANCE', 1);
-    p.inventory[key] = (p.inventory[key] || 0) + 1;
-    this.pushSelf(p);
-    return { ok: true, cost: PA_SCROLL_COST_MOONSTONES };
   }
 
   buyGoldPack(p, packId) {
@@ -1325,9 +1315,7 @@ class Game {
     }
     if (!this.atCastle(p, terrain)) return { ok: false, error: 'Vous devez être au château pour lancer l’assaut.' };
     if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
-    if (p.pa < CONFIG.COSTS.RAID) return { ok: false, error: 'Pas assez de PA (' + CONFIG.COSTS.RAID + ' requis).' };
     const tile = this.castleTileFor(terrain);
-    p.pa -= CONFIG.COSTS.RAID;
     p.status = 'LOBBY_COMBAT';
     p.raidKey = key;
     this.raids.set(key, {
@@ -1781,11 +1769,9 @@ class Game {
     dy = Math.round(Number(dy) || 0);
     if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
     if (Math.abs(dx) > 1 || Math.abs(dy) > 1 || (dx === 0 && dy === 0)) return { ok: false, error: 'Case non adjacente.' };
-    if (p.pa < CONFIG.COSTS.MOVE) return { ok: false, error: 'Pas assez de PA.' };
     const nx = p.pos.x + dx;
     const ny = p.pos.y + dy;
     if (!isWalkable(tiles, nx, ny)) return { ok: false, error: 'Case bloquée.' };
-    p.pa -= CONFIG.COSTS.MOVE;
     p.pos = { x: nx, y: ny };
 
     // Marcher sur un village le « découvre » : téléporteur débloqué
@@ -1827,8 +1813,6 @@ class Game {
     if (this.now < node.inactiveUntil) return { ok: false, error: 'Gisement épuisé.' };
     const reqTier = Math.min(6, node.tier);
     if (p.harvestLevel < reqTier) return { ok: false, error: 'Niveau de récolte insuffisant (T' + reqTier + ' requis).' };
-    if (p.pa < CONFIG.COSTS.HARVEST) return { ok: false, error: 'Pas assez de PA (2 requis).' };
-    p.pa -= CONFIG.COSTS.HARVEST;
     p.status = 'HARVESTING';
     p.harvestKey = this.raidId(p.mapId, x, y);
     p.harvestEndsAt = this.now + CONFIG.HARVEST_MS;
@@ -1848,7 +1832,9 @@ class Game {
     node.inactiveUntil = this.now + (node.dungeonResource ? CONFIG.RESPAWN_DUNGEON_RESOURCE_MS : CONFIG.RESPAWN_RESOURCE_MS);
     // Sans ce broadcast, les clients ne voient jamais le nœud passer en repousse
     this.broadcast('world', { mapId: mapId || p.mapId || 'world', key, inactiveUntil: node.inactiveUntil });
-    p.harvestXp += 8 + Math.min(6, node.tier) * 6;
+    const boosted = this.consumeRegainBonus(p, CONFIG.COSTS.HARVEST);
+    const xpGain = (8 + Math.min(6, node.tier) * 6) * (boosted ? 2 : 1);
+    p.harvestXp += xpGain;
     this.checkLevelUp(p, 'harvest');
     p.stats.harvest[node.type] = (p.stats.harvest[node.type] || 0) + qty;
     this.notifyAchievements(p, checkAchievements(p, ['Récolte']));
@@ -1870,8 +1856,6 @@ class Game {
     if (this.raids.has(key)) return this.joinRaid(p, key);
     if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
     if (this.chebyshev(p.pos, tile) > 1) return { ok: false, error: 'Trop loin — approchez-vous.' };
-    if (p.pa < CONFIG.COSTS.RAID) return { ok: false, error: 'Pas assez de PA (5 requis).' };
-    p.pa -= CONFIG.COSTS.RAID;
     p.status = 'LOBBY_COMBAT';
     p.raidKey = key;
     this.raids.set(key, {
@@ -1900,8 +1884,6 @@ class Game {
     if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
     const tile = this.tilesOf(p).get(raid.tileKey);
     if (this.chebyshev(p.pos, tile) > CONFIG.JOIN_RADIUS) return { ok: false, error: 'Trop loin pour rejoindre.' };
-    if (p.pa < CONFIG.COSTS.RAID) return { ok: false, error: 'Pas assez de PA (5 requis).' };
-    p.pa -= CONFIG.COSTS.RAID;
     p.status = 'LOBBY_COMBAT';
     p.raidKey = key;
     raid.participants.push(p.id);
@@ -1983,7 +1965,10 @@ class Game {
       if (victory && !p.bot) {
         // Les monstres lâchent de l'or (+ XP) et, parfois, un ingrédient
         // de cuisine de leur tier — les autres ressources viennent de la récolte.
-        const xp = 15 + Math.min(6, monster.tier) * 15;
+        // Regain (ex-PA) : une seule consommation pour tout le raid (base +
+        // bonus boss mondial le cas échéant), pas une par source d'XP.
+        const boosted = this.consumeRegainBonus(p, CONFIG.COSTS.RAID);
+        const xp = (15 + Math.min(6, monster.tier) * 15) * (boosted ? 2 : 1);
         p.weaponXp += xp;
         // Chapardeur (Renard Voleur) : +50 % d'or pour lui
         const lootMult = p.speciesClass === 'RENARD_VOLEUR' ? 1.5 : 1;
@@ -2001,18 +1986,12 @@ class Game {
         if (monster.worldBoss) {
           const bonusGold = WORLD_BOSS.goldMin + Math.floor(this.rng() * (WORLD_BOSS.goldMax - WORLD_BOSS.goldMin + 1));
           p.gold += bonusGold;
-          const bonusXp = WORLD_BOSS.xp;
+          const bonusXp = WORLD_BOSS.xp * (boosted ? 2 : 1);
           p.weaponXp += bonusXp;
           let moonstones = 0;
           if (this.rng() < WORLD_BOSS.moonstoneChance) {
             moonstones = WORLD_BOSS.moonstoneMin + Math.floor(this.rng() * (WORLD_BOSS.moonstoneMax - WORLD_BOSS.moonstoneMin + 1));
             p[PREMIUM_CURRENCY.key] = (p[PREMIUM_CURRENCY.key] || 0) + moonstones;
-          }
-          let paScroll = false;
-          if (this.rng() < WORLD_BOSS.paScrollChance) {
-            const scrollKey = stackKey('PARCHEMIN_ENDURANCE', 1);
-            p.inventory[scrollKey] = (p.inventory[scrollKey] || 0) + 1;
-            paScroll = true;
           }
           let accessory = false;
           if (!p.ownedAccessories.includes(WORLD_BOSS.accessoryId) && this.rng() < WORLD_BOSS.accessoryChance) {
@@ -2029,9 +2008,9 @@ class Game {
             this.toast(p, '🐉 Monture légendaire obtenue : ' + MOUNT_ITEMS[WORLD_BOSS.mountId].label + ' !');
           }
           p.stats.worldBossKills = (p.stats.worldBossKills || 0) + 1;
-          bonus = { gold: bonusGold, xp: bonusXp, moonstones, paScroll, accessory, mount };
+          bonus = { gold: bonusGold, xp: bonusXp, moonstones, accessory, mount };
         }
-        rewards.set(p.id, { gold, xp, food, worldBossBonus: bonus });
+        rewards.set(p.id, { gold, xp, food, worldBossBonus: bonus, boosted });
         this.checkLevelUp(p, 'weapon');
         p.stats.monsterKills = (p.stats.monsterKills || 0) + 1;
         p.stats.kills[monster.type] = (p.stats.kills[monster.type] || 0) + 1;
@@ -2089,6 +2068,7 @@ class Game {
         food: rw ? rw.food : null,
         hpLoss: lossById.get(p.id) || 0,
         xp: rw ? rw.xp : 0,
+        regainBoosted: rw ? !!rw.boosted : false,
         worldBoss: !!monster.worldBoss,
         worldBossBonus: rw ? rw.worldBossBonus : null,
         druid,
@@ -2183,13 +2163,10 @@ class Game {
     for (const k in recipe) {
       if ((p.inventory[k] || 0) < recipe[k]) return { ok: false, error: 'Ressources insuffisantes.' };
     }
-    const paCost = CONFIG.COSTS.UPGRADE[target];
-    if (p.pa < paCost) return { ok: false, error: 'Pas assez de PA (' + paCost + ' requis).' };
     for (const k in recipe) {
       p.inventory[k] -= recipe[k];
       if (p.inventory[k] <= 0) delete p.inventory[k];
     }
-    p.pa -= paCost;
     item.tier = target;
     if (slot === 'armor') p.hp = Math.min(maxHp(p), p.hp + 15);
     this.notifyAchievements(p, checkAchievements(p, ['Équipement']));
@@ -2270,19 +2247,6 @@ class Game {
     if (!item) return { ok: false, error: 'Objet inconnu.' };
     if ((p.inventory[key] || 0) < 1) return { ok: false, error: 'Vous n’en avez plus.' };
 
-    // Le Parchemin d'Endurance peut encore échouer à ce stade (cooldown,
-    // Endurance déjà pleine) — contrairement aux autres consommables, donc
-    // on valide AVANT de retirer l'objet de l'inventaire pour ne pas le
-    // perdre sur un essai refusé.
-    if (item.kind === 'pa_refill') {
-      if (typeof p.lastPaScrollAt !== 'number') p.lastPaScrollAt = -PA_SCROLL_COOLDOWN_MS;
-      const remainingMs = PA_SCROLL_COOLDOWN_MS - (this.now - p.lastPaScrollAt);
-      if (remainingMs > 0) {
-        return { ok: false, error: 'Parchemin en recharge — encore ' + Math.ceil(remainingMs / 60000) + ' min.' };
-      }
-      if (p.pa >= CONFIG.PA.MAX) return { ok: false, error: 'Endurance déjà au maximum.' };
-    }
-
     p.inventory[key] -= 1;
     if (p.inventory[key] <= 0) delete p.inventory[key];
 
@@ -2290,11 +2254,6 @@ class Game {
       const heal = Math.round(maxHp(p) * CONSUMABLE_EFFECTS[parsed.type][parsed.tier]);
       p.hp = Math.min(maxHp(p), p.hp + heal);
       this.toast(p, item.icon + ' +' + heal + ' PV');
-    } else if (item.kind === 'pa_refill') {
-      p.pa = CONFIG.PA.MAX;
-      p.paMs = 0;
-      p.lastPaScrollAt = this.now;
-      this.toast(p, item.icon + ' Endurance rechargée au maximum !');
     } else {
       p.buff = { type: parsed.type, tier: parsed.tier, combats: BUFF_COMBATS };
       this.toast(p, item.icon + ' ' + item.label + ' T' + parsed.tier + ' actif (' + BUFF_COMBATS + ' combats)');
@@ -2640,7 +2599,6 @@ class Game {
       p.charSlots = Math.min(p.charSlots, MAX_CHAR_SLOTS);
       if (typeof p.gold !== 'number') p.gold = 0;
       if (typeof p[PREMIUM_CURRENCY.key] !== 'number') p[PREMIUM_CURRENCY.key] = 0;
-      if (typeof p.lastPaScrollAt !== 'number') p.lastPaScrollAt = -PA_SCROLL_COOLDOWN_MS;
       if (!Array.isArray(p.pushSubscriptions)) p.pushSubscriptions = [];
       if (typeof p.pushPaFullAt === 'undefined') p.pushPaFullAt = null;
       if (typeof p.pushPaFullSent !== 'boolean') p.pushPaFullSent = false;
@@ -2659,6 +2617,14 @@ class Game {
       // Comptes créés avant l'ajout de l'OTP par email : pas d'email connu —
       // voir setAccountEmail(), demandé à la prochaine connexion.
       if (typeof p.email !== 'string') p.email = null;
+      // Parchemin d'Endurance retiré du jeu (voir Regain) : purge les piles
+      // restantes des inventaires existants — sinon un objet fantôme, non
+      // reconnu par CONSUMABLES, s'affiche mal dans l'inventaire.
+      if (p.inventory) {
+        for (const k of Object.keys(p.inventory)) {
+          if (k.startsWith('PARCHEMIN_ENDURANCE_')) delete p.inventory[k];
+        }
+      }
       ensureAchievementState(p);
       // Rééquilibrage des PV par classe : évite qu'un compte existant se
       // retrouve avec plus de PV affichés que son nouveau maximum.

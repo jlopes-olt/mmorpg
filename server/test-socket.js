@@ -11,7 +11,6 @@ const os = require('os');
 const fs = require('fs');
 const assert = require('assert');
 const ioc = require('socket.io-client');
-const { CONFIG } = require('../js/config.js');
 
 const PORT = 3123;
 const URL = 'http://localhost:' + PORT;
@@ -119,18 +118,19 @@ function phase2() {
     }
   });
 
-  socket.on('otpRequired', (d) => {
-    assert.strictEqual(d.stage, 'otp', 'OTP requis à la reconnexion (compte avec email)');
-    assert.ok(d.devCode, 'code de repli fourni (RESEND_API_KEY absent en test)');
-    socket.emit('auth:verifyOtp', { accountId: d.accountId, code: d.devCode }, (r) => {
-      assert.ok(r && r.ok, 'code OTP (repli) accepté à la reconnexion : ' + ((r && r.error) || '?'));
-    });
+  // L'OTP ne doit plus être redemandé à la reconnexion (mot de passe) —
+  // seule l'inscription (phase 1 ci-dessus) le requiert désormais.
+  socket.on('otpRequired', () => {
+    fail('OTP ne devrait plus être requis à la reconnexion par mot de passe');
   });
 
   socket.on('init', (d) => {
     assert.strictEqual(d.self.username, NAME, 'compte retrouvé');
-    assert.ok(d.self.pa < CONFIG.PA.START, 'état du personnage restauré');
-    console.log('→ connexion mot de passe + état restauré ✔');
+    // Le déplacement est gratuit désormais (voir Regain) : la preuve de
+    // persistance passe par la position atteinte en phase 1 (plus par le PA
+    // consommé, qui n'existe plus pour ce genre d'action).
+    assert.ok(d.self.pos.x !== 0 || d.self.pos.y !== 0, 'état du personnage restauré (position du déplacement conservée)');
+    console.log('→ connexion mot de passe + état restauré, sans OTP ✔');
     clearTimeout(guard);
     socket.close();
     cleanup();

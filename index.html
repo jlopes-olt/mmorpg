@@ -13,7 +13,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="stylesheet" href="css/style.css?v=20260722-siege-window">
+  <link rel="stylesheet" href="css/style.css?v=20260722-regain-v3">
 </head>
 <body>
   <div id="desktopLayout">
@@ -58,7 +58,7 @@
 
     <canvas id="map"></canvas>
 
-    <!-- HUD supérieur : PV, PA (+ cooldown), position -->
+    <!-- HUD supérieur : PV, Regain (+ cooldown), position -->
     <header id="hud">
       <div class="hud-panel hp-panel">
         <div class="hud-panel-head">
@@ -69,7 +69,7 @@
       </div>
       <div class="hud-panel pa-panel">
         <div class="hud-panel-head">
-          <span class="hud-label">Endurance</span>
+          <span class="hud-label">Regain</span>
           <div class="hud-meta pa-next" id="paNext"></div>
         </div>
         <div class="bar pa"><div class="bar-fill" id="paFill"></div><span class="bar-text" id="paText"></span></div>
@@ -157,7 +157,7 @@
         <button data-speed="10">x10</button>
         <button data-speed="60">x60</button>
       </div>
-      <button id="devPa">+50 PA</button>
+      <button id="devPa">+50 Regain</button>
       <button id="devReveal">Révéler la carte</button>
       <button id="devResourceReset">🌱 Redistribuer faune &amp; ressources</button>
       <button id="devReset" class="danger">Réinitialiser</button>
@@ -181,13 +181,13 @@
   <!-- Fourni par le backend Node ; échoue silencieusement en local pur
        (file:// / artifact) et le jeu bascule alors en simulation solo. -->
   <script src="/socket.io/socket.io.js"></script>
-  <script src="js/config.js?v=20260722-siege-window"></script>
-  <script src="js/achievements.js?v=20260722-siege-window"></script>
-  <script src="js/world.js?v=20260722-siege-window"></script>
-  <script src="js/server.js?v=20260722-siege-window"></script>
-  <script src="js/net.js?v=20260722-siege-window"></script>
-  <script src="js/render.js?v=20260722-siege-window"></script>
-  <script src="js/ui.js?v=20260722-siege-window"></script>
-  <script src="js/main.js?v=20260722-siege-window"></script>
+  <script src="js/config.js?v=20260722-regain-v3"></script>
+  <script src="js/achievements.js?v=20260722-regain-v3"></script>
+  <script src="js/world.js?v=20260722-regain-v3"></script>
+  <script src="js/server.js?v=20260722-regain-v3"></script>
+  <script src="js/net.js?v=20260722-regain-v3"></script>
+  <script src="js/render.js?v=20260722-regain-v3"></script>
+  <script src="js/ui.js?v=20260722-regain-v3"></script>
+  <script src="js/main.js?v=20260722-regain-v3"></script>
 </body>
 </html>

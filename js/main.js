@@ -2,7 +2,7 @@
 
 /* ============================================================
  * main.js — bootstrap, boucle de jeu, entrées tactiles,
- * pathfinding client (1 PA / case) et persistance locale.
+ * pathfinding client (déplacement gratuit) et persistance locale.
  *
  * Deux modes :
  *  - REMOTE : la page est servie par le backend Node (socket.io
@@ -13,7 +13,7 @@
 
 (function () {
   const remote = typeof io !== 'undefined' && location.protocol.indexOf('http') === 0;
-  const SHELL_REV = '20260722-siege-window';
+  const SHELL_REV = '20260722-regain-v3';
 
   // PWA : service worker (cache + installation sur l'écran d'accueil).
   // Échec silencieux en file:// / artifact.
@@ -113,11 +113,7 @@
   const ui = new UI(server, renderer);
   ui.onApproachPlayer = (player) => {
     if (!player || !player.pos) return;
-    confirmWalk(player.pos.x, player.pos.y, {
-      title: 'S’approcher de ' + player.username + ' ?',
-      kicker: 'Rencontre',
-      badge: player.username,
-    });
+    walkTo(player.pos.x, player.pos.y);
   };
   ui.onAdminReset = () => {
     ui.confirm('Réinitialiser ?', '<p>Personnage et progression seront effacés.</p>', 'Tout effacer', async () => {
@@ -231,45 +227,15 @@
     return best;
   }
 
-  /* Confirmation de déplacement : "Aller sur la case (x, y) ?" */
-  function confirmWalk(x, y, opts) {
-    const me = server.me;
+  /* Déplacement immédiat : le mouvement ne coûte plus de Regain, une
+   * confirmation n'aurait donc plus rien à montrer (elle ne servait qu'à
+   * afficher le coût en PA et tronquer le trajet en cas de PA insuffisants). */
+  function walkTo(x, y) {
     const path = pathTo(x, y);
     if (!path) { ui.toast('Aucun chemin praticable.'); return; }
     if (!path.length) return;
-    const short = path.length > me.pa;
-    const tile = server.tiles.get(tileKey(x, y));
-    const title = typeof opts === 'string' ? opts : (opts && opts.title);
-    const mediaSrc = opts && Object.prototype.hasOwnProperty.call(opts, 'mediaSrc') ? opts.mediaSrc : '';
-    const mediaClass = opts && opts.mediaClass ? opts.mediaClass : 'travel';
-    const kicker = opts && opts.kicker ? opts.kicker : 'Déplacement';
-    const badge = opts && opts.badge ? opts.badge : (ui.terrainLabel(tile.terrain) + ' · (' + x + ', ' + y + ')');
-    const hasVisual = !!(opts && (opts.mediaSrc || opts.emblem));
-    const extraHtml = (opts && opts.extraHtml) || '';
-    ui.confirm(
-      title || 'Se déplacer ?',
-      extraHtml +
-      '<p>Voulez-vous aller sur la case <b>(' + x + ', ' + y + ')</b> ?</p>' +
-      '<p>Terrain : <b>' + ui.terrainLabel(tile.terrain) + '</b></p>' +
-      '<p>Coût : <b>' + path.length + ' PA</b> <span class="dim">(' + me.pa + ' disponibles)</span></p>' +
-      (short ? '<p class="hp-c">PA insuffisants : vous vous arrêterez en chemin.</p>' : ''),
-      'Confirmer',
-      () => {
-        moveQueue = path.length > server.me.pa ? path.slice(0, server.me.pa) : path;
-        stepFrom = { x: server.me.pos.x, y: server.me.pos.y };
-      },
-      {
-        className: 'popup-card action-popup tone-travel',
-        decorated: true,
-        kicker,
-        heroHtml: hasVisual ? ui.buildActionHero({
-          mediaSrc,
-          mediaClass,
-          badge,
-          emblem: opts && opts.emblem ? opts.emblem : '',
-        }) : '',
-      }
-    );
+    moveQueue = path;
+    stepFrom = { x: server.me.pos.x, y: server.me.pos.y };
   }
 
   /* ---------- Interactions sur la carte ---------- */
@@ -286,25 +252,13 @@
 
     if (c && c.kind === 'capital') {
       if (me.pos.x === 0 && me.pos.y === 0) ui.showSheet('capital');
-      else confirmWalk(0, 0, {
-        title: 'Aller à la Capitale ?',
-        kicker: 'Voyage',
-        mediaSrc: ui.getSpriteSrc(renderer.worldIcons.capital),
-        mediaClass: 'structure',
-        badge: 'Capitale',
-      });
+      else walkTo(0, 0);
       return;
     }
 
     if (c && c.kind === 'village') {
       if (me.pos.x === tx && me.pos.y === ty) ui.showVillagePopup(tile);
-      else confirmWalk(tx, ty, {
-        title: 'Aller au village ?',
-        kicker: 'Voyage',
-        mediaSrc: ui.getSpriteSrc(renderer.worldIcons.village[tile.terrain]),
-        mediaClass: 'structure',
-        badge: 'Village',
-      });
+      else walkTo(tx, ty);
       return;
     }
 
@@ -313,50 +267,13 @@
         const r = await Promise.resolve(server.enterDungeon(c.mapId));
         if (!r.ok) ui.toast(r.error);
       });
-      else confirmWalk(tx, ty, {
-        title: 'Aller au donjon ?',
-        kicker: 'Voyage',
-        mediaSrc: ui.getSpriteSrc(renderer.worldIcons.dungeon[tile.terrain]),
-        mediaClass: 'structure',
-        badge: 'Donjon',
-      });
+      else walkTo(tx, ty);
       return;
     }
 
     if (c && c.kind === 'castle') {
       if (me.pos.x === tx && me.pos.y === ty) ui.showCastlePopup(tile);
-      else {
-        const level = renderer.castleLevels[tile.terrain] || 0;
-        const owner = renderer.castleOwners[tile.terrain];
-        const stats = renderer.castleStats[tile.terrain];
-        const pct = stats && stats.hpMax ? Math.max(0, Math.min(100, Math.round(100 * stats.hp / stats.hpMax))) : 0;
-        // Même repère visuel (badges + barre) que la modale du château une
-        // fois sur place (showCastlePopup) — consultable à distance, sans
-        // avoir à s'y déplacer juste pour connaître son état.
-        const siegeWindow = CASTLE_SIEGE_WINDOWS[tile.terrain];
-        const withinSiegeWindow = isWithinSiegeWindow(siegeWindow);
-        const siegeWindowHtml = '<p class="dim small">🕐 Assiégeable de ' + siegeWindow.startHour + 'h à ' + siegeWindow.endHour + 'h (heure de Paris)' +
-          (owner ? (withinSiegeWindow ? ' — <span class="ok-c">dans la plage en ce moment</span>' : ' — <span class="hp-c">hors plage en ce moment</span>') : '') +
-          '.</p>';
-        const extraHtml = (owner
-          ? '<p>Tenu par <b>' + esc(owner) + '</b></p>' +
-            '<div class="castle-badges">' +
-              '<span class="tier t' + level + '">Niveau ' + level + ' / ' + CASTLE_MAX_LEVEL + '</span>' +
-              (stats && stats.fortLevel ? '<span class="tier t' + stats.fortLevel + '">🛡 Fortification ' + stats.fortLevel + ' / ' + CASTLE_MAX_FORT_LEVEL + '</span>' : '') +
-            '</div>' +
-            '<div class="xp-track"><div class="xp-fill" style="width:' + pct + '%"></div></div>' +
-            '<p class="dim small">' + (stats ? stats.hp : 0) + ' / ' + (stats ? stats.hpMax : 0) + ' points de structure</p>'
-          : '<p class="dim">Libre — aucune guilde ne le tient.</p>') +
-          siegeWindowHtml;
-        confirmWalk(tx, ty, {
-          title: 'Aller au château ?',
-          kicker: 'Territoire',
-          mediaSrc: ui.getSpriteSrc(renderer.worldIcons.castle[level]),
-          mediaClass: 'structure',
-          badge: 'Château (' + tile.terrain + ')',
-          extraHtml,
-        });
-      }
+      else walkTo(tx, ty);
       return;
     }
 
@@ -374,7 +291,7 @@
           tone: 'travel',
         });
       } else {
-        confirmWalk(tx, ty, { title: 'Aller au portail ?', kicker: 'Voyage', badge: 'Sortie' });
+        walkTo(tx, ty);
       }
       return;
     }
@@ -382,13 +299,7 @@
     if (c && c.kind === 'resource') {
       const rl = resourceLabel(c.type, c.tier);
       if (!adjacent) {
-        confirmWalk(tx, ty, {
-          title: 'S’approcher de ' + rl + ' ?',
-          kicker: 'Approche',
-          mediaSrc: ui.getHarvestTargetSrc(c),
-          mediaClass: 'resource',
-          badge: 'T' + c.tier,
-        });
+        walkTo(tx, ty);
         return;
       }
       if (server.now < c.inactiveUntil) {
@@ -396,11 +307,13 @@
         return;
       }
       const lvlOk = me.harvestLevel >= c.tier;
+      const regainOk = me.pa >= CONFIG.COSTS.HARVEST;
       ui.confirmAction({
-        title: 'Récolter ' + rl + ' ? (2 PA)',
+        title: 'Récolter ' + rl + ' ?',
         bodyHtml: '<p>Récolte en <b>3 secondes</b>.</p>' +
           '<p class="' + (lvlOk ? 'ok-c' : 'hp-c') + '">Niveau de récolte requis : T' + c.tier +
-          ' <span class="dim">(vous : T' + me.harvestLevel + ')</span></p>',
+          ' <span class="dim">(vous : T' + me.harvestLevel + ')</span></p>' +
+          (regainOk ? '<p class="ok-c small">✨ Regain disponible : XP doublée !</p>' : ''),
         okLabel: 'Récolter',
         cb: async () => {
           const r = await Promise.resolve(server.harvest(tx, ty));
@@ -420,37 +333,25 @@
       const ml = c.label + ' T' + c.tier;
       if (server.now < c.inactiveUntil) {
         if (adjacent) ui.toast(ml + ' vaincu — réapparition dans ' + Math.ceil((c.inactiveUntil - server.now) / 1000) + ' s.');
-        else {
-          confirmWalk(tx, ty, {
-            title: 'S’approcher de ' + ml + ' ?',
-            kicker: 'Approche',
-            mediaSrc: ui.getMonsterTargetSrc(c),
-            mediaClass: 'monster',
-            badge: 'T' + c.tier,
-          });
-        }
+        else walkTo(tx, ty);
         return;
       }
       const raid = server.raids.get(raidKey(server.currentMapId || (server.me && server.me.mapId) || 'world', tx, ty));
       if (raid) {
         const dist = server.chebyshev(me.pos, tile);
         if (dist > CONFIG.JOIN_RADIUS) {
-          confirmWalk(tx, ty, {
-            title: 'S’approcher du raid ?',
-            kicker: 'Approche',
-            mediaSrc: ui.getMonsterTargetSrc(c),
-            mediaClass: 'monster',
-            badge: 'Raid T' + c.tier,
-          });
+          walkTo(tx, ty);
           return;
         }
         const nowChance = server.raidChance(raid);
         const withMeChance = winChance(server.teamForce(raid) + combatPower(me), raid.monsterForce);
+        const regainOk = me.pa >= CONFIG.COSTS.RAID;
         ui.confirmAction({
-          title: 'Rejoindre le raid ' + ml + ' ? (5 PA)',
+          title: 'Rejoindre le raid ' + ml + ' ?',
           bodyHtml: '<p>' + raid.participants.length + ' participant(s) — ' +
             ui.chanceHtml(nowChance) + ' de victoire, <b>≈ ' + Math.round(withMeChance * 100) + ' %</b> avec vous.</p>' +
-            '<p class="dim">Résolution dans ' + Math.max(0, Math.ceil((raid.endsAt - server.now) / 1000)) + ' s.</p>',
+            '<p class="dim">Résolution dans ' + Math.max(0, Math.ceil((raid.endsAt - server.now) / 1000)) + ' s.</p>' +
+            (regainOk ? '<p class="ok-c small">✨ Regain disponible : XP doublée en cas de victoire !</p>' : ''),
           okLabel: 'Rejoindre',
           cb: async () => {
             const r = await Promise.resolve(server.joinRaid(raidKey(server.currentMapId || (server.me && server.me.mapId) || 'world', tx, ty)));
@@ -465,21 +366,17 @@
         return;
       }
       if (!adjacent) {
-        confirmWalk(tx, ty, {
-          title: 'S’approcher de ' + ml + ' ?',
-          kicker: 'Approche',
-          mediaSrc: ui.getMonsterTargetSrc(c),
-          mediaClass: 'monster',
-          badge: 'T' + c.tier,
-        });
+        walkTo(tx, ty);
         return;
       }
       const soloChance = winChance(teamPowerOf([me]), c.force);
+      const soloRegainOk = me.pa >= CONFIG.COSTS.RAID;
       ui.confirmAction({
-        title: 'Lancer Raid ' + ml + ' ? (5 PA)',
+        title: 'Lancer Raid ' + ml + ' ?',
         bodyHtml: '<p>Seul, vous avez ' + ui.chanceHtml(soloChance) + ' de chances de victoire.</p>' +
           '<p class="dim hp-c">⚠ Une défaite est mortelle : retour à la Capitale.</p>' +
-          '<p class="dim">Le lobby reste ouvert 30 s — chaque allié qui rejoint fait grimper vos chances (visibles en direct dans la bannière).</p>',
+          '<p class="dim">Le lobby reste ouvert 30 s — chaque allié qui rejoint fait grimper vos chances (visibles en direct dans la bannière).</p>' +
+          (soloRegainOk ? '<p class="ok-c small">✨ Regain disponible : XP doublée en cas de victoire !</p>' : ''),
         okLabel: 'Créer Lobby',
         cb: async () => {
           const r = await Promise.resolve(server.createRaid(tx, ty));
@@ -494,7 +391,7 @@
       return;
     }
 
-    confirmWalk(tx, ty);
+    walkTo(tx, ty);
   }
 
   /* ---------- Entrées : tap (drag toléré) + clavier desktop ---------- */
@@ -606,11 +503,7 @@
       ui.showPlayerPicker(players, {
         tile: { x: players[0].pos.x, y: players[0].pos.y },
         moveLabel: 'Aller sur la case',
-        moveCb: () => confirmWalk(players[0].pos.x, players[0].pos.y, {
-          title: 'Aller sur la case occupée ?',
-          kicker: 'Déplacement',
-          badge: 'Rencontre',
-        }),
+        moveCb: () => walkTo(players[0].pos.x, players[0].pos.y),
       });
       return;
     }
@@ -677,10 +570,10 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
   document.getElementById('devPa').addEventListener('click', async () => {
     if (remote) {
       const r = await server.dev({ pa: 50 });
-      ui.toast(r.ok ? '+50 PA (DEV)' : r.error);
+      ui.toast(r.ok ? '+50 Regain (DEV)' : r.error);
     } else {
       server.me.pa = Math.min(CONFIG.PA.MAX, server.me.pa + 50);
-      ui.toast('+50 PA (DEV)');
+      ui.toast('+50 Regain (DEV)');
     }
   });
   document.getElementById('devReveal').addEventListener('click', () => {
