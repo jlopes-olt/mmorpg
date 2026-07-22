@@ -64,6 +64,61 @@ const STRIPE_PAYMENT_LINKS = {
 };
 const stripeClient = STRIPE_SECRET_KEY ? require('stripe')(STRIPE_SECRET_KEY) : null;
 
+/* ---------- Emails transactionnels (Resend) : OTP connexion + mot de passe
+ * oublié. Tant que RESEND_API_KEY est absent — ou que l'envoi échoue (ex.
+ * nom de domaine pas encore vérifié : l'adresse resend.dev par défaut ne
+ * délivre alors souvent qu'à l'adresse du compte Resend lui-même) — le code
+ * est journalisé côté serveur ET renvoyé au client dans `devCode` (jamais le
+ * cas en usage normal, seulement ce repli), pour ne jamais bloquer le
+ * développement/les tests avant que le domaine soit prêt. */
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+const RESEND_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'FERALIA Online <onboarding@resend.dev>';
+
+function maskEmail(email) {
+  const s = String(email || '');
+  const at = s.indexOf('@');
+  if (at <= 0) return '···';
+  const user = s.slice(0, at);
+  const maskedUser = user.length <= 2 ? user[0] + '···' : user.slice(0, 2) + '···';
+  return maskedUser + s.slice(at);
+}
+
+async function sendOtpEmail(to, code, kind) {
+  const subject = kind === 'reset' ? 'Code de réinitialisation — FERALIA Online' : 'Code de connexion — FERALIA Online';
+  const intro = kind === 'reset'
+    ? 'Voici ton code pour réinitialiser ton mot de passe :'
+    : 'Voici ton code de connexion :';
+  const html =
+    '<div style="font-family:sans-serif;max-width:420px;margin:0 auto;padding:24px;">' +
+      '<h2 style="color:#c89a3a;margin-bottom:4px;">FERALIA Online</h2>' +
+      '<p>' + intro + '</p>' +
+      '<p style="font-size:32px;font-weight:800;letter-spacing:0.12em;color:#14181d;">' + code + '</p>' +
+      '<p style="color:#666;font-size:13px;">Ce code expire dans quelques minutes. Si tu n’es pas à l’origine de cette demande, ignore cet email.</p>' +
+    '</div>';
+
+  if (!RESEND_API_KEY) {
+    console.log('[Resend non configuré] Code ' + kind + ' pour ' + to + ' : ' + code);
+    return { sent: false, devFallback: true };
+  }
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + RESEND_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: RESEND_FROM_EMAIL, to, subject, html }),
+    });
+    if (!res.ok) {
+      console.error('Échec envoi email Resend (' + res.status + ') : ' + (await res.text().catch(() => '')));
+      console.log('[Repli — envoi échoué] Code ' + kind + ' pour ' + to + ' : ' + code);
+      return { sent: false, devFallback: true };
+    }
+    return { sent: true, devFallback: false };
+  } catch (e) {
+    console.error('Erreur envoi email Resend :', e.message);
+    console.log('[Repli — envoi échoué] Code ' + kind + ' pour ' + to + ' : ' + code);
+    return { sent: false, devFallback: true };
+  }
+}
+
 function buildCheckoutLink(player, packId) {
   const pack = MOONSTONE_PACKS.find((p) => p.id === packId);
   if (!pack) return { ok: false, error: 'Pack inconnu.' };
@@ -131,6 +186,25 @@ function saveAccountOf(p) {
   }
 }
 
+// Identifiants valides (register()/login() déjà ok) → ce qui reste avant
+// finishAuth() : email manquant (comptes créés avant l'OTP, voir
+// game.js/load()) ou OTP à saisir. justRegistered traverse jusqu'à
+// finishAuth() pour préserver la distinction « bienvenue » / « de retour ».
+async function beginOtpFlow(socket, p, justRegistered) {
+  if (!p.email) {
+    socket.emit('otpRequired', { accountId: p.id, stage: 'need-email' });
+    return;
+  }
+  const { code } = game.beginLoginOtp(p, { justRegistered });
+  const sendRes = await sendOtpEmail(p.email, code, 'login');
+  socket.emit('otpRequired', {
+    accountId: p.id,
+    stage: 'otp',
+    email: maskEmail(p.email),
+    devCode: sendRes.devFallback ? code : undefined,
+  });
+}
+
 function saveWorld() {
   try {
     store.transaction(() => {
@@ -164,7 +238,10 @@ game.onGuildsDirty = () => saveWorld();
 game.onChatDirty = () => saveWorld();
 // Réveil/mort du boss mondial → écriture immédiate (sinon un redémarrage
 // juste après sa mort le referait apparaître aussitôt, horloge murale perdue).
-game.onWorldBossDirty = () => saveWorld();
+// Diffuse aussi à tous les clients déjà connectés (mort ou réveil) — sans ça,
+// un client resté ouvert ne voit jamais la transition tant qu'il ne se
+// reconnecte pas (le rendu de la case dépend de ce champ, voir js/render.js).
+game.onWorldBossDirty = () => { saveWorld(); io.emit('worldBoss', game.worldBossPayload()); };
 game.sendPush = sendPushToAccount;
 
 // Migration : on fige tout de suite l'état importé, puis on archive le JSON
@@ -374,16 +451,67 @@ io.on('connection', (socket) => {
     else socket.emit('creation', {});   // → écran inscription / connexion
   });
 
-  socket.on('register', (data) => {
+  socket.on('register', async (data) => {
     const res = game.register(data || {});
-    if (res.ok) finishAuth(res.player, true);
-    else socket.emit('creation', { error: res.error });
+    if (!res.ok) { socket.emit('creation', { error: res.error }); return; }
+    await beginOtpFlow(socket, res.player, true);
   });
 
-  socket.on('login', (data) => {
+  socket.on('login', async (data) => {
     const res = game.login(data || {});
-    if (res.ok) finishAuth(res.player, false);
-    else socket.emit('creation', { error: res.error });
+    if (!res.ok) { socket.emit('creation', { error: res.error }); return; }
+    await beginOtpFlow(socket, res.player, false);
+  });
+
+  // --- Étapes intermédiaires avant finishAuth() : email manquant (comptes
+  // créés avant l'OTP) puis code reçu par email. Pas de wrapper act() ici :
+  // ces échanges précèdent l'authentification, `player` n'est pas encore posé. ---
+  socket.on('auth:setEmail', async (data, ack) => {
+    if (typeof ack !== 'function') ack = () => {};
+    const res = game.setAccountEmail(String((data && data.accountId) || ''), data && data.email);
+    if (!res.ok) { ack(res); return; }
+    await beginOtpFlow(socket, res.player, false);
+    ack({ ok: true });
+  });
+
+  socket.on('auth:verifyOtp', (data, ack) => {
+    if (typeof ack !== 'function') ack = () => {};
+    const res = game.verifyLoginOtp(String((data && data.accountId) || ''), data && data.code);
+    if (!res.ok) { ack(res); return; }
+    ack({ ok: true });
+    finishAuth(res.player, res.justRegistered);
+  });
+
+  socket.on('auth:resendOtp', async (data, ack) => {
+    if (typeof ack !== 'function') ack = () => {};
+    const res = game.resendLoginOtp(String((data && data.accountId) || ''));
+    if (!res.ok) { ack(res); return; }
+    const sendRes = await sendOtpEmail(res.email, res.code, 'login');
+    ack({ ok: true, devCode: sendRes.devFallback ? res.code : undefined });
+  });
+
+  // --- Mot de passe oublié : indépendant de toute session (pas besoin d'être
+  // connecté — c'est justement le problème que ça résout). ---
+  socket.on('auth:forgotPassword', async (data, ack) => {
+    if (typeof ack !== 'function') ack = () => {};
+    const res = game.requestPasswordReset((data && data.username) || '');
+    if (!res.found) { ack({ ok: true, message: 'Si ce compte existe, un code a été envoyé.' }); return; }
+    if (!res.hasEmail) { ack({ ok: false, error: 'Ce compte n’a pas d’email enregistré — impossible d’envoyer un code.' }); return; }
+    const sendRes = await sendOtpEmail(res.email, res.code, 'reset');
+    ack({ ok: true, message: 'Code envoyé à ' + maskEmail(res.email) + '.', devCode: sendRes.devFallback ? res.code : undefined });
+  });
+
+  socket.on('auth:resendPasswordReset', async (data, ack) => {
+    if (typeof ack !== 'function') ack = () => {};
+    const res = game.resendPasswordReset((data && data.username) || '');
+    if (!res.ok) { ack(res); return; }
+    const sendRes = await sendOtpEmail(res.email, res.code, 'reset');
+    ack({ ok: true, devCode: sendRes.devFallback ? res.code : undefined });
+  });
+
+  socket.on('auth:resetPassword', (data, ack) => {
+    if (typeof ack !== 'function') ack = () => {};
+    ack(game.resetPassword((data && data.username) || '', data && data.code, data && data.newPassword));
   });
 
   // Toutes les actions : validation authentifié + ack {ok, error?}

@@ -52,7 +52,8 @@ function waitForHealth(tries) {
   }).on('error', () => setTimeout(() => waitForHealth(tries - 1), 400));
 }
 
-/* Phase 1 : inscription + jeu */
+/* Phase 1 : inscription + OTP (email non configuré → code renvoyé dans
+ * devCode, voir server/index.js sendOtpEmail) + jeu */
 function phase1() {
   const socket = ioc(URL);
   let asked = false;
@@ -63,7 +64,17 @@ function phase1() {
     if (asked) return fail('inscription refusée : ' + ((d && d.error) || '?'));
     asked = true;
     console.log('→ écran de création demandé (pas de session) ✔');
-    socket.emit('register', { username: NAME, password: PASSWORD, speciesClass: 'OURS_GUERRIER' });
+    socket.emit('register', { username: NAME, password: PASSWORD, speciesClass: 'OURS_GUERRIER', email: NAME + '@test.dev' });
+  });
+
+  socket.on('otpRequired', (d) => {
+    assert.strictEqual(d.stage, 'otp', 'OTP requis juste après inscription (email fourni)');
+    assert.ok(d.devCode, 'code de repli fourni (RESEND_API_KEY absent en test)');
+    console.log('→ inscription → OTP requis ✔ (code de repli)');
+    socket.emit('auth:verifyOtp', { accountId: d.accountId, code: d.devCode }, (r) => {
+      assert.ok(r && r.ok, 'code OTP (repli) accepté : ' + ((r && r.error) || '?'));
+      console.log('→ OTP vérifié ✔');
+    });
   });
 
   socket.on('init', (d) => {
@@ -106,6 +117,14 @@ function phase2() {
     } else {
       fail('connexion refusée avec le bon mot de passe : ' + ((d && d.error) || '?'));
     }
+  });
+
+  socket.on('otpRequired', (d) => {
+    assert.strictEqual(d.stage, 'otp', 'OTP requis à la reconnexion (compte avec email)');
+    assert.ok(d.devCode, 'code de repli fourni (RESEND_API_KEY absent en test)');
+    socket.emit('auth:verifyOtp', { accountId: d.accountId, code: d.devCode }, (r) => {
+      assert.ok(r && r.ok, 'code OTP (repli) accepté à la reconnexion : ' + ((r && r.error) || '?'));
+    });
   });
 
   socket.on('init', (d) => {

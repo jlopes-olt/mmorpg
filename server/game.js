@@ -14,6 +14,14 @@ Object.assign(globalThis, require('../js/world.js'));
 const MAX_GUILD_MEMBERS = 20;
 const CHAT_LOG_MAX = 300;
 
+// Volontairement permissive (pas de RFC 5322 complet) : on veut juste écarter
+// les fautes de frappe grossières, pas rejeter une adresse valide mais inhabituelle.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const OTP_TTL_MS = 10 * 60 * 1000;          // connexion : 10 min
+const OTP_RESET_TTL_MS = 15 * 60 * 1000;    // réinitialisation : 15 min
+const OTP_MAX_ATTEMPTS = 5;
+const OTP_RESEND_COOLDOWN_MS = 45 * 1000;
+
 // ADMIN_USERNAMES (variable d'environnement, pseudos séparés par des virgules) :
 // filet de secours pour garantir l'accès admin. Vérifié ici à l'inscription
 // (pas seulement au démarrage dans index.js) — sinon, un compte créé APRÈS
@@ -59,6 +67,14 @@ class Game {
     this.credentials = new Map();
     this.bots = new Map();
     this.tokens = new Map();
+    // OTP par email (connexion) et réinitialisation de mot de passe : état
+    // éphémère, JAMAIS persisté (perdu au redémarrage — l'utilisateur
+    // redemande un code, ce qui est très bien pour un flux court de quelques
+    // minutes). Clé = accountId pour les OTP de connexion, username en
+    // minuscules pour la réinitialisation (pas encore de session/accountId
+    // connu à ce stade).
+    this.pendingLoginOtps = new Map();
+    this.pendingPasswordResets = new Map();
     this.raids = new Map();
     this.tradeInvites = new Map();
     this.trades = new Map();
@@ -110,6 +126,12 @@ class Game {
   log(text) { this.broadcast('chat', { from: null, text, type: 'event' }); }
   plog(p, text) { this.send(p.id, 'chat', { from: null, text, type: 'event' }); }
   toast(p, text) { this.send(p.id, 'toast', { text }); }
+  // Notification mondiale : toast éphémère à tout le monde en plus de
+  // l'entrée de chat (this.log) — pour les évènements globaux qui méritent
+  // d'être vus tout de suite (siège de château, réveil du boss mondial),
+  // pas juste retrouvés en faisant défiler le chat après coup. Jamais de
+  // push ici : c'est réservé aux joueurs hors ligne (voir sendPush).
+  worldNotify(text) { this.broadcast('toast', { text }); this.log(text); }
   pushSelf(p) { this.send(p.id, 'self', p); this.onDirty(p); }
   notifyAchievements(p, list) {
     for (const a of list) {
@@ -259,10 +281,13 @@ class Game {
   register(data) {
     const username = String(data.username || '').trim().slice(0, 16);
     const password = String(data.password || '');
+    const email = String(data.email || '').trim().slice(0, 254);
     if (username.length < 3) return { ok: false, error: 'Nom trop court (3 caractères minimum).' };
     if (!/^[\p{L}\p{N} _-]+$/u.test(username)) return { ok: false, error: 'Nom invalide (lettres, chiffres, espaces, - et _).' };
     if (password.length < 4) return { ok: false, error: 'Mot de passe trop court (4 caractères minimum).' };
     if (!CLASSES[data.speciesClass]) return { ok: false, error: 'Classe invalide.' };
+    if (!classAvailableToRole(data.speciesClass, 'user')) return { ok: false, error: 'Classe réservée aux administrateurs.' };
+    if (!EMAIL_RE.test(email)) return { ok: false, error: 'Adresse email invalide.' };
 
     const id = 'p_' + username.toLowerCase();
     if (this.players.has(id)) return { ok: false, error: 'Le nom « ' + username + ' » est déjà pris.' };
@@ -275,7 +300,7 @@ class Game {
     });
 
     const p = {
-      id, username, bot: false,
+      id, username, email, bot: false,
       token: crypto.randomBytes(16).toString('hex'),
       online: false, lastSeen: Date.now(),
       mapId: 'world',
@@ -357,6 +382,144 @@ class Game {
     return { ok: true, player: p };
   }
 
+  _generateOtp() {
+    return String(Math.floor(100000 + this.rng() * 900000));
+  }
+
+  /* ---------- OTP de connexion par email ----------
+   * register()/login() restent inchangés (retour immédiat {ok, player}) —
+   * l'exigence d'OTP est orchestrée par l'appelant (server/index.js, qui
+   * possède le client Resend), pas ici : ces méthodes ne font QUE la
+   * logique de génération/vérification, jamais l'envoi d'email. */
+  beginLoginOtp(p, opts) {
+    const code = this._generateOtp();
+    this.pendingLoginOtps.set(p.id, {
+      code,
+      expiresAt: Date.now() + OTP_TTL_MS,
+      attempts: 0,
+      lastSentAt: Date.now(),
+      justRegistered: !!(opts && opts.justRegistered),
+    });
+    return { code, email: p.email };
+  }
+
+  resendLoginOtp(accountId) {
+    const pending = this.pendingLoginOtps.get(accountId);
+    if (!pending) return { ok: false, error: 'Session de connexion expirée — reconnecte-toi.' };
+    if (Date.now() - pending.lastSentAt < OTP_RESEND_COOLDOWN_MS) {
+      return { ok: false, error: 'Attends un peu avant de redemander un code.' };
+    }
+    pending.code = this._generateOtp();
+    pending.expiresAt = Date.now() + OTP_TTL_MS;
+    pending.attempts = 0;
+    pending.lastSentAt = Date.now();
+    const p = this.players.get(accountId);
+    return { ok: true, code: pending.code, email: p ? p.email : null };
+  }
+
+  verifyLoginOtp(accountId, code) {
+    const pending = this.pendingLoginOtps.get(accountId);
+    if (!pending) return { ok: false, error: 'Session de connexion expirée — reconnecte-toi.' };
+    if (Date.now() > pending.expiresAt) {
+      this.pendingLoginOtps.delete(accountId);
+      return { ok: false, error: 'Code expiré — redemande un code.' };
+    }
+    if (String(code || '') !== pending.code) {
+      pending.attempts++;
+      if (pending.attempts >= OTP_MAX_ATTEMPTS) {
+        this.pendingLoginOtps.delete(accountId);
+        return { ok: false, error: 'Trop de tentatives — reconnecte-toi.' };
+      }
+      return { ok: false, error: 'Code incorrect.' };
+    }
+    const p = this.players.get(accountId);
+    if (!p) return { ok: false, error: 'Compte introuvable.' };
+    const justRegistered = pending.justRegistered;
+    this.pendingLoginOtps.delete(accountId);
+    return { ok: true, player: p, justRegistered };
+  }
+
+  // Compte créé avant l'ajout de l'OTP : pas d'email connu — ajout forcé à
+  // la prochaine connexion (voir p.email dans load()), avant de continuer.
+  setAccountEmail(accountId, email) {
+    const clean = String(email || '').trim().slice(0, 254);
+    if (!EMAIL_RE.test(clean)) return { ok: false, error: 'Adresse email invalide.' };
+    const p = this.players.get(accountId);
+    if (!p) return { ok: false, error: 'Compte introuvable.' };
+    p.email = clean;
+    this.onDirty(p);
+    return { ok: true, player: p };
+  }
+
+  /* ---------- Mot de passe oublié ----------
+   * Même principe : la logique reste ici, l'envoi d'email est câblé côté
+   * index.js. `found`/`hasEmail` distincts du `code` pour que l'appelant
+   * sache s'il doit réellement envoyer un email, sans exposer directement
+   * si le compte existe au client (message générique côté UI). */
+  requestPasswordReset(username) {
+    const id = 'p_' + String(username || '').trim().toLowerCase();
+    const p = this.players.get(id);
+    if (!p) return { ok: true, found: false };
+    if (!p.email) return { ok: true, found: true, hasEmail: false };
+    const code = this._generateOtp();
+    this.pendingPasswordResets.set(id, {
+      code,
+      expiresAt: Date.now() + OTP_RESET_TTL_MS,
+      attempts: 0,
+      lastSentAt: Date.now(),
+    });
+    return { ok: true, found: true, hasEmail: true, email: p.email, code };
+  }
+
+  resendPasswordReset(username) {
+    const id = 'p_' + String(username || '').trim().toLowerCase();
+    const pending = this.pendingPasswordResets.get(id);
+    if (!pending) return { ok: false, error: 'Aucune demande en cours pour ce compte.' };
+    if (Date.now() - pending.lastSentAt < OTP_RESEND_COOLDOWN_MS) {
+      return { ok: false, error: 'Attends un peu avant de redemander un code.' };
+    }
+    pending.code = this._generateOtp();
+    pending.expiresAt = Date.now() + OTP_RESET_TTL_MS;
+    pending.attempts = 0;
+    pending.lastSentAt = Date.now();
+    const p = this.players.get(id);
+    return { ok: true, code: pending.code, email: p ? p.email : null };
+  }
+
+  resetPassword(username, code, newPassword) {
+    const id = 'p_' + String(username || '').trim().toLowerCase();
+    const pending = this.pendingPasswordResets.get(id);
+    if (!pending) return { ok: false, error: 'Aucune demande en cours pour ce compte.' };
+    if (Date.now() > pending.expiresAt) {
+      this.pendingPasswordResets.delete(id);
+      return { ok: false, error: 'Code expiré — recommence la demande.' };
+    }
+    if (String(code || '') !== pending.code) {
+      pending.attempts++;
+      if (pending.attempts >= OTP_MAX_ATTEMPTS) {
+        this.pendingPasswordResets.delete(id);
+        return { ok: false, error: 'Trop de tentatives — recommence la demande.' };
+      }
+      return { ok: false, error: 'Code incorrect.' };
+    }
+    const password = String(newPassword || '');
+    if (password.length < 4) return { ok: false, error: 'Mot de passe trop court (4 caractères minimum).' };
+    const p = this.players.get(id);
+    if (!p) return { ok: false, error: 'Compte introuvable.' };
+    const passSalt = crypto.randomBytes(16).toString('hex');
+    this.credentials.set(id, {
+      passHash: this.hashPassword(password, passSalt),
+      passSalt,
+      createdAt: (this.credentials.get(id) || {}).createdAt || Date.now(),
+    });
+    this.pendingPasswordResets.delete(id);
+    // Un mot de passe oublié invalide la session existante : accès partagé
+    // ou compte potentiellement compromis, mieux vaut une reconnexion propre.
+    if (p.token) { this.tokens.delete(p.token); p.token = null; }
+    this.onDirty(p);
+    return { ok: true };
+  }
+
   initPayload(p) {
     return {
       token: p.token,
@@ -371,11 +534,19 @@ class Game {
       mapStates: this.mapStates(),
       bounds: boundsOf(this.tilesOf(p)),
       players: this.publicPlayers(),
-      worldBoss: { alive: this.worldBossAlive, nextSpawnAt: this.worldBossNextSpawnAt, pos: WORLD_BOSS.pos, label: WORLD_BOSS.label },
+      worldBoss: this.worldBossPayload(),
       raids: this.raidsPayload(),
       trade: p.tradeId ? this.tradePayloadFor(p, this.trades.get(p.tradeId)) : null,
       chatHistory: this.chatHistoryFor(p),
     };
+  }
+
+  // Repris par initPayload() (connexion) ET par index.js (broadcast à chaud
+  // quand onWorldBossDirty se déclenche — mort ou réveil) : mêmes champs des
+  // deux côtés, sinon un client déjà connecté ne voit jamais la transition
+  // apparaître/disparaître sur la carte tant qu'il ne se reconnecte pas.
+  worldBossPayload() {
+    return { alive: this.worldBossAlive, nextSpawnAt: this.worldBossNextSpawnAt, pos: WORLD_BOSS.pos, label: WORLD_BOSS.label };
   }
 
   publicPlayer(p) {
@@ -958,11 +1129,20 @@ class Game {
   castleOf(terrain) {
     let c = this.castles.get(terrain);
     if (!c) {
-      c = { terrain, ownerGuildId: null, hp: 0, hpMax: 0, level: 0, fortLevel: 0 };
+      c = { terrain, ownerGuildId: null, hp: 0, hpMax: 0, level: 0, fortLevel: 0, nextSiegeAt: 0 };
       this.castles.set(terrain, c);
     }
     if (typeof c.fortLevel !== 'number') c.fortLevel = 0;
+    if (typeof c.nextSiegeAt !== 'number') c.nextSiegeAt = 0;
     return c;
+  }
+
+  // Isolé en méthode (plutôt qu'un appel direct à isWithinSiegeWindow dans
+  // createSiege) pour rester substituable en test — sinon la suite de tests
+  // deviendrait non déterministe selon l'heure réelle d'exécution, comme
+  // pour g.rng/g.broadcast (voir test-game.js).
+  isSiegeWindowOpen(terrain) {
+    return isWithinSiegeWindow(CASTLE_SIEGE_WINDOWS[terrain]);
   }
 
   castleTileFor(terrain) {
@@ -1128,6 +1308,21 @@ class Game {
     if (c.ownerGuildId === p.guildId) return { ok: false, error: 'Vous ne pouvez pas assiéger le château de votre propre guilde.' };
     const key = 'siege:' + terrain;
     if (this.raids.has(key)) return this.joinRaid(p, key);
+    // Fenêtre de vulnérabilité (voir CASTLE_SIEGE_WINDOWS) : la défense doit
+    // dépendre de la force réelle des deux guildes sur des heures où tout le
+    // monde peut légitimement être en ligne, pas d'un horaire nocturne exploité.
+    if (!this.isSiegeWindowOpen(terrain)) {
+      const siegeWindow = CASTLE_SIEGE_WINDOWS[terrain];
+      return { ok: false, error: 'Ce château n’est assiégeable qu’entre ' + siegeWindow.startHour + 'h et ' + siegeWindow.endHour + 'h (heure de Paris).' };
+    }
+    // Délai entre deux sièges sur le même château (voir CASTLE_SIEGE_COOLDOWN_MS) :
+    // sans lui, une guilde peut enchaîner les assauts (chacun avec son propre
+    // lobby de 30 s) sans laisser aux défenseurs le temps de rallier ou réparer.
+    if (Date.now() < c.nextSiegeAt) {
+      const secs = Math.max(1, Math.ceil((c.nextSiegeAt - Date.now()) / 1000));
+      const mm = Math.floor(secs / 60), ss = secs % 60;
+      return { ok: false, error: 'Ce château a déjà été assiégé récemment — retentez dans ' + (mm > 0 ? mm + ' min ' : '') + ss + ' s.' };
+    }
     if (!this.atCastle(p, terrain)) return { ok: false, error: 'Vous devez être au château pour lancer l’assaut.' };
     if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
     if (p.pa < CONFIG.COSTS.RAID) return { ok: false, error: 'Pas assez de PA (' + CONFIG.COSTS.RAID + ' requis).' };
@@ -1161,6 +1356,10 @@ class Game {
         this.toast(m, '🏰 Votre château (' + terrainLabel + ') est assiégé par « ' + guildAtk.name + ' » — accourez pour le défendre (30 s) !');
       }
     }
+    // Annonce mondiale (toast + chat) : sert surtout à la guilde défenseuse
+    // (des membres peuvent avoir manqué le toast ciblé ci-dessus, ou vouloir
+    // s'y rendre pour réparer/renforcer après coup), mais reste visible de tous.
+    this.worldNotify('⚔ Le château ' + terrainLabel + ' est attaqué par « ' + guildAtk.name + ' » !');
     return { ok: true };
   }
 
@@ -1242,7 +1441,7 @@ class Game {
       // mais ne peut jamais faire tomber le château tout seul (plancher à 1 PS) —
       // il faut une victoire au combat pour le prendre.
       if (engineDamage > 0) c.hp = Math.max(1, c.hp - engineDamage);
-      this.log('🏰 L’assaut de « ' + guildAtk.name + ' » contre le château (' + raid.terrain + ') de « ' + guildDef.name + ' » a échoué' +
+      this.worldNotify('🏰 L’assaut de « ' + guildAtk.name + ' » contre le château (' + raid.terrain + ') de « ' + guildDef.name + ' » a échoué' +
         (defenders.length ? (' — ' + defenders.length + ' défenseur(s) mobilisé(s)') : '') +
         (engineDamage > 0 ? (' (engins : -' + engineDamage + ' PS malgré tout, ' + c.hp + '/' + c.hpMax + ')') : '') + '.');
     } else {
@@ -1253,12 +1452,18 @@ class Game {
         c.ownerGuildId = raid.attackerGuildId;
         c.hp = Math.round(c.hpMax * 0.5);
         c.fortLevel = 0;   // les fortifications de l'ancien propriétaire tombent avec lui
-        this.log('🏰 « ' + guildAtk.name + ' » a pris le château (' + raid.terrain + ') à « ' + guildDef.name + ' » !');
+        this.worldNotify('🏰 « ' + guildAtk.name + ' » a pris le château (' + raid.terrain + ') à « ' + guildDef.name + ' » !');
       } else {
-        this.log('🏰 « ' + guildAtk.name + ' » entame le château (' + raid.terrain + ') de « ' + guildDef.name + ' » (' + c.hp + '/' + c.hpMax + ' PS restants).');
+        this.worldNotify('🏰 « ' + guildAtk.name + ' » entame le château (' + raid.terrain + ') de « ' + guildDef.name + ' » (' + c.hp + '/' + c.hpMax + ' PS restants).');
       }
       this.onGuildsDirty();
     }
+
+    // Quelle que soit l'issue (repoussé, endommagé, ou pris), impose un délai
+    // avant le prochain siège sur CE château (voir createSiege) — l'attaquant
+    // qui vient de le prendre en profite aussi, le temps pour le nouveau
+    // propriétaire de souffler avant une contre-attaque immédiate.
+    c.nextSiegeAt = Date.now() + CASTLE_SIEGE_COOLDOWN_MS;
 
     for (const a of attackers) {
       if (a.bot) continue;
@@ -1307,11 +1512,18 @@ class Game {
     // Les autres membres en ligne de la guilde défenseuse (absents de la tuile)
     // reçoivent un simple message d'issue, sans rapport détaillé.
     const defenderIds = new Set(defenders.map((m) => m.id));
+    // "Tombé aux mains de" uniquement sur une capture effective (captured) —
+    // un assaut gagné qui n'entame que les PS ne change pas le propriétaire,
+    // il ne faut pas laisser croire le contraire (voir defenderOutcomeText).
+    const defenderOutcomeText = captured
+      ? ('🏰 Le château (' + raid.terrain + ') est tombé aux mains de « ' + guildAtk.name + ' ».')
+      : victory
+        ? ('🏰 Le château (' + raid.terrain + ') a été endommagé par « ' + guildAtk.name + ' » (' + c.hp + '/' + c.hpMax + ' PS restants).')
+        : ('🏰 L’assaut de « ' + guildAtk.name + ' » contre votre château (' + raid.terrain + ') a été repoussé.');
+
     for (const m of this.players.values()) {
       if (m.bot || !m.online || m.guildId !== defenderGuildId || defenderIds.has(m.id)) continue;
-      this.toast(m, victory
-        ? ('🏰 Le château (' + raid.terrain + ') est tombé aux mains de « ' + guildAtk.name + ' ».')
-        : ('🏰 L’assaut de « ' + guildAtk.name + ' » contre votre château (' + raid.terrain + ') a été repoussé.'));
+      this.toast(m, defenderOutcomeText);
     }
 
     // Notification push : seulement pour ceux qui n'étaient PAS connectés
@@ -1320,15 +1532,15 @@ class Game {
     // pas rejoindre à temps, juste son issue.
     for (const m of this.players.values()) {
       if (m.bot || m.online || m.guildId !== defenderGuildId) continue;
-      this.sendPush(m.id, '🏰 Siège terminé', victory
-        ? ('Le château (' + raid.terrain + ') est tombé aux mains de « ' + guildAtk.name + ' ».')
-        : ('L’assaut de « ' + guildAtk.name + ' » contre votre château (' + raid.terrain + ') a été repoussé.'));
+      this.sendPush(m.id, '🏰 Siège terminé', defenderOutcomeText);
     }
     for (const a of attackers) {
       if (a.bot || a.online) continue;
-      this.sendPush(a.id, '⚔ Résultat du siège', victory
+      this.sendPush(a.id, '⚔ Résultat du siège', captured
         ? ('Victoire ! Le château (' + raid.terrain + ') de « ' + guildDef.name + ' » est conquis.')
-        : ('L’assaut contre le château (' + raid.terrain + ') de « ' + guildDef.name + ' » a échoué.'));
+        : victory
+          ? ('Le château (' + raid.terrain + ') de « ' + guildDef.name + ' » a été endommagé (' + c.hp + '/' + c.hpMax + ' PS restants).')
+          : ('L’assaut contre le château (' + raid.terrain + ') de « ' + guildDef.name + ' » a échoué.'));
     }
   }
 
@@ -1485,7 +1697,7 @@ class Game {
   spawnBots() {
     const { MIN, MAX } = CONFIG.WORLD;
     for (let i = 0; i < CONFIG.BOT_COUNT; i++) {
-      const classes = Object.keys(CLASSES);
+      const classes = Object.keys(CLASSES).filter((cls) => classAvailableToRole(cls, 'user'));
       const cls = classes[Math.floor(Math.random() * classes.length)];
       const tier = 1 + Math.floor(Math.random() * 3);
       const skinOptions = [null, ...SKIN_SHOP_ITEMS.filter((s) => s.speciesClass === cls).map((s) => s.id)];
@@ -1525,7 +1737,7 @@ class Game {
     if (!this.worldBossAlive && Date.now() >= this.worldBossNextSpawnAt) {
       this.worldBossAlive = true;
       this.onWorldBossDirty();
-      this.log('🐉 Le Wyrm Ancestral s’est réveillé dans son repaire !');
+      this.worldNotify('🐉 Le Wyrm Ancestral s’est réveillé dans son repaire !');
     }
 
     for (const p of this.players.values()) {
@@ -1892,6 +2104,7 @@ class Game {
 
   createCharacter(p, speciesClass) {
     if (!CLASSES[speciesClass]) return { ok: false, error: 'Classe invalide.' };
+    if (!classAvailableToRole(speciesClass, p.role)) return { ok: false, error: 'Classe réservée aux administrateurs.' };
     if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
     if (!this.atSanctuaryPlayer(p)) return { ok: false, error: 'L’éveil d’une nouvelle forme se fait à la Capitale ou dans un village.' };
     if (p.characters.length >= p.charSlots) return { ok: false, error: 'Tous vos emplacements sont occupés.' };
@@ -2443,6 +2656,9 @@ class Game {
       if (!p.guildInvite || typeof p.guildInvite !== 'object') p.guildInvite = null;
       if (!Array.isArray(p.friends)) p.friends = [];
       if (!Array.isArray(p.friendRequests)) p.friendRequests = [];
+      // Comptes créés avant l'ajout de l'OTP par email : pas d'email connu —
+      // voir setAccountEmail(), demandé à la prochaine connexion.
+      if (typeof p.email !== 'string') p.email = null;
       ensureAchievementState(p);
       // Rééquilibrage des PV par classe : évite qu'un compte existant se
       // retrouve avec plus de PV affichés que son nouveau maximum.

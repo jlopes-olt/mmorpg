@@ -25,16 +25,22 @@ g.send = (id, ev, data) => sent.push({ id, ev, data });
 g.broadcast = () => {};
 const pushed = [];
 g.sendPush = (id, title, body) => pushed.push({ id, title, body });
+// La fenêtre de vulnérabilité des châteaux (CASTLE_SIEGE_WINDOWS) dépend de
+// l'heure réelle — sans ce stub, la suite deviendrait non déterministe selon
+// le moment où elle s'exécute. Le comportement de la fenêtre elle-même est
+// testé séparément plus bas, en la réactivant ponctuellement.
+g.isSiegeWindowOpen = () => true;
 
 // --- Comptes : inscription / connexion / token ---
-let r = g.register({ username: 'Alice', password: 'secret1', speciesClass: 'LION_PALADIN' });
+let r = g.register({ username: 'Alice', password: 'secret1', speciesClass: 'LION_PALADIN', email: 'alice@test.dev' });
 assert.ok(r.ok && r.created, 'inscription');
 const alice = r.player;
 alice.online = true;
 
-assert.ok(!g.register({ username: 'Al', password: 'secret1', speciesClass: 'LION_PALADIN' }).ok, 'nom trop court refusé');
-assert.ok(!g.register({ username: 'Zoe', password: '123', speciesClass: 'LION_PALADIN' }).ok, 'mot de passe trop court refusé');
-assert.ok(!g.register({ username: 'alice', password: 'autre', speciesClass: 'CHAT_MAGICIEN' }).ok, 'nom déjà pris (insensible à la casse)');
+assert.ok(!g.register({ username: 'Al', password: 'secret1', speciesClass: 'LION_PALADIN', email: 'al@test.dev' }).ok, 'nom trop court refusé');
+assert.ok(!g.register({ username: 'Zoe', password: '123', speciesClass: 'LION_PALADIN', email: 'zoe@test.dev' }).ok, 'mot de passe trop court refusé');
+assert.ok(!g.register({ username: 'alice', password: 'autre', speciesClass: 'CHAT_MAGICIEN', email: 'alice2@test.dev' }).ok, 'nom déjà pris (insensible à la casse)');
+assert.ok(!g.register({ username: 'Zola', password: 'secret1', speciesClass: 'LION_PALADIN', email: 'pas-un-email' }).ok, 'email invalide refusé');
 
 const r2 = g.authToken(alice.token);
 assert.strictEqual(r2.player, alice, 'reprise de session par token');
@@ -47,7 +53,7 @@ assert.ok(rLogin.ok, 'connexion (insensible à la casse)');
 assert.notStrictEqual(alice.token, oldToken, 'token de session régénéré à la connexion');
 assert.ok(!g.authToken(oldToken).ok, 'ancien token invalidé');
 
-r = g.register({ username: 'Bob', password: 'secret2', speciesClass: 'CERF_DRUIDE' });
+r = g.register({ username: 'Bob', password: 'secret2', speciesClass: 'CERF_DRUIDE', email: 'bob@test.dev' });
 assert.ok(r.ok, 'second compte');
 const bob = r.player;
 bob.online = true;
@@ -78,7 +84,7 @@ for (let target = 1; target <= 5; target++) {
 // chaque classe doit avoir des chances raisonnables ; avec l'équipement du
 // tier du monstre, la victoire doit être quasi sûre.
 for (let tier = 1; tier <= 5; tier++) {
-  for (const speciesClass of Object.keys(CLASSES)) {
+  for (const speciesClass of Object.keys(CLASSES).filter((k) => !CLASSES[k].adminOnly)) {
     const parity = {
       speciesClass,
       weapon: { tier: tier - 1 },
@@ -226,7 +232,7 @@ assert.strictEqual(alice.hp, Math.ceil(maxHp(alice) * CONFIG.COMBAT.DEATH_HP_PCT
 assert.strictEqual(alice.gold, goldBeforeDeath, 'aucune perte d’or à la mort');
 
 // 2) Victoire forcée (rng → 0) : Rempart d'équipe + Sève en % des PV max
-let rr = g.register({ username: 'Cara', password: 'secret3', speciesClass: 'OURS_GUERRIER' });
+let rr = g.register({ username: 'Cara', password: 'secret3', speciesClass: 'OURS_GUERRIER', email: 'cara@test.dev' });
 assert.ok(rr.ok, 'troisième compte');
 const cara = rr.player;
 cara.online = true;
@@ -294,6 +300,8 @@ alice.pos = { x: 0, y: 0 };
 assert.ok(!g.createCharacter(alice, 'LION_PALADIN').ok, 'doublon de classe refusé');
 assert.ok(g.createCharacter(alice, 'CERF_DRUIDE').ok, 'éveil du Cerf Druide à la Capitale');
 assert.strictEqual(alice.characters.length, 2);
+bob.pos = { x: 0, y: 0 };
+assert.ok(!g.createCharacter(bob, 'SERAPHIN_ROYAL').ok, 'classe admin-only refusée à un joueur normal');
 assert.ok(!g.createCharacter(alice, 'CHAT_MAGICIEN').ok, 'troisième forme refusée (slots pleins)');
 
 // Métamorphose : PV en pourcentage, maîtrises et équipement séparés,
@@ -377,7 +385,7 @@ console.log('Cuisine : Marmite ✔, buffs ✔, potion ✔, drop d’ingrédient 
 assert.strictEqual(alice.role, 'admin', 'premier compte inscrit = admin');
 assert.strictEqual(bob.role, 'user', 'compte suivant = user par défaut');
 
-const rCarl = g.register({ username: 'Carl', password: 'secret3', speciesClass: 'RENARD_VOLEUR' });
+const rCarl = g.register({ username: 'Carl', password: 'secret3', speciesClass: 'RENARD_VOLEUR', email: 'carl@test.dev' });
 assert.ok(rCarl.ok, 'troisième compte');
 const carl = rCarl.player;
 assert.strictEqual(carl.role, 'user', 'troisième compte = user');
@@ -421,6 +429,11 @@ assert.ok(!g.adminGrantSlot(alice, 'Carl', 1).ok, 'don refusé une fois le plafo
 
 assert.ok(g.adminSetRole(alice, 'Carl', 'admin').ok, 'admin : promotion');
 assert.strictEqual(carl.role, 'admin', 'compte cible promu admin');
+carl.pos = { x: 0, y: 0 };
+assert.ok(g.createCharacter(carl, 'SERAPHIN_ROYAL').ok, 'admin : classe divine accessible');
+assert.ok(carl.characters.some((c) => c.speciesClass === 'SERAPHIN_ROYAL'), 'la forme Séraphin Royal est bien ajoutée');
+assert.strictEqual(CLASSES.SERAPHIN_ROYAL.baseHp, 99999, 'PV de base divins configurés');
+assert.strictEqual(playerForce({ speciesClass: 'SERAPHIN_ROYAL', weapon: { tier: 0 }, weaponMastery: 1 }), 99999, 'force de départ divine exacte');
 assert.ok(g.adminSetRole(alice, 'Carl', 'user').ok, 'admin : rétrogradation');
 assert.strictEqual(carl.role, 'user', 'compte cible rétrogradé');
 assert.ok(!g.adminSetRole(alice, 'Carl', 'superadmin').ok, 'rôle invalide refusé');
@@ -666,21 +679,44 @@ assert.strictEqual(alice.hp, Math.ceil(maxHp(alice) * CONFIG.COMBAT.DEATH_HP_PCT
 assert.deepStrictEqual(alice.pos, { x: 0, y: 0 }, 'rapatriement à la Capitale après un assaut repoussé');
 assert.strictEqual(alice.status, 'IDLE', 'Alice repasse IDLE après la résolution du siège');
 
+// Délai anti-enchaînement (voir CASTLE_SIEGE_COOLDOWN_MS) : un nouveau siège sur
+// CE château, juste après la résolution du précédent, est refusé — sans quoi
+// une guilde pourrait grinder les PS jusqu'à la capture en quelques minutes,
+// sans laisser aux défenseurs le temps de réagir. Alice repositionnée sur
+// place, PA/statut au vert : seul le cooldown peut expliquer le refus.
 alice.pos = { x: foretCastleTile.x, y: foretCastleTile.y };
 alice.pa = 50; alice.hp = maxHp(alice); alice.status = 'IDLE';
+assert.ok(!g.createSiege(alice, 'FORET').ok, 'siège immédiat sur le même château refusé (cooldown)');
+g.castleOf('FORET').nextSiegeAt = 0;   // simule l'expiration du délai pour la suite du test
+
+// Fenêtre de vulnérabilité (CASTLE_SIEGE_WINDOWS) : réactivée ponctuellement
+// (elle est stubbée à `true` pour le reste de la suite, voir plus haut) pour
+// vérifier que hors plage, même sans cooldown ni raison de refus, le siège
+// est bloqué avec un message clair — et repasse en dedans de la plage.
+g.isSiegeWindowOpen = () => false;
+const outOfWindow = g.createSiege(alice, 'FORET');
+assert.ok(!outOfWindow.ok, 'siège refusé hors de la fenêtre de vulnérabilité');
+assert.ok(/assiégeable/i.test(outOfWindow.error), 'message explicite sur la fenêtre horaire');
+g.isSiegeWindowOpen = () => true;
+
 g.rng = () => 0;   // assaut réussi à coup sûr
 const beforeHitHp = g.castleOf('FORET').hp;
 sent.length = 0;
-assert.ok(g.createSiege(alice, 'FORET').ok, 'second lobby de siège créé');
+assert.ok(g.createSiege(alice, 'FORET').ok, 'second lobby de siège créé (cooldown expiré)');
 assert.ok(g.startRaidNow(alice, siegeKey).ok);
 g.tick(300);
 siegeResults = sent.filter((m) => m.ev === 'siegeResult').map((m) => m.data);
 assert.ok(siegeResults[0].victory && !siegeResults[0].captured, 'assaut réussi mais château pas encore pris');
 assert.strictEqual(g.castleOf('FORET').hp, beforeHitHp - CASTLE_DAMAGE_PER_ASSAULT, 'PS réduits du montant par assaut');
+assert.ok(!g.createSiege(alice, 'FORET').ok, 'cooldown de nouveau actif après ce second siège');
 
 // Assauts répétés (lobby → lancement → résolution) jusqu'à la capture complète
+// — cooldown expiré manuellement à chaque tour : ce test grinde volontairement
+// pour vérifier la progression jusqu'à la capture, le cooldown lui-même est
+// déjà couvert par les deux assertions ci-dessus.
 let guard = 0;
 while (g.castleOf('FORET').ownerGuildId !== alice.guildId && guard < 20) {
+  g.castleOf('FORET').nextSiegeAt = 0;
   alice.pos = { x: foretCastleTile.x, y: foretCastleTile.y };
   alice.pa = 50; alice.hp = maxHp(alice); alice.status = 'IDLE';
   g.createSiege(alice, 'FORET');
@@ -705,7 +741,7 @@ assert.ok(g.claimCastle(carl, 'PLAINE').ok, 'Carl (chef des Faucons) fonde le ch
 // Un membre des Faucons hors ligne au moment de la résolution — pour vérifier
 // la notification push (Bob et Carl sont en ligne, déjà couverts par
 // toast/rapport détaillé ci-dessous ; seul un membre absent a besoin du push).
-const rDaveOff = g.register({ username: 'DaveOff', password: 'secret1', speciesClass: 'OURS_GUERRIER' });
+const rDaveOff = g.register({ username: 'DaveOff', password: 'secret1', speciesClass: 'OURS_GUERRIER', email: 'daveoff@test.dev' });
 const daveOff = rDaveOff.player;
 assert.ok(g.inviteToGuild(carl, 'DaveOff').ok, 'Carl invite DaveOff dans les Faucons');
 assert.ok(g.respondGuildInvite(daveOff, true).ok, 'DaveOff rejoint les Faucons');
@@ -824,6 +860,7 @@ alice.pos = { x: 0, y: 0 }; alice.status = 'IDLE';
 alice.inventory.BOIS_1 = 25; alice.inventory.MINERAI_1 = 15; alice.inventory.PLANTE_1 = 10;
 assert.ok(g.craftSiegeEngine(alice, 1).ok, 'second engin fabriqué à la Capitale');
 alice.pos = { x: montagneCastleTile.x, y: montagneCastleTile.y }; alice.pa = 50; alice.hp = maxHp(alice); alice.status = 'IDLE';
+g.castleOf('MONTAGNE').nextSiegeAt = 0;   // cooldown déjà couvert par le test dédié sur FORET
 assert.ok(g.createSiege(alice, 'MONTAGNE').ok, 'second lobby de siège');
 assert.ok(g.deploySiegeEngine(alice, montagneSiegeKey, 1).ok, 'engin redéployé pour ce nouveau siège');
 g.castleOf('MONTAGNE').hp = CASTLE_DAMAGE_PER_ASSAULT + SIEGE_ENGINE_DAMAGE[1];   // pile de quoi tomber à 0
@@ -854,8 +891,8 @@ g.rng = () => 0;   // victoire garantie
 assert.ok(g.createRaid(alice, foretMob.x, foretMob.y).ok, 'raid forêt pour vérifier le bonus de zone');
 assert.ok(g.startRaidNow(alice, foretMob.x + ',' + foretMob.y).ok);
 g.tick(300);
+Math.random = savedRandom;   // avant g.rng = Math.random ci-dessous : sinon g.rng capture le Math.random encore figé à 0
 g.rng = Math.random;
-Math.random = savedRandom;
 const zoneResult = sent.filter((m) => m.ev === 'result' && m.id === alice.id).map((m) => m.data)[0];
 const expectedGold = Math.ceil((3 + foretMob.content.tier * 4) * CASTLE_ZONE_GOLD_BONUS);
 assert.strictEqual(zoneResult.gold, expectedGold, 'or bonifié de +' + Math.round((CASTLE_ZONE_GOLD_BONUS - 1) * 100) + ' % pour la guilde propriétaire de la zone');
@@ -961,9 +998,9 @@ alice.online = true;
 console.log('Crédit Stripe (webhook) : appliqué même hors ligne ✔, compte/montant invalides refusés ✔');
 
 // --- Notifications push : demande d'ami + MP, seulement si le destinataire est hors ligne ---
-const rPushE = g.register({ username: 'PushE', password: 'secret1', speciesClass: 'LION_PALADIN' });
+const rPushE = g.register({ username: 'PushE', password: 'secret1', speciesClass: 'LION_PALADIN', email: 'pushe@test.dev' });
 const pushE = rPushE.player;
-const rPushF = g.register({ username: 'PushF', password: 'secret1', speciesClass: 'CHAT_MAGICIEN' });
+const rPushF = g.register({ username: 'PushF', password: 'secret1', speciesClass: 'CHAT_MAGICIEN', email: 'pushf@test.dev' });
 const pushF = rPushF.player;
 pushE.online = true;
 pushF.online = false;
@@ -1104,6 +1141,60 @@ for (const [key, t] of g.tiles) {
   assert.deepStrictEqual(gWorld2.tiles.get(key).content, t.content, 'disposition identique après redémarrage : ' + key);
 }
 console.log('Redistribution nocturne : disposition reconstruite après redémarrage à partir du seul salt ✔');
+
+// --- OTP de connexion par email + mot de passe oublié ---
+const rOtp = g.register({ username: 'OtpTester', password: 'secret1', speciesClass: 'LION_PALADIN', email: 'otp@test.dev' });
+assert.ok(rOtp.ok, 'inscription OtpTester');
+const otpUser = rOtp.player;
+
+// Connexion normale (register()/login() restent immédiats, sans OTP intégré —
+// c'est l'appelant socket qui orchestre, voir server/index.js) puis OTP.
+const { code: otpCode1 } = g.beginLoginOtp(otpUser);
+assert.ok(!g.verifyLoginOtp(otpUser.id, '000000').ok, 'mauvais code OTP refusé');
+assert.ok(!g.verifyLoginOtp('compte_inconnu', otpCode1).ok, 'compte inconnu refusé');
+const rVerify = g.verifyLoginOtp(otpUser.id, otpCode1);
+assert.ok(rVerify.ok && rVerify.player === otpUser, 'bon code OTP accepté');
+assert.ok(!g.verifyLoginOtp(otpUser.id, otpCode1).ok, 'code déjà utilisé/expiré refusé à la deuxième tentative');
+
+// Code expiré
+g.beginLoginOtp(otpUser);
+g.pendingLoginOtps.get(otpUser.id).expiresAt = Date.now() - 1000;
+assert.ok(!g.verifyLoginOtp(otpUser.id, g.pendingLoginOtps.get(otpUser.id).code).ok, 'code expiré refusé');
+
+// Trop de tentatives : invalide la session d'OTP en cours
+g.beginLoginOtp(otpUser);
+for (let i = 0; i < 5; i++) g.verifyLoginOtp(otpUser.id, '000000');
+assert.ok(!g.pendingLoginOtps.has(otpUser.id), 'trop de tentatives invalide la session OTP');
+
+// Renvoi : bloqué par le cooldown juste après un envoi, débloqué une fois passé
+const { code: otpCode2 } = g.beginLoginOtp(otpUser);
+assert.ok(!g.resendLoginOtp(otpUser.id).ok, 'renvoi refusé pendant le cooldown');
+g.pendingLoginOtps.get(otpUser.id).lastSentAt = Date.now() - 60000;
+const rResend = g.resendLoginOtp(otpUser.id);
+assert.ok(rResend.ok && rResend.code !== otpCode2, 'renvoi accepté hors cooldown, nouveau code généré');
+console.log('OTP de connexion : bon/mauvais code ✔, expiration ✔, anti-brute-force ✔, cooldown de renvoi ✔');
+
+// Compte créé avant l'ajout de l'OTP (pas d'email) : ajout forcé
+otpUser.email = null;
+assert.ok(!g.setAccountEmail(otpUser.id, 'pas-un-email').ok, 'email invalide refusé (ajout forcé)');
+assert.ok(g.setAccountEmail(otpUser.id, 'otp2@test.dev').ok, 'email ajouté rétroactivement');
+assert.strictEqual(otpUser.email, 'otp2@test.dev', 'email mis à jour sur le compte');
+
+// Mot de passe oublié
+assert.strictEqual(g.requestPasswordReset('compte_inconnu').found, false, 'compte inconnu : found=false (pas d’énumération dans le message)');
+otpUser.email = null;
+assert.strictEqual(g.requestPasswordReset('OtpTester').hasEmail, false, 'compte sans email : hasEmail=false');
+otpUser.email = 'otp2@test.dev';
+const rReset = g.requestPasswordReset('OtpTester');
+assert.ok(rReset.found && rReset.hasEmail && rReset.code, 'demande de réinitialisation avec email : code généré');
+assert.ok(!g.resetPassword('OtpTester', '000000', 'nouveauMdp1').ok, 'mauvais code de réinitialisation refusé');
+assert.ok(!g.resetPassword('OtpTester', rReset.code, 'x').ok, 'nouveau mot de passe trop court refusé');
+const oldOtpToken = otpUser.token;
+assert.ok(g.resetPassword('OtpTester', rReset.code, 'nouveauMdp1').ok, 'réinitialisation acceptée avec bon code');
+assert.ok(!g.authToken(oldOtpToken).ok, 'ancien token invalidé après réinitialisation');
+assert.ok(!g.login({ username: 'OtpTester', password: 'secret1' }).ok, 'ancien mot de passe refusé après réinitialisation');
+assert.ok(g.login({ username: 'OtpTester', password: 'nouveauMdp1' }).ok, 'nouveau mot de passe accepté');
+console.log('Mot de passe oublié : email requis ✔, code vérifié ✔, mot de passe changé + session invalidée ✔');
 
 // --- Persistance aller-retour (token, état ET mot de passe) ---
 const snap = JSON.parse(JSON.stringify(g.serialize()));
