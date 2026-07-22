@@ -2736,31 +2736,42 @@ showDungeonPopup(tile, onEnter) {
         t.label + '<span class="chat-tab-badge' + (this.chatUnread[t.key] ? '' : ' hidden') + '"></span></button>').join('') +
     '</div>';
 
-    // MP : liste des conversations (une ligne par ami, pastille si non lu —
-    // voir isFriendChatUnread) tant qu'aucun ami précis n'est ouvert, plutôt
-    // que l'ancien menu déroulant où il fallait tout parcourir pour savoir
-    // qui avait écrit.
+    // MP : liste des CONVERSATIONS (uniquement les amis avec qui on a déjà
+    // échangé — pas tous les amis, sinon l'onglet devient une redite de la
+    // liste d'amis dès qu'on en a beaucoup), triée par message le plus
+    // récent (comme n'importe quelle appli de messagerie), pastille si non
+    // lu. Pour écrire à un ami pour la première fois, voir le bouton ✉ dans
+    // la section Amis plus bas (buildFriendsSectionHtml).
     const isWhisperList = this.chatChannel === 'whisper' && !this.chatWhisperTarget;
     let whisperListHtml = '';
     if (isWhisperList) {
-      if (!friends.length) {
-        whisperListHtml = '<p class="dim small chat-whisper-hint">Ajoutez un ami pour lui écrire en privé.</p>';
+      const withHistory = friends
+        .map((f) => ({ f, idx: this.lastWhisperFeedIndex(f.username) }))
+        .filter((e) => e.idx >= 0 && !this.isConversationHidden(e.f.username))
+        .sort((a, b) => b.idx - a.idx)
+        .map((e) => e.f);
+      if (!withHistory.length) {
+        whisperListHtml = '<p class="dim small chat-whisper-hint">' +
+          (friends.length
+            ? 'Aucune conversation pour l’instant — écris à un ami depuis la liste plus bas (✉) pour en démarrer une.'
+            : 'Ajoutez un ami pour lui écrire en privé.') +
+        '</p>';
       } else {
-        const sorted = [...friends].sort((a, b) => {
-          const ua = this.isFriendChatUnread(a.username) ? 1 : 0;
-          const ub = this.isFriendChatUnread(b.username) ? 1 : 0;
-          if (ua !== ub) return ub - ua;
-          if (!!a.online !== !!b.online) return a.online ? -1 : 1;
-          return a.username.localeCompare(b.username);
-        });
+        // Bouton ✕ séparé du bouton d'ouverture (data-whisper-open) : « fermer »
+        // ici veut dire retirer la conversation de cette liste tant qu'aucun
+        // nouveau message n'arrive (voir hideConversation) — jamais imbriquer
+        // deux <button>, d'où les deux boutons côte à côte plutôt qu'un seul.
         whisperListHtml = '<div class="friend-list whisper-conv-list">' +
-          sorted.map((f) => {
+          withHistory.map((f) => {
             const unread = this.isFriendChatUnread(f.username);
-            return '<button type="button" class="friend-row whisper-conv-row' + (unread ? ' unread' : '') + '" data-whisper-open="' + esc(f.username) + '">' +
+            return '<div class="friend-row whisper-conv-row' + (unread ? ' unread' : '') + '">' +
               '<span class="admin-dot ' + (f.online ? 'on' : 'off') + '"></span>' +
-              '<span class="friend-name">' + esc(f.username) + '</span>' +
-              (unread ? '<span class="chat-tab-badge"></span>' : '') +
-            '</button>';
+              '<button type="button" class="whisper-conv-open" data-whisper-open="' + esc(f.username) + '">' +
+                '<span class="friend-name">' + esc(f.username) + '</span>' +
+                (unread ? '<span class="chat-tab-badge"></span>' : '') +
+              '</button>' +
+              '<button type="button" class="friend-remove-btn" data-whisper-hide="' + esc(f.username) + '" title="Supprimer la conversation" aria-label="Supprimer la conversation avec ' + esc(f.username) + '">✕</button>' +
+            '</div>';
           }).join('') +
         '</div>';
       }
@@ -2800,6 +2811,12 @@ showDungeonPopup(tile, onEnter) {
       btn.addEventListener('click', () => {
         this.chatWhisperTarget = btn.dataset.whisperOpen;
         this.markChatSeen('whisper:' + this.chatWhisperTarget);
+        this.renderSocial(body, me, guild, friends, castles);
+      });
+    });
+    body.querySelectorAll('[data-whisper-hide]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.hideConversation(btn.dataset.whisperHide);
         this.renderSocial(body, me, guild, friends, castles);
       });
     });
@@ -2966,6 +2983,7 @@ showDungeonPopup(tile, onEnter) {
         '<span class="friend-name">' + esc(f.username) + '</span>' +
         classChip +
         locationHtml +
+        '<button class="friend-message-btn" data-friend-message="' + esc(f.username) + '" title="Écrire à ' + esc(f.username) + '" aria-label="Écrire à ' + esc(f.username) + '">✉</button>' +
         '<button class="friend-remove-btn" data-friend-remove="' + esc(f.username) + '" title="Retirer" aria-label="Retirer ' + esc(f.username) + '">✕</button>' +
       '</div>';
     }).join('');
@@ -2998,6 +3016,14 @@ showDungeonPopup(tile, onEnter) {
       btn.addEventListener('click', async () => {
         const r = await Promise.resolve(this.server.joinFriend(btn.dataset.friendJoin));
         if (!r.ok) this.toast(r.error); else this.closeSheet();
+      });
+    });
+    body.querySelectorAll('[data-friend-message]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.chatChannel = 'whisper';
+        this.chatWhisperTarget = btn.dataset.friendMessage;
+        this.markChatSeen('whisper:' + this.chatWhisperTarget);
+        this.showSheet('social');
       });
     });
     const addBtn = $('friendAddBtn');
@@ -3178,6 +3204,22 @@ showDungeonPopup(tile, onEnter) {
     return sig !== (this.chatSeen['whisper:' + username] || '');
   }
 
+  // Position (index) du dernier message échangé avec cet ami dans this.feed,
+  // -1 si aucun. Sert à la fois à savoir si une conversation existe (voir
+  // renderSocial — seuls les amis avec historique apparaissent en liste MP,
+  // sinon la liste finirait par contenir tous les amis sans distinction) et à
+  // les trier par récence (indice le plus haut = message le plus récent —
+  // pas d'horodatage serveur sur ces messages, l'ordre d'arrivée y suffit).
+  lastWhisperFeedIndex(username) {
+    for (let i = this.feed.length - 1; i >= 0; i--) {
+      const m = this.feed[i];
+      if (m.type === 'chat' && (m.channel || 'general') === 'whisper' && (m.from === username || m.to === username)) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
   chatSeenStorageKey() {
     return CONFIG.SAVE_KEY + '_chatseen_' + (this.server.me ? this.server.me.username : '');
   }
@@ -3196,6 +3238,41 @@ showDungeonPopup(tile, onEnter) {
     if (!this.chatSeen) this.chatSeen = this.loadChatSeen();
     this.chatSeen[channel] = this.chatChannelSignature(channel);
     this.saveChatSeen();
+  }
+
+  // « Supprimer » une conversation MP = la retirer de la liste (voir
+  // renderSocial) jusqu'à ce qu'un nouveau message arrive — pas d'effacement
+  // d'historique côté serveur (partagé avec l'autre personne, hors de
+  // question de le lui retirer aussi). On retient juste la signature du
+  // dernier message vu au moment du retrait ; tant qu'elle ne bouge pas la
+  // conversation reste masquée, un nouveau message la fait naturellement
+  // réapparaître (nouvelle signature ≠ celle mémorisée).
+  chatHiddenStorageKey() {
+    return CONFIG.SAVE_KEY + '_chathidden_' + (this.server.me ? this.server.me.username : '');
+  }
+
+  loadChatHidden() {
+    try { return JSON.parse(localStorage.getItem(this.chatHiddenStorageKey()) || '{}'); }
+    catch (e) { return {}; }
+  }
+
+  saveChatHidden() {
+    try { localStorage.setItem(this.chatHiddenStorageKey(), JSON.stringify(this.chatHidden || {})); }
+    catch (e) { /* stockage indisponible (navigation privée, quota…) */ }
+  }
+
+  hideConversation(username) {
+    if (!this.chatHidden) this.chatHidden = this.loadChatHidden();
+    this.chatHidden['whisper:' + username] = this.chatChannelSignature('whisper:' + username);
+    this.saveChatHidden();
+    this.markChatSeen('whisper:' + username);
+  }
+
+  isConversationHidden(username) {
+    if (!this.chatHidden) this.chatHidden = this.loadChatHidden();
+    const hiddenSig = this.chatHidden['whisper:' + username];
+    if (!hiddenSig) return false;
+    return hiddenSig === this.chatChannelSignature('whisper:' + username);
   }
 
   /* Pastilles de messages non lus : icône Social (bar du bas) + onglets de canal */

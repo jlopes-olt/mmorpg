@@ -1729,16 +1729,22 @@ html, body {
 .chat-tab-badge.hidden { display: none; }
 .chat-whisper-hint { text-align: center; margin-bottom: 8px; }
 .whisper-conv-list { margin-bottom: 10px; }
-.whisper-conv-row {
-  width: 100%;
+.whisper-conv-row:hover { background: rgba(122, 86, 30, 0.14); }
+.whisper-conv-row.unread .friend-name { color: #a3781f; font-weight: 800; }
+.whisper-conv-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   border: none;
+  background: none;
   font: inherit;
   text-align: left;
   cursor: pointer;
+  padding: 0;
 }
-.whisper-conv-row:hover { background: rgba(122, 86, 30, 0.14); }
 .whisper-conv-row .friend-name { flex: 1; }
-.whisper-conv-row.unread .friend-name { color: #a3781f; font-weight: 800; }
 .chat-whisper-thread-head {
   display: flex;
   align-items: center;
@@ -1863,6 +1869,19 @@ html, body {
   cursor: pointer;
 }
 .friend-remove-btn:hover { background: rgba(209, 87, 87, 0.18); color: #b04a4a; }
+.friend-message-btn {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(122, 86, 30, 0.12);
+  color: #8a6a44;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.friend-message-btn:hover { background: rgba(90, 130, 200, 0.2); color: #3a5f9a; }
 .btn-small { min-height: 32px; padding: 6px 10px; font-size: 11.5px; }
 .guild-name { text-align: left; font-size: 16px; margin: 2px 0 4px; }
 

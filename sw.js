@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v81-mp-friends-condense';
+const VERSION = 'wildrift-v83-mp-delete-convo';
 
 const CORE = [
   '/',
