@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v83-mp-delete-convo';
+const VERSION = 'wildrift-v84-t6-recipes';
 
 const CORE = [
   '/',

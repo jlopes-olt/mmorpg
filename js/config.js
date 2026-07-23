@@ -731,9 +731,13 @@ function levelFromXp(xp) {
 // pour atterrir sur plusieurs jours de jeu optimisé pour tout maxer sur un
 // seul personnage (récolte + maîtrise + arme + armure). Le T6 est à part :
 // exclusif aux ressources spéciales de donjon (BOIS_ANCIEN/MINERAI_RUNIQUE/
-// FLEUR_ASTRALE), donc plus dur en pratique qu'un simple multiplicateur de
-// quantité ne le montre (nœuds limités, repousse, monstres T6 costauds —
-// d'où l'intérêt d'y aller en groupe).
+// FLEUR_ASTRALE) — nœuds bien plus rares (6 par donjon contre des dizaines
+// en plaine T5) et repousse 4× plus lente (RESPAWN_DUNGEON_RESOURCE_MS contre
+// RESPAWN_RESOURCE_MS), donc plus dur en pratique qu'un simple multiplicateur
+// de quantité ne le montre. Quantités T6 calibrées avec cette rareté déjà
+// en tête (~2,7× les montants d'origine, pas un continuation brute de la
+// courbe T1-T5) : sans ce correctif elles retombaient sous le T2 en absolu,
+// donc plus vite à réunir que le T5 malgré la pénurie de nœuds.
 const UPGRADE_RECIPES = {
   weapon: {
     1: { BOIS_1: 20, MINERAI_1: 10 },
@@ -741,7 +745,7 @@ const UPGRADE_RECIPES = {
     3: { MINERAI_3: 180, PLANTE_3: 120 },
     4: { MINERAI_4: 520, PLANTE_4: 325 },
     5: { MINERAI_5: 1150, PLANTE_5: 690 },
-    6: { MINERAI_RUNIQUE_6: 70, FLEUR_ASTRALE_6: 45 },
+    6: { MINERAI_RUNIQUE_6: 190, FLEUR_ASTRALE_6: 125 },
   },
   armor: {
     1: { MINERAI_1: 15, PLANTE_1: 15 },
@@ -749,7 +753,7 @@ const UPGRADE_RECIPES = {
     3: { BOIS_3: 150, MINERAI_3: 150 },
     4: { BOIS_4: 390, MINERAI_4: 455 },
     5: { BOIS_5: 828, MINERAI_5: 966 },
-    6: { BOIS_ANCIEN_6: 65, MINERAI_RUNIQUE_6: 75 },
+    6: { BOIS_ANCIEN_6: 175, MINERAI_RUNIQUE_6: 200 },
   },
 };
 
