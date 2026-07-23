@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v96-trade-scroll-fix';
+const VERSION = 'wildrift-v97-achievements-per-biome';
 
 const CORE = [
   '/',

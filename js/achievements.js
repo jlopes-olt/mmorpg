@@ -10,6 +10,20 @@
 // voir placeBiomePois() dans js/world.js.
 const TOTAL_VILLAGES = 8;
 
+// Dérivés de MONSTERS_BY_TERRAIN (js/config.js, chargé avant ce fichier) :
+// un monstre distinct par biome et par tier depuis l'introduction du
+// bestiaire par biome — ces listes servent de base aux hauts faits
+// « novices » et « bestiaire » ci-dessous, sans dupliquer les noms à la
+// main (elles restent donc à jour automatiquement si le bestiaire évolue).
+const WORLD_MONSTER_TYPES = Object.values(MONSTERS_BY_TERRAIN)
+  .flatMap((byTier) => Object.values(byTier).map((m) => m.type));
+// Un par biome, tier 1 — le gibier le plus accessible quel que soit le
+// biome où l'on chasse.
+const NOVICE_MONSTER_TYPES = Object.values(MONSTERS_BY_TERRAIN).map((byTier) => byTier[1].type);
+function noviceKills(p) {
+  return NOVICE_MONSTER_TYPES.reduce((n, t) => n + ((p.stats.kills && p.stats.kills[t]) || 0), 0);
+}
+
 const ACHIEVEMENTS = [
   /* ---------- Combat — monstres (toutes espèces) ---------- */
   { id: 'kill_any_10', category: 'Combat', label: 'Tuer 10 monstres',
@@ -21,15 +35,25 @@ const ACHIEVEMENTS = [
   { id: 'kill_any_10000', category: 'Combat', label: 'Tuer 10 000 monstres',
     progress: (p) => (p.stats.monsterKills || 0), target: 10000, reward: { gold: 8000, moonstones: 20, title: 'Légende du combat' } },
 
-  /* ---------- Combat — loups ---------- */
-  { id: 'kill_lupus_10', category: 'Combat', label: 'Tuer 10 loups',
-    progress: (p) => ((p.stats.kills && p.stats.kills.LUPUS) || 0), target: 10, reward: { gold: 15 } },
-  { id: 'kill_lupus_100', category: 'Combat', label: 'Tuer 100 loups',
-    progress: (p) => ((p.stats.kills && p.stats.kills.LUPUS) || 0), target: 100, reward: { gold: 120, title: 'Chasseur de loups' } },
-  { id: 'kill_lupus_1000', category: 'Combat', label: 'Tuer 1 000 loups',
-    progress: (p) => ((p.stats.kills && p.stats.kills.LUPUS) || 0), target: 1000, reward: { gold: 900, moonstones: 4, title: 'Fléau des loups' } },
-  { id: 'kill_lupus_10000', category: 'Combat', label: 'Tuer 10 000 loups',
-    progress: (p) => ((p.stats.kills && p.stats.kills.LUPUS) || 0), target: 10000, reward: { gold: 6000, moonstones: 15, title: 'Exterminateur de loups' } },
+  /* ---------- Combat — monstres novices (tier 1, un par biome) ----------
+   * Comptait uniquement les Lupus avant l'introduction d'un monstre
+   * distinct par biome et par tier — Lupus ne peuplant plus que la Forêt
+   * (tier 1), ce haut fait ne progressait plus du tout pour qui chassait
+   * en Plaine/Montagne/Marécage. Les ids restent inchangés (pas de
+   * double-récompense pour les joueurs l'ayant déjà débloqué). */
+  { id: 'kill_lupus_10', category: 'Combat', label: 'Tuer 10 monstres novices',
+    progress: (p) => noviceKills(p), target: 10, reward: { gold: 15 } },
+  { id: 'kill_lupus_100', category: 'Combat', label: 'Tuer 100 monstres novices',
+    progress: (p) => noviceKills(p), target: 100, reward: { gold: 120, title: 'Traqueur' } },
+  { id: 'kill_lupus_1000', category: 'Combat', label: 'Tuer 1 000 monstres novices',
+    progress: (p) => noviceKills(p), target: 1000, reward: { gold: 900, moonstones: 4, title: 'Fléau des terres sauvages' } },
+  { id: 'kill_lupus_10000', category: 'Combat', label: 'Tuer 10 000 monstres novices',
+    progress: (p) => noviceKills(p), target: 10000, reward: { gold: 6000, moonstones: 15, title: 'Exterminateur de bêtes sauvages' } },
+
+  /* ---------- Combat — bestiaire (un exemplaire de chaque monstre du monde ouvert) ---------- */
+  { id: 'bestiary_complete', category: 'Combat', label: 'Tuer un exemplaire de chaque monstre du bestiaire',
+    progress: (p) => WORLD_MONSTER_TYPES.filter((t) => ((p.stats.kills && p.stats.kills[t]) || 0) > 0).length,
+    target: WORLD_MONSTER_TYPES.length, reward: { gold: 1000, moonstones: 8, title: 'Naturaliste' } },
 
   /* ---------- Combat — boss ---------- */
   { id: 'boss_1', category: 'Combat', label: 'Vaincre 1 boss',
