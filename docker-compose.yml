@@ -29,16 +29,12 @@ services:
       # jamais envoyé par email) même une fois la clé API et le domaine prêts.
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-}
-      # Paiements (Stripe) : même remarque — sans ces lignes, les variables
-      # positionnées dans Portainer/.env n'atteignent jamais le conteneur.
-      # Liens de paiement pré-créés (montants fixes, voir buildCheckoutLink) :
-      # aucune session Stripe n'est créée dynamiquement, donc STRIPE_SECRET_KEY
-      # ne sert qu'à vérifier la signature du webhook, jamais un appel API.
+      # Paiements (Stripe) : même remarque pour les clés — sans ces lignes,
+      # les variables positionnées dans Portainer/.env n'atteignent jamais le
+      # conteneur. Les 3 liens de paiement, eux, sont en dur dans le code
+      # (server/index.js) : ce sont des URLs publiques, pas des secrets.
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
-      STRIPE_PAYMENT_LINK_SMALL: ${STRIPE_PAYMENT_LINK_SMALL:-}
-      STRIPE_PAYMENT_LINK_MEDIUM: ${STRIPE_PAYMENT_LINK_MEDIUM:-}
-      STRIPE_PAYMENT_LINK_LARGE: ${STRIPE_PAYMENT_LINK_LARGE:-}
     volumes:
       - mmorpg_state:/app/server/data
     restart: unless-stopped

@@ -57,10 +57,14 @@ function sendPushToAccount(accountId, title, body) {
 // « indisponible » plutôt que de planter au démarrage.
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || '';
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
+// Liens de paiement pré-créés (montants fixes, voir buildCheckoutLink) : pas
+// de donnée secrète (URL publique cliquée par n'importe quel joueur), donc en
+// dur ici plutôt qu'en variable d'environnement — une case de config en moins
+// à poser en prod.
 const STRIPE_PAYMENT_LINKS = {
-  small: process.env.STRIPE_PAYMENT_LINK_SMALL || '',
-  medium: process.env.STRIPE_PAYMENT_LINK_MEDIUM || '',
-  large: process.env.STRIPE_PAYMENT_LINK_LARGE || '',
+  small: 'https://buy.stripe.com/bJe00k5tR2Cj1bP4q6gjC0e',
+  medium: 'https://buy.stripe.com/00wbJ27BZ5OvdYBg8OgjC0d',
+  large: 'https://buy.stripe.com/bJe28s5tRa4L9Il5uagjC0c',
 };
 const stripeClient = STRIPE_SECRET_KEY ? require('stripe')(STRIPE_SECRET_KEY) : null;
 
