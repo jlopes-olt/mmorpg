@@ -2431,8 +2431,10 @@ class Game {
   adminPlayerList() {
     return [...this.players.values()].map((p) => ({
       username: p.username,
+      email: p.email || null,
       role: p.role || 'user',
       online: !!p.online,
+      lastSeen: p.lastSeen || null,
       createdAt: (this.credentials.get(p.id) || {}).createdAt || null,
       speciesClass: p.speciesClass,
       classLabel: (CLASSES[p.speciesClass] || {}).label || p.speciesClass,
