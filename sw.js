@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v84-t6-recipes';
+const VERSION = 'wildrift-v85-moonstone-prices';
 
 const CORE = [
   '/',

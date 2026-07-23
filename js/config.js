@@ -265,9 +265,9 @@ const VAPID_PUBLIC_KEY = 'BOoTgOebS-o98p-oW-BLV1ajB-Ur69-aBNubtBWFRLilwOc_BY0IJC
 // Stripe restent eux exclusivement côté serveur (variables d'environnement).
 // Le taux de bonus croît avec la taille du pack (pratique standard des IAP).
 const MOONSTONE_PACKS = [
-  { id: 'small', lunaires: 15, priceCents: 299, priceLabel: '2,99 €', bonusLabel: null },
-  { id: 'medium', lunaires: 45, priceCents: 799, priceLabel: '7,99 €', bonusLabel: '+13 %' },
-  { id: 'large', lunaires: 130, priceCents: 1999, priceLabel: '19,99 €', bonusLabel: '+30 %' },
+  { id: 'small', lunaires: 15, priceCents: 199, priceLabel: '1,99 €', bonusLabel: null },
+  { id: 'medium', lunaires: 45, priceCents: 499, priceLabel: '4,99 €', bonusLabel: '+20 %' },
+  { id: 'large', lunaires: 100, priceCents: 999, priceLabel: '9,99 €', bonusLabel: '+33 %' },
 ];
 
 /* Conversion premium → or. Les gros packs offrent un rendement légèrement
