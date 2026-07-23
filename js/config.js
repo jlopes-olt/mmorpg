@@ -654,15 +654,17 @@ const CONSUMABLE_EFFECTS = {
 /* Un buff nourriture actif à la fois, compté en combats (pas en temps) */
 const BUFF_COMBATS = 3;
 
-/* Recettes : ingrédient du Marais + plante (+ or). Le T6 exige la
- * Tourbe vivante du donjon des marais. */
+/* Recettes : ingrédient du Marais + plante, toujours du même tier que la
+ * recette (+ or). Le T6 exige les deux exclusifs de donjon : Tourbe vivante
+ * (marais) et Fleur astrale (plaine — tier 6 de la famille Plante, voir
+ * RESOURCES.FLEUR_ASTRALE.base), pas une Fougère T5 laissée par erreur. */
 const CONSUMABLE_RECIPES = {
   1: { INGREDIENT_1: 2, PLANTE_1: 2, gold: 5 },
   2: { INGREDIENT_2: 2, PLANTE_2: 2, gold: 10 },
   3: { INGREDIENT_3: 2, PLANTE_3: 2, gold: 15 },
   4: { INGREDIENT_4: 2, PLANTE_4: 2, gold: 20 },
   5: { INGREDIENT_5: 2, PLANTE_5: 2, gold: 25 },
-  6: { TOURBE_VIVANTE_6: 2, PLANTE_5: 3, gold: 40 },
+  6: { TOURBE_VIVANTE_6: 2, FLEUR_ASTRALE_6: 3, gold: 40 },
 };
 
 function consumableDesc(type, tier) {
@@ -685,7 +687,7 @@ function foodDropFor(tier) {
   return tier >= 6 ? 'TOURBE_VIVANTE_6' : 'INGREDIENT_' + tier;
 }
 
-/* Type de monstre par tier (greybox : mapping direct, lisible) */
+/* Type de monstre par tier (fallback / donjon T6) */
 const MONSTERS = {
   1: { type: 'LUPUS',       label: 'Lupus' },
   2: { type: 'OURS_PIERRE', label: 'Ours de Pierre' },
@@ -694,6 +696,46 @@ const MONSTERS = {
   5: { type: 'WYRM',        label: 'Wyrm' },
   6: { type: 'SQUELETTE',   label: 'Squelette' },
 };
+
+/* Bestiaire du monde ouvert : 1 ennemi par biome et par tier. Les 5 anciens
+ * monstres servent d'ancrage visuel et de fallback pour conserver la
+ * cohérence du jeu pendant les imports d'assets. */
+const MONSTERS_BY_TERRAIN = {
+  FORET: {
+    1: { type: 'LUPUS', label: 'Loup des Fourrés' },
+    2: { type: 'OURS_MOUSSE', label: 'Ours de Mousse' },
+    3: { type: 'ARAIGNEE_SYLVESTRE', label: 'Araignée Sylvestre' },
+    4: { type: 'CERF_CORROMPU', label: 'Cerf Corrompu' },
+    5: { type: 'ENT_HOSTILE', label: 'Ent hostile' },
+  },
+  PLAINE: {
+    1: { type: 'CHACAL_STEPPE', label: 'Chacal des Steppes' },
+    2: { type: 'SANGLIER_HERBES', label: 'Sanglier des Hautes Herbes' },
+    3: { type: 'VAUTOUR_CHAROGNARD', label: 'Vautour Charognard' },
+    4: { type: 'LION_PLAINES', label: 'Lion des Plaines' },
+    5: { type: 'MANTICORE_VENTS', label: 'Manticore des Vents' },
+  },
+  MONTAGNE: {
+    1: { type: 'BOUQUETIN_HARGNEUX', label: 'Bouquetin Hargneux' },
+    2: { type: 'OURS_PIERRE', label: 'Ours de Pierre' },
+    3: { type: 'SPECTRE_EBOULIS', label: 'Spectre des Éboulis' },
+    4: { type: 'BASILIC', label: 'Basilic des Crêtes' },
+    5: { type: 'WYRM', label: 'Wyrm des Cimes' },
+  },
+  MARECAGE: {
+    1: { type: 'CRAPAUD_FANGEUX', label: 'Crapaud Fangeux' },
+    2: { type: 'SERPENT_VASIERES', label: 'Serpent des Vasières' },
+    3: { type: 'SPECTRE', label: 'Spectre des Brumes' },
+    4: { type: 'HYDRE_TOURBIERES', label: 'Hydre des Tourbières' },
+    5: { type: 'DRAKE_PUTRIDE', label: 'Drake putride' },
+  },
+};
+
+function monsterFor(terrain, tier) {
+  if (tier >= 6) return MONSTERS[6];
+  const byTerrain = MONSTERS_BY_TERRAIN[terrain];
+  return (byTerrain && byTerrain[tier]) || MONSTERS[tier] || MONSTERS[1];
+}
 
 /* Puissance des monstres, calibrée pour le combat probabiliste :
  * ratio = 1 (≈70 % de victoire) quand l'équipement (arme + armure) est au
@@ -891,7 +933,7 @@ const MONSTER_EMOJI = { 1: '🐺', 2: '🐻', 3: '👻', 4: '🦎', 5: '🐉', 6
 /* Utilisable côté Node (backend) comme côté navigateur */
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    CONFIG, CLASSES, CLASS_GEAR, EQUIPMENT_ASSETS, MAX_CHAR_SLOTS, MAX_PLAYER_CHAR_SLOTS, CHAR_SLOT_COST_MOONSTONES, RESOURCES, MONSTERS, MONSTER_FORCE,
+    CONFIG, CLASSES, CLASS_GEAR, EQUIPMENT_ASSETS, MAX_CHAR_SLOTS, MAX_PLAYER_CHAR_SLOTS, CHAR_SLOT_COST_MOONSTONES, RESOURCES, MONSTERS, MONSTERS_BY_TERRAIN, MONSTER_FORCE,
     CASTLE_TERRAINS, CASTLE_BASE_HP, CASTLE_HP_PER_LEVEL, CASTLE_MAX_LEVEL,
     CASTLE_CLAIM_COST_GOLD, CASTLE_REINFORCE_COST_GOLD, CASTLE_REPAIR_GOLD_PER_HP,
     CASTLE_DAMAGE_PER_ASSAULT, CASTLE_ZONE_GOLD_BONUS, CASTLE_SIEGE_COOLDOWN_MS, CASTLE_SIEGE_WINDOWS,
@@ -909,6 +951,6 @@ if (typeof module !== 'undefined' && module.exports) {
     newCharacter, syncActiveCharacter, applyCharacter, rollGoldLoot,
     combatPower, teamPowerOf, winChance,
     CONSUMABLES, CONSUMABLE_EFFECTS, CONSUMABLE_RECIPES, BUFF_COMBATS,
-    consumableDesc, buffPowerMult, buffLossReduction, foodDropFor, resourceLabel,
+    consumableDesc, buffPowerMult, buffLossReduction, foodDropFor, resourceLabel, monsterFor,
   };
 }

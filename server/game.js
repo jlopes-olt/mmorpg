@@ -88,6 +88,11 @@ class Game {
     this.onDirty = () => {};
     this.onGuildsDirty = () => {};
     this.onChatDirty = () => {};
+    // Suppression de compte (admin) : câblé dans index.js pour effacer la
+    // ligne SQLite (store.deleteAccount) et couper la socket live éventuelle
+    // — game.js ne détient ni l'un ni l'autre directement (voir onDirty pour
+    // le même principe côté sauvegarde).
+    this.onAccountDeleted = () => {};
     this.sendPush = () => {};   // notif push (accountId, title, body) — câblé dans index.js
     this.rng = Math.random;   // injectable pour des tests déterministes
     if (persisted) this.load(persisted);
@@ -2397,6 +2402,7 @@ class Game {
       return { ok: true };
     }
     if (action && action.spawnBoss) return this.adminSpawnBoss(p);
+    if (action && action.spawnWorldBoss) return this.adminSpawnWorldBoss(p);
     if (action && action.speed) {
       this.speed = Math.max(1, Number(action.speed) || 1);
       return { ok: true };
@@ -2443,6 +2449,55 @@ class Game {
       ownedMounts: p.ownedMounts || [],
       mountId: p.mountId || null,
     })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  }
+
+  adminDeleteAccount(admin, username) {
+    if (!admin || admin.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
+    const target = this.adminFindTarget(username);
+    if (!target) return { ok: false, error: 'Joueur introuvable.' };
+    if (target.id === admin.id) return { ok: false, error: 'Impossible de supprimer votre propre compte.' };
+    if (target.tradeId) this.cancelTrade(target);
+    if (target.guildId) this.leaveGuild(target);
+    // Prévenu AVANT d'être effacé de this.players — sinon le prochain envoi
+    // (pushSelf, toast…) déclenché par leaveGuild plus haut ne trouverait
+    // plus personne à qui parler, mais l'évènement de déconnexion forcée,
+    // lui, doit bien lui parvenir en dernier pour ramener son client à
+    // l'écran de connexion (voir js/net.js + js/main.js).
+    if (target.online) this.send(target.id, 'accountDeleted', {});
+    if (target.token) this.tokens.delete(target.token);
+    this.players.delete(target.id);
+    this.credentials.delete(target.id);
+    this.onAccountDeleted(target.id);
+    return { ok: true };
+  }
+
+  // Rejoindre n'importe quel joueur connecté (support/modération) — même
+  // principe que joinFriend, en plus permissif : pas besoin d'être amis, et
+  // autorisé même si la cible est en donjon (l'admin n'a pas besoin d'avoir
+  // découvert ce donjon lui-même, contrairement à un joueur normal).
+  adminJoinPlayer(admin, username) {
+    if (!admin || admin.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
+    const target = this.adminFindTarget(username);
+    if (!target) return { ok: false, error: 'Joueur introuvable.' };
+    if (target.id === admin.id) return { ok: false, error: 'Vous êtes déjà ce joueur.' };
+    if (!target.online) return { ok: false, error: target.username + ' n’est pas en ligne.' };
+    this.resetTravelState(admin);
+    const targetMapId = target.mapId || 'world';
+    admin.mapId = targetMapId;
+    admin.pos = this.nearestWalkablePos(this.mapOf(targetMapId), target.pos);
+    this.pushMap(admin);
+    this.pushSelf(admin);
+    this.toast(admin, 'Vous avez rejoint ' + target.username + '.');
+    return { ok: true };
+  }
+
+  adminSpawnWorldBoss(p) {
+    if (!p || p.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
+    if (this.worldBossAlive) return { ok: false, error: 'Le Wyrm Ancestral est déjà réveillé.' };
+    this.worldBossAlive = true;
+    this.onWorldBossDirty();
+    this.worldNotify('🐉 Le Wyrm Ancestral a été réveillé (admin).');
+    return { ok: true };
   }
 
   adminSetRole(admin, username, role) {

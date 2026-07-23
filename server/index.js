@@ -400,6 +400,11 @@ app.post('/admin/api/players/:username/role', adminAuth, (req, res) => {
   res.json(r);
 });
 
+app.post('/admin/api/players/:username/delete', adminAuth, (req, res) => {
+  const r = game.adminDeleteAccount(req.adminPlayer, req.params.username);
+  res.json(r);
+});
+
 app.post('/admin/api/players/:username/slots', adminAuth, (req, res) => {
   const r = game.adminGrantSlot(req.adminPlayer, req.params.username, Number((req.body || {}).count));
   res.json(r);
@@ -455,6 +460,15 @@ game.send = (accountId, ev, data) => {
   if (sock) sock.emit(ev, data);
 };
 game.broadcast = (ev, data) => io.emit(ev, data);
+// Suppression de compte (admin) : efface la ligne SQLite et coupe la socket
+// live éventuelle (le joueur a déjà reçu 'accountDeleted' avant cet appel —
+// voir Game.adminDeleteAccount — donc son client se déconnecte proprement
+// de son côté ; ce disconnect() force la fermeture même s'il ne réagit pas).
+game.onAccountDeleted = (id) => {
+  store.deleteAccount(id);
+  const sock = sockets.get(id);
+  if (sock) { sockets.delete(id); sock.disconnect(true); }
+};
 
 io.on('connection', (socket) => {
   let player = null;
@@ -636,6 +650,7 @@ io.on('connection', (socket) => {
   socket.on('admin:grantItem', act((d) => game.adminGrantItem(player, String(d.username), String(d.key), Number(d.qty))));
   socket.on('admin:setLevel', act((d) => game.adminSetLevel(player, String(d.username), String(d.kind), Number(d.tier))));
   socket.on('admin:setGear', act((d) => game.adminSetGear(player, String(d.username), String(d.slot), Number(d.tier))));
+  socket.on('admin:joinPlayer', act((d) => game.adminJoinPlayer(player, String(d.username))));
   socket.on('dev', act((d) => {
     const r = game.dev(player, d);
     if (r.ok && r.reset) {

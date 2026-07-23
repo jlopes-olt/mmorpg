@@ -251,6 +251,13 @@ function renderPlayerPanel(p) {
     '</div>' +
 
     '<div class="panel-section">' +
+      '<div class="panel-section-title">Zone dangereuse</div>' +
+      '<div class="panel-row-actions">' +
+        '<button class="btn danger" id="deleteAccountBtn">Supprimer le compte</button>' +
+      '</div>' +
+    '</div>' +
+
+    '<div class="panel-section">' +
       '<div class="panel-section-title">Attribuer</div>' +
       grantFormHtml() +
     '</div>';
@@ -265,6 +272,12 @@ function renderPlayerPanel(p) {
     const r = await api('POST', '/players/' + encodeURIComponent(p.username) + '/slots', { count: 1 });
     toast(r.ok ? '+1 emplacement de personnage.' : (r.error || 'Erreur.'), !r.ok);
     if (r.ok) loadAll();
+  });
+  $('deleteAccountBtn').addEventListener('click', async () => {
+    if (!confirm('Supprimer définitivement le compte « ' + p.username + ' » ? Cette action est irréversible.')) return;
+    const r = await api('POST', '/players/' + encodeURIComponent(p.username) + '/delete');
+    toast(r.ok ? 'Compte « ' + p.username + ' » supprimé.' : (r.error || 'Erreur.'), !r.ok);
+    if (r.ok) { closePlayerPanel(); loadAll(); }
   });
   $('grantForm').addEventListener('submit', async (e) => {
     e.preventDefault();

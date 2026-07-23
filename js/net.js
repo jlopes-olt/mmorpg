@@ -80,6 +80,7 @@ class RemoteServer {
       this.emit('creation');
     });
     s.on('otpRequired', (d) => this.emit('otpRequired', d));
+    s.on('accountDeleted', () => this.emit('accountDeleted'));
     s.on('init', (d) => this.onInit(d));
     s.on('map', (d) => {
       this.applyMapStates(d.mapStates || {});
@@ -241,6 +242,7 @@ class RemoteServer {
   adminGrantItem(username, key, qty) { return this.req('admin:grantItem', { username, key, qty }); }
   adminSetLevel(username, kind, tier) { return this.req('admin:setLevel', { username, kind, tier }); }
   adminSetGear(username, slot, tier) { return this.req('admin:setGear', { username, slot, tier }); }
+  adminJoinPlayer(username) { return this.req('admin:joinPlayer', { username }); }
   say(text, channel, target) { return this.req('chat', { text, channel, target }); }
   createGuild(name) { return this.req('guild:create', { name }); }
   inviteToGuild(username) { return this.req('guild:invite', { username }); }

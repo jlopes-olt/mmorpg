@@ -76,7 +76,7 @@ class UI {
     this.harvestFxTimer = null;
     this.popupMode = null;
     this.tradeDraft = null;
-    this.tradeUiState = { filter: 'ALL', scrollTop: 0 };
+    this.tradeUiState = { filter: 'ALL', selectedSlot: null, scrollTop: 0 };
     this.desktopMedia = window.matchMedia('(min-width: 1600px)');
     this.desktopProfileSignature = '';
     this.desktopSocialRequest = 0;
@@ -119,7 +119,20 @@ class UI {
     // contenu et avale l'évènement tant qu'on est sous ce délai.
     const popupEl = $('popup');
     this.popupOpenedAt = 0;
-    new MutationObserver(() => { this.popupOpenedAt = Date.now(); }).observe(popupEl, { childList: true });
+    // L'échange (et tout autre popup qui se reconstruit en place pendant
+    // qu'il reste ouvert, ex. mise à jour réseau) redéclenchait ce garde à
+    // CHAQUE rafraîchissement de contenu, pas seulement à l'ouverture — un
+    // clic sur +/- ou « mettre le max » juste après une mise à jour de
+    // l'offre adverse se retrouvait donc avalé silencieusement. On ne
+    // redémarre le délai que lors d'un changement de mode (nouvelle popup),
+    // pas quand le même popupMode se reconstruit sur place.
+    let lastGuardedPopupMode = this.popupMode;
+    new MutationObserver(() => {
+      if (this.popupMode !== lastGuardedPopupMode) {
+        this.popupOpenedAt = Date.now();
+        lastGuardedPopupMode = this.popupMode;
+      }
+    }).observe(popupEl, { childList: true });
     const GHOST_CLICK_GUARD_MS = 400;
     popupEl.addEventListener('click', (e) => {
       if (Date.now() - this.popupOpenedAt < GHOST_CLICK_GUARD_MS) {
@@ -182,11 +195,19 @@ class UI {
     server.on('achievementUnlocked', (a) => this.showAchievementUnlocked(a));
     server.on('trade', (trade) => {
       if (trade) {
-        this.tradeDraft = {
-          id: trade.id,
-          gold: (trade.offers && trade.offers.self && trade.offers.self.gold) || 0,
-          items: { ...(((trade.offers && trade.offers.self) || {}).items || {}) },
-        };
+        // Le serveur rediffuse 'trade' aux DEUX joueurs dès que l'un des deux
+        // modifie son offre (voir pushTrade côté serveur) — sans ce garde-fou
+        // sur l'id, une brouillonne (quantités pas encore validées) en cours
+        // de saisie était effacée à chaque fois que l'AUTRE joueur touchait
+        // la sienne. On ne réinitialise donc le brouillon local que pour un
+        // échange qu'on n'a pas encore vu (nouvel id).
+        if (!this.tradeDraft || this.tradeDraft.id !== trade.id) {
+          this.tradeDraft = {
+            id: trade.id,
+            gold: (trade.offers && trade.offers.self && trade.offers.self.gold) || 0,
+            items: { ...(((trade.offers && trade.offers.self) || {}).items || {}) },
+          };
+        }
         this.showTradePopup(trade);
       } else {
         this.tradeDraft = null;
@@ -218,7 +239,18 @@ class UI {
           this.showSheet('social');
         }
       }
-      if (this.popupMode === 'trade' && this.server.trade) this.showTradePopup(this.server.trade);
+      // Même garde que pour la fiche sociale ci-dessus : le serveur pousse
+      // 'self' toutes les 2 s (recharge passive de PA/PV, voir index.js) —
+      // sans ça, l'échange se reconstruisait entièrement à ce rythme,
+      // ramenant le défilement du catalogue en haut et interrompant une
+      // recherche ou une saisie de quantité en cours.
+      if (this.popupMode === 'trade' && this.server.trade) {
+        const tradeBody = document.querySelector('.trade-popup .popup-body');
+        const active = document.activeElement;
+        const isTyping = tradeBody && active && tradeBody.contains(active) &&
+          (active.tagName === 'INPUT' || active.tagName === 'SELECT' || active.tagName === 'TEXTAREA');
+        if (!isTyping) this.showTradePopup(this.server.trade);
+      }
     });
     server.on('self', (p) => {
       if (p && p.guildInvite) {
@@ -891,14 +923,86 @@ showDungeonPopup(tile, onEnter) {
     return html;
   }
 
-  tradeOfferSummaryHtml(offer) {
-    const parts = [];
-    if (offer.gold) parts.push(offer.gold + ' or');
-    for (const [key, qty] of Object.entries(offer.items || {})) {
-      const parsed = parseStackKey(key);
-      parts.push(qty + '× ' + this.tradeStackLabel(parsed.type, parsed.tier));
+  // Tuile compacte réutilisée partout dans l'échange (offre adverse en
+  // lecture seule, résumé « contenu actuel », catalogue à parcourir) : icône
+  // + pastille de tier (même code couleur que .tier utilisé dans l'inventaire,
+  // pour rester cohérent avec ce que le joueur connaît déjà) + badge de
+  // quantité en overlay. Remplace l'ancien affichage en une ligne par objet
+  // (nom complet + catégorie en texte), bien trop encombrant sur mobile.
+  tradeSlotHtml(opts) {
+    const attrs = opts.dataAttr ? ' ' + opts.dataAttr + '="' + esc(String(opts.dataVal != null ? opts.dataVal : '1')) + '"' : '';
+    return (
+      '<button type="button" class="trade-slot' + (opts.extraClass ? ' ' + opts.extraClass : '') + '"' + attrs +
+        (opts.extraAttrs || '') +
+        ' title="' + esc(opts.title || '') + '">' +
+        '<span class="trade-slot-art">' + opts.artHtml + '</span>' +
+        (opts.tier != null ? '<span class="tier t' + opts.tier + ' trade-slot-tier">T' + opts.tier + '</span>' : '') +
+        (opts.qty ? '<span class="trade-slot-qty">×' + opts.qty + '</span>' : '') +
+      '</button>'
+    );
+  }
+
+  tradeResourceSlotArt(type, tier) {
+    const art = this.tradeStackIconSrc(type, tier);
+    return art ? '<img class="trade-slot-icon" src="' + art + '" alt="">' : '<span class="trade-slot-emoji">' + (RESOURCE_EMOJI[type] || '❔') + '</span>';
+  }
+
+  // Offre adverse : lecture seule, uniquement les objets réellement proposés.
+  tradeOfferTilesHtml(offer) {
+    const tiles = [];
+    if (offer.gold) {
+      tiles.push(this.tradeSlotHtml({
+        artHtml: this.currencyIcon('gold', 'large'),
+        qty: offer.gold,
+        title: 'Or',
+        extraClass: 'trade-slot-gold trade-slot-readonly',
+      }));
     }
-    return parts.length ? parts.join('<br>') : '<span class="dim">Aucune offre</span>';
+    for (const [key, qty] of Object.entries(offer.items || {})) {
+      if (!qty) continue;
+      const parsed = parseStackKey(key);
+      tiles.push(this.tradeSlotHtml({
+        artHtml: this.tradeResourceSlotArt(parsed.type, parsed.tier),
+        tier: parsed.tier,
+        qty,
+        title: this.tradeStackLabel(parsed.type, parsed.tier),
+        extraClass: 'trade-slot-readonly',
+      }));
+    }
+    return tiles.length
+      ? '<div class="trade-slot-grid">' + tiles.join('') + '</div>'
+      : '<p class="dim small trade-empty-hint">Aucune offre pour l’instant.</p>';
+  }
+
+  // « Contenu actuel » de sa propre offre : résumé compact et tapable (permet
+  // de retrouver un objet déjà mis en jeu sans avoir à le rechercher dans tout
+  // le catalogue en dessous).
+  tradeDraftTilesHtml(draft) {
+    const tiles = [];
+    if (draft.gold) {
+      tiles.push(this.tradeSlotHtml({
+        artHtml: this.currencyIcon('gold', 'large'),
+        qty: draft.gold,
+        title: 'Or',
+        dataAttr: 'data-trade-slot-gold',
+        extraClass: 'trade-slot-gold',
+      }));
+    }
+    for (const [key, qty] of Object.entries(draft.items || {})) {
+      if (!qty) continue;
+      const parsed = parseStackKey(key);
+      tiles.push(this.tradeSlotHtml({
+        artHtml: this.tradeResourceSlotArt(parsed.type, parsed.tier),
+        tier: parsed.tier,
+        qty,
+        title: this.tradeStackLabel(parsed.type, parsed.tier),
+        dataAttr: 'data-trade-slot-key',
+        dataVal: key,
+      }));
+    }
+    return tiles.length
+      ? '<div class="trade-slot-grid">' + tiles.join('') + '</div>'
+      : '<p class="dim small trade-empty-hint">Rien pour l’instant — touchez un objet plus bas pour l’ajouter.</p>';
   }
 
   tradeStackLabel(type, tier) {
@@ -945,6 +1049,7 @@ showDungeonPopup(tile, onEnter) {
     const draft = this.tradeDraft && this.tradeDraft.id === trade.id
       ? this.tradeDraft
       : { id: trade.id, gold: own.gold || 0, items: { ...(own.items || {}) } };
+    this.tradeDraft = draft;
     const resourceKeys = Object.keys(me.inventory || {}).filter((key) => {
       const parsed = parseStackKey(key);
       return !!RESOURCES[parsed.type] || !!CONSUMABLES[parsed.type];
@@ -966,11 +1071,42 @@ showDungeonPopup(tile, onEnter) {
       ['CONSUMABLE', 'Consommables'],
     ];
     const selectedFilter = this.tradeUiState.filter || 'ALL';
+    // Objet actuellement sélectionné pour édition (persiste entre deux
+    // reconstructions du popup, ex. quand l'autre joueur modifie son offre —
+    // sinon on perdrait la sélection à chaque mise à jour reçue).
+    const persistedSlot = this.tradeUiState.selectedSlot;
+    const selection = {
+      key: (persistedSlot && persistedSlot !== 'GOLD' && resourceKeys.includes(persistedSlot)) ? persistedSlot : null,
+      isGold: persistedSlot === 'GOLD',
+    };
 
     const wrap = $('popup');
     wrap.innerHTML = '';
     const card = document.createElement('div');
     card.className = 'popup-card trade-popup';
+
+    const catalogTilesHtml = [this.tradeSlotHtml({
+      artHtml: this.currencyIcon('gold', 'large'),
+      qty: draft.gold || 0,
+      title: 'Or (' + (me.gold || 0) + ' possédé)',
+      dataAttr: 'data-trade-slot-gold',
+      extraClass: 'trade-slot-gold' + ((draft.gold || 0) > 0 ? ' has-qty' : ''),
+    })].concat(resourceKeys.map((key) => {
+      const parsed = parseStackKey(key);
+      const qty = (draft.items && draft.items[key]) || 0;
+      const label = this.tradeStackLabel(parsed.type, parsed.tier);
+      return this.tradeSlotHtml({
+        artHtml: this.tradeResourceSlotArt(parsed.type, parsed.tier),
+        tier: parsed.tier,
+        qty,
+        title: label,
+        dataAttr: 'data-trade-slot-key',
+        dataVal: key,
+        extraClass: (qty > 0 ? 'has-qty' : '') + ' trade-slot-catalog',
+        extraAttrs: ' data-trade-kind="' + esc(this.tradeStackKind(parsed.type)) + '" data-trade-search="' + esc(label.toLowerCase()) + '"',
+      });
+    }));
+
     card.innerHTML =
       '<h3>Échange avec ' + esc(trade.withPlayer.username) + '</h3>' +
       '<div class="popup-body">' +
@@ -979,85 +1115,217 @@ showDungeonPopup(tile, onEnter) {
         '</div>' +
         '<div class="trade-grid">' +
           '<div class="trade-side">' +
+            '<div class="trade-side-title">Offre adverse ' + (other.accepted ? '<span class="role-chip">Validée</span>' : '') + '</div>' +
+            this.tradeOfferTilesHtml(other) +
+          '</div>' +
+          '<div class="trade-side">' +
             '<div class="trade-side-title">Votre offre ' + (own.accepted ? '<span class="role-chip">Validée</span>' : '') + '</div>' +
-            '<label class="trade-gold-label">Or' +
-              '<input id="tradeGoldInput" class="trade-gold-input" type="number" min="0" max="' + (me.gold || 0) + '" value="' + (draft.gold || 0) + '">' +
-            '</label>' +
+            '<div class="trade-qty-editor" id="tradeQtyEditor"></div>' +
+            '<div class="trade-subtitle">Contenu actuel</div>' +
+            '<div id="tradeOwnTiles">' + this.tradeDraftTilesHtml(draft) + '</div>' +
+            '<div class="trade-subtitle">Ajouter un objet</div>' +
+            '<input type="text" id="tradeSearchInput" class="trade-search-input" placeholder="Rechercher un objet…">' +
             '<div class="trade-filterbar">' +
               filterDefs.map(([key, label]) =>
                 '<button class="btn trade-filter-btn' + (selectedFilter === key ? ' active' : '') + '" data-trade-filter="' + key + '">' + label + '</button>'
               ).join('') +
             '</div>' +
-            '<div class="trade-list" id="tradeOfferList"></div>' +
-          '</div>' +
-          '<div class="trade-side">' +
-            '<div class="trade-side-title">Offre adverse ' + (other.accepted ? '<span class="role-chip">Validée</span>' : '') + '</div>' +
-            '<div class="trade-summary-box">' + this.tradeOfferSummaryHtml(other) + '</div>' +
+            '<div class="trade-slot-grid" id="tradeCatalogGrid">' + catalogTilesHtml.join('') + '</div>' +
+            '<p class="dim small trade-empty-hint" id="tradeCatalogEmptyHint" style="display:none">Aucun objet ne correspond à ce filtre.</p>' +
           '</div>' +
         '</div>' +
       '</div>';
-    const list = card.querySelector('#tradeOfferList');
-    const filteredKeys = resourceKeys.filter((key) => {
-      if (selectedFilter === 'ALL') return true;
-      const parsed = parseStackKey(key);
-      return this.tradeStackKind(parsed.type) === selectedFilter;
-    });
-    if (!filteredKeys.length) {
-      list.innerHTML = '<p class="dim small">Aucune ressource ou consommable échangeable.</p>';
-    } else {
-      for (const key of filteredKeys) {
-        const parsed = parseStackKey(key);
-        const art = this.tradeStackIconSrc(parsed.type, parsed.tier);
-        const row = document.createElement('label');
-        row.className = 'trade-row';
-        row.innerHTML =
-          '<span class="trade-row-art">' +
-            (art ? '<img class="trade-row-icon" src="' + art + '" alt="">' : '<span class="trade-row-fallback">' + (RESOURCE_EMOJI[parsed.type] || '❔') + '</span>') +
-          '</span>' +
-          '<span class="trade-row-copy"><span class="trade-row-name">' + esc(this.tradeStackLabel(parsed.type, parsed.tier)) + '</span>' +
-          '<span class="trade-row-kind">' + esc(this.tradeStackKind(parsed.type)) + '</span></span>' +
-          '<span class="trade-row-have">x' + (me.inventory[key] || 0) + '</span>' +
-          '<input class="trade-qty-input" data-trade-key="' + esc(key) + '" type="number" min="0" max="' + (me.inventory[key] || 0) + '" value="' + ((draft.items && draft.items[key]) || 0) + '">';
-        list.appendChild(row);
-      }
-    }
 
     const syncTradeDraft = () => {
-      const next = { id: trade.id, gold: 0, items: {} };
+      // Un seul input de quantité est monté à la fois (celui actuellement
+      // sélectionné dans l'éditeur) : on part donc du brouillon déjà en
+      // mémoire plutôt que de ne relire QUE l'input visible, sinon changer de
+      // sélection effacerait la quantité de l'objet précédent.
+      const next = { id: trade.id, gold: (this.tradeDraft && this.tradeDraft.gold) || 0, items: { ...((this.tradeDraft && this.tradeDraft.items) || {}) } };
       const goldInput = card.querySelector('#tradeGoldInput');
-      next.gold = Math.max(0, Number(goldInput && goldInput.value || 0));
+      if (goldInput) next.gold = Math.max(0, Number(goldInput.value || 0));
       card.querySelectorAll('[data-trade-key]').forEach((input) => {
         const qty = Math.max(0, Number(input.value || 0));
         if (qty > 0) next.items[input.dataset.tradeKey] = qty;
+        else delete next.items[input.dataset.tradeKey];
       });
       this.tradeDraft = next;
       return next;
     };
-    const rememberTradeUiState = () => {
-      const activeFilter = card.querySelector('[data-trade-filter].active');
-      this.tradeUiState.filter = activeFilter ? activeFilter.dataset.tradeFilter : (this.tradeUiState.filter || 'ALL');
-      this.tradeUiState.scrollTop = list.scrollTop;
+
+    // Boutons +/− et « possédé » (mettre le max) : ils manipulent la même
+    // input que la saisie manuelle puis déclenchent un évènement 'input'
+    // natif pour réutiliser syncTradeDraft sans dupliquer sa logique.
+    const bumpInput = (input, delta) => {
+      if (!input) return;
+      const max = Number(input.max || Infinity);
+      const next = Math.max(0, Math.min(max, Number(input.value || 0) + delta));
+      input.value = next;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    const setInputMax = (input) => {
+      if (!input) return;
+      input.value = Number(input.max || 0);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
     };
 
-    const goldInput = card.querySelector('#tradeGoldInput');
-    if (goldInput) goldInput.addEventListener('input', syncTradeDraft);
-    card.querySelectorAll('[data-trade-key]').forEach((input) => {
-      input.addEventListener('input', syncTradeDraft);
-      input.addEventListener('change', syncTradeDraft);
-    });
+    const reapplySelectedHighlight = () => {
+      card.querySelectorAll('.trade-slot.selected').forEach((el) => el.classList.remove('selected'));
+      if (selection.isGold) {
+        card.querySelectorAll('[data-trade-slot-gold]').forEach((el) => el.classList.add('selected'));
+      } else if (selection.key) {
+        card.querySelectorAll('[data-trade-slot-key="' + CSS.escape(selection.key) + '"]').forEach((el) => el.classList.add('selected'));
+      }
+    };
+
+    const wireEditorControls = () => {
+      const editor = card.querySelector('#tradeQtyEditor');
+      const input = editor.querySelector('.trade-qty-input');
+      if (input) {
+        input.addEventListener('input', () => { syncTradeDraft(); refreshOwnTilesAndBadges(); });
+        input.addEventListener('change', () => { syncTradeDraft(); refreshOwnTilesAndBadges(); });
+      }
+      editor.querySelectorAll('[data-step]').forEach((btn) => {
+        btn.addEventListener('click', () => bumpInput(input, Number(btn.dataset.step)));
+      });
+      editor.querySelectorAll('[data-gold-step]').forEach((btn) => {
+        btn.addEventListener('click', () => bumpInput(input, Number(btn.dataset.goldStep)));
+      });
+      const maxBtn = editor.querySelector('[data-fill-max], [data-gold-max]');
+      if (maxBtn) maxBtn.addEventListener('click', () => setInputMax(input));
+    };
+
+    // Éditeur unique (fixé en haut de « Votre offre », voir CSS position:
+    // sticky) : plutôt qu'un stepper par ligne dans une longue liste, on
+    // sélectionne une tuile et on ajuste sa quantité ici — la grille de
+    // tuiles reste ainsi compacte, sans perdre en confort de saisie.
+    const renderQtyEditor = () => {
+      const editor = card.querySelector('#tradeQtyEditor');
+      if (selection.isGold) {
+        const max = me.gold || 0;
+        const val = (this.tradeDraft && this.tradeDraft.gold) || 0;
+        editor.innerHTML =
+          '<span class="trade-qty-editor-art">' + this.currencyIcon('gold', 'large') + '</span>' +
+          '<div class="trade-qty-editor-info">' +
+            '<span class="trade-qty-editor-name">Or</span>' +
+            '<button type="button" class="trade-row-have" data-gold-max title="Mettre le maximum">×' + max + ' possédé</button>' +
+          '</div>' +
+          '<div class="trade-stepper">' +
+            '<button type="button" class="trade-step-btn" data-gold-step="-1">−</button>' +
+            '<input id="tradeGoldInput" class="trade-qty-input" type="number" min="0" max="' + max + '" value="' + val + '">' +
+            '<button type="button" class="trade-step-btn" data-gold-step="1">+</button>' +
+          '</div>';
+      } else if (selection.key && resourceKeys.includes(selection.key)) {
+        const key = selection.key;
+        const parsed = parseStackKey(key);
+        const have = me.inventory[key] || 0;
+        const val = (this.tradeDraft && this.tradeDraft.items && this.tradeDraft.items[key]) || 0;
+        editor.innerHTML =
+          '<span class="trade-qty-editor-art">' + this.tradeResourceSlotArt(parsed.type, parsed.tier) +
+            '<span class="tier t' + parsed.tier + ' trade-qty-editor-tier">T' + parsed.tier + '</span>' +
+          '</span>' +
+          '<div class="trade-qty-editor-info">' +
+            '<span class="trade-qty-editor-name">' + esc(this.tradeStackLabel(parsed.type, parsed.tier)) + '</span>' +
+            '<button type="button" class="trade-row-have" data-fill-max title="Mettre le maximum">×' + have + ' possédé</button>' +
+          '</div>' +
+          '<div class="trade-stepper">' +
+            '<button type="button" class="trade-step-btn" data-step="-1">−</button>' +
+            '<input class="trade-qty-input" data-trade-key="' + esc(key) + '" type="number" min="0" max="' + have + '" value="' + val + '">' +
+            '<button type="button" class="trade-step-btn" data-step="1">+</button>' +
+          '</div>';
+      } else {
+        editor.innerHTML = '<p class="dim small trade-qty-editor-placeholder">Touchez un objet plus bas pour ajuster sa quantité.</p>';
+      }
+      wireEditorControls();
+    };
+
+    const selectTile = (key) => {
+      selection.key = key;
+      selection.isGold = false;
+      this.tradeUiState.selectedSlot = key;
+      reapplySelectedHighlight();
+      renderQtyEditor();
+    };
+    const selectGold = () => {
+      selection.key = null;
+      selection.isGold = true;
+      this.tradeUiState.selectedSlot = 'GOLD';
+      reapplySelectedHighlight();
+      renderQtyEditor();
+    };
+    const wireSelectableTiles = (container) => {
+      if (!container) return;
+      container.querySelectorAll('[data-trade-slot-key]').forEach((tile) => {
+        tile.addEventListener('click', () => selectTile(tile.dataset.tradeSlotKey));
+      });
+      container.querySelectorAll('[data-trade-slot-gold]').forEach((tile) => {
+        tile.addEventListener('click', () => selectGold());
+      });
+    };
+
+    // Reconstruit uniquement le résumé « contenu actuel » + les badges de
+    // quantité sur le catalogue, sans reconstruire tout le popup (donc sans
+    // perdre le défilement ni la sélection en cours).
+    const refreshOwnTilesAndBadges = () => {
+      const ownTilesEl = card.querySelector('#tradeOwnTiles');
+      if (ownTilesEl) {
+        ownTilesEl.innerHTML = this.tradeDraftTilesHtml(this.tradeDraft);
+        wireSelectableTiles(ownTilesEl);
+      }
+      const setBadge = (tile, qty) => {
+        tile.classList.toggle('has-qty', qty > 0);
+        let badge = tile.querySelector('.trade-slot-qty');
+        if (qty > 0) {
+          if (!badge) { badge = document.createElement('span'); badge.className = 'trade-slot-qty'; tile.appendChild(badge); }
+          badge.textContent = '×' + qty;
+        } else if (badge) {
+          badge.remove();
+        }
+      };
+      const goldTile = card.querySelector('#tradeCatalogGrid [data-trade-slot-gold]');
+      if (goldTile) setBadge(goldTile, this.tradeDraft.gold || 0);
+      card.querySelectorAll('#tradeCatalogGrid [data-trade-slot-key]').forEach((tile) => {
+        setBadge(tile, (this.tradeDraft.items && this.tradeDraft.items[tile.dataset.tradeSlotKey]) || 0);
+      });
+      reapplySelectedHighlight();
+    };
+
+    // Recherche + filtre de catégorie : on bascule la visibilité des tuiles
+    // déjà en place plutôt que de reconstruire tout le popup à chaque
+    // changement — plus réactif, et ça ne fait plus sauter le défilement.
+    const applyTradeCatalogFilter = () => {
+      const activeBtn = card.querySelector('[data-trade-filter].active');
+      const filterKind = activeBtn ? activeBtn.dataset.tradeFilter : 'ALL';
+      const searchInput = card.querySelector('#tradeSearchInput');
+      const term = (searchInput && searchInput.value || '').trim().toLowerCase();
+      let anyVisible = false;
+      card.querySelectorAll('#tradeCatalogGrid [data-trade-slot-key]').forEach((tile) => {
+        const matchesKind = filterKind === 'ALL' || tile.dataset.tradeKind === filterKind;
+        const matchesSearch = !term || (tile.dataset.tradeSearch || '').includes(term);
+        const visible = matchesKind && matchesSearch;
+        tile.classList.toggle('hidden', !visible);
+        if (visible) anyVisible = true;
+      });
+      const emptyHint = card.querySelector('#tradeCatalogEmptyHint');
+      if (emptyHint) emptyHint.style.display = (resourceKeys.length && !anyVisible) ? '' : 'none';
+    };
+
     card.querySelectorAll('[data-trade-filter]').forEach((btn) => {
       btn.addEventListener('click', () => {
+        card.querySelectorAll('[data-trade-filter]').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
         this.tradeUiState.filter = btn.dataset.tradeFilter;
-        this.tradeUiState.scrollTop = 0;
-        this.showTradePopup(trade);
+        applyTradeCatalogFilter();
       });
     });
-    list.addEventListener('scroll', () => {
-      this.tradeUiState.scrollTop = list.scrollTop;
-    });
-    requestAnimationFrame(() => {
-      list.scrollTop = this.tradeUiState.scrollTop || 0;
-    });
+    const searchInputEl = card.querySelector('#tradeSearchInput');
+    if (searchInputEl) searchInputEl.addEventListener('input', applyTradeCatalogFilter);
+
+    wireSelectableTiles(card.querySelector('#tradeOwnTiles'));
+    wireSelectableTiles(card.querySelector('#tradeCatalogGrid'));
+    applyTradeCatalogFilter();
+    renderQtyEditor();
+    reapplySelectedHighlight();
 
     const row = document.createElement('div');
     row.className = 'popup-actions popup-actions-wrap';
@@ -1065,7 +1333,6 @@ showDungeonPopup(tile, onEnter) {
     confirmBtn.className = 'btn primary';
     confirmBtn.textContent = own.accepted ? 'Retirer validation' : 'Valider';
     confirmBtn.addEventListener('click', async () => {
-      rememberTradeUiState();
       if (!own.accepted) {
         const offer = syncTradeDraft();
         if (!this.sameTradeOffer(offer, own)) {
@@ -1082,7 +1349,6 @@ showDungeonPopup(tile, onEnter) {
     cancelBtn.className = 'btn';
     cancelBtn.textContent = 'Annuler échange';
     cancelBtn.addEventListener('click', async () => {
-      rememberTradeUiState();
       const r = await Promise.resolve(this.server.cancelTrade());
       if (!r.ok) this.toast(r.error);
     });
@@ -1092,6 +1358,17 @@ showDungeonPopup(tile, onEnter) {
     wrap.appendChild(card);
     wrap.classList.remove('hidden');
     this.popupMode = 'trade';
+
+    // Le popup se reconstruit entièrement à chaque évènement réseau pertinent
+    // (offre adverse modifiée, etc.) — sans ce suivi, .popup-body (seule zone
+    // qui défile désormais, voir CSS) repartait du haut à chaque fois, un peu
+    // comme si la modale se rafraîchissait toute seule pendant qu'on parcourait
+    // le catalogue.
+    const popupBody = card.querySelector('.popup-body');
+    if (popupBody) {
+      popupBody.addEventListener('scroll', () => { this.tradeUiState.scrollTop = popupBody.scrollTop; });
+      requestAnimationFrame(() => { popupBody.scrollTop = this.tradeUiState.scrollTop || 0; });
+    }
   }
 
   /* ---------- HUD (appelé à chaque frame) ---------- */
@@ -2215,43 +2492,7 @@ showDungeonPopup(tile, onEnter) {
       this.buildCharactersSection(me) +
 
       '<div class="section-divider">✦</div>' +
-      (showCheats ?
-        '<details class="profile-admin"' + (this.adminOpen ? ' open' : '') + '>' +
-          '<summary>🛠 Outils de test (admin)</summary>' +
-          '<div class="admin-grid">' +
-            '<button class="btn" data-admin-tier="harvest:1">Récolte T1</button>' +
-            '<button class="btn" data-admin-tier="harvest:2">Récolte T2</button>' +
-            '<button class="btn" data-admin-tier="harvest:3">Récolte T3</button>' +
-            '<button class="btn" data-admin-tier="harvest:4">Récolte T4</button>' +
-            '<button class="btn" data-admin-tier="harvest:5">Récolte T5</button>' +
-            '<button class="btn" data-admin-tier="harvest:6">Récolte T6</button>' +
-            '<button class="btn" data-admin-tier="weapon:1">Maîtrise T1</button>' +
-            '<button class="btn" data-admin-tier="weapon:2">Maîtrise T2</button>' +
-            '<button class="btn" data-admin-tier="weapon:3">Maîtrise T3</button>' +
-            '<button class="btn" data-admin-tier="weapon:4">Maîtrise T4</button>' +
-            '<button class="btn" data-admin-tier="weapon:5">Maîtrise T5</button>' +
-            '<button class="btn" data-admin-tier="weapon:6">Maîtrise T6</button>' +
-          '</div>' +
-          '<div class="admin-grid">' +
-            '<button class="btn" data-admin-gear="weapon:0">Arme T0</button>' +
-            '<button class="btn" data-admin-gear="armor:0">Armure T0</button>' +
-            '<button class="btn" data-admin-gear="weapon:1">Arme T1</button>' +
-            '<button class="btn" data-admin-gear="armor:1">Armure T1</button>' +
-            '<button class="btn" data-admin-gear="weapon:2">Arme T2</button>' +
-            '<button class="btn" data-admin-gear="armor:2">Armure T2</button>' +
-            '<button class="btn" data-admin-gear="weapon:3">Arme T3</button>' +
-            '<button class="btn" data-admin-gear="armor:3">Armure T3</button>' +
-            '<button class="btn" data-admin-gear="weapon:4">Arme T4</button>' +
-            '<button class="btn" data-admin-gear="armor:4">Armure T4</button>' +
-            '<button class="btn" data-admin-gear="weapon:5">Arme T5</button>' +
-            '<button class="btn" data-admin-gear="armor:5">Armure T5</button>' +
-            '<button class="btn" data-admin-gear="weapon:6">Arme T6</button>' +
-            '<button class="btn" data-admin-gear="armor:6">Armure T6</button>' +
-          '</div>' +
-          '<button id="adminSpawnBossBtn" class="btn primary wide">Faire apparaître le boss</button>' +
-          '<button id="profileResetBtn" class="btn danger wide">Réinitialiser le personnage</button>' +
-        '</details>'
-        : '') +
+      (showCheats ? this.buildAdminToolsSectionHtml() : '') +
       (this.pushSupported ?
         '<div class="section-divider">✦</div>' +
         '<div class="profile-sec-title">Notifications</div>' +
@@ -2288,28 +2529,22 @@ showDungeonPopup(tile, onEnter) {
       $('pushToggleBtn').addEventListener('click', () => this.togglePushNotifications());
     }
     if (showCheats) {
-      body.querySelectorAll('[data-admin-tier]').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const [kind, tier] = btn.dataset.adminTier.split(':');
-          const r = await Promise.resolve(this.server.setAdminTier(kind, Number(tier)));
-          this.toast(r.ok ? ((kind === 'harvest' ? 'Récolte' : 'Maîtrise arme') + ' fixée à T' + tier) : r.error);
-        });
-      });
-      body.querySelectorAll('[data-admin-gear]').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const [slot, tier] = btn.dataset.adminGear.split(':');
-          const r = await Promise.resolve(this.server.setAdminGear(slot, Number(tier)));
-          this.toast(r.ok ? ((slot === 'weapon' ? 'Arme' : 'Armure') + ' fixée à T' + tier) : r.error);
-        });
-      });
       $('adminSpawnBossBtn').addEventListener('click', async () => {
         const r = await Promise.resolve(this.server.remote
           ? this.server.dev({ spawnBoss: true })
           : this.server.adminSpawnBoss());
         this.toast(r.ok ? 'Boss invoqué.' : r.error);
       });
-      $('profileResetBtn').addEventListener('click', () => {
-        if (this.onAdminReset) this.onAdminReset();
+      const worldBossBtn = $('adminSpawnWorldBossBtn');
+      if (worldBossBtn) worldBossBtn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.dev({ spawnWorldBoss: true }));
+        this.toast(r.ok ? 'Wyrm Ancestral réveillé.' : r.error);
+      });
+      body.querySelectorAll('[data-admin-join]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const r = await Promise.resolve(this.server.adminJoinPlayer(btn.dataset.adminJoin));
+          if (!r.ok) this.toast(r.error); else this.closeSheet();
+        });
       });
       body.querySelector('.profile-admin').addEventListener('toggle', (e) => {
         this.adminOpen = e.target.open;
@@ -2508,6 +2743,39 @@ showDungeonPopup(tile, onEnter) {
         '<summary>Voir la liste des hauts faits</summary>' +
         rows +
       '</details>';
+  }
+
+  // Outils de test/admin — les gains de niveau/tier ciblant UN AUTRE compte
+  // vivent désormais dans le backoffice web (/admin), pas ici : ce panneau
+  // ne garde que ce qui n'a de sens qu'EN JEU (apparition de boss, rejoindre
+  // un joueur pour le retrouver sur la carte).
+  buildAdminToolsSectionHtml() {
+    const worldBossHtml = this.server.remote
+      ? '<button id="adminSpawnWorldBossBtn" class="btn primary wide">Réveiller le Wyrm Ancestral (boss mondial)</button>'
+      : '';
+    let joinListHtml = '';
+    if (this.server.remote) {
+      const others = Array.from(this.server.players.values()).filter((p) => !p.bot && p.id !== this.server.meId);
+      joinListHtml =
+        '<div class="profile-sec-title">Rejoindre un joueur connecté</div>' +
+        (others.length
+          ? '<div class="friend-list">' + others.map((p) => (
+              '<div class="friend-row">' +
+                '<span class="friend-name">' + esc(p.username) + '</span>' +
+                '<span class="dim small friend-class">' + esc(p.classLabel || '') + '</span>' +
+                '<button class="btn btn-small" data-admin-join="' + esc(p.username) + '">Rejoindre</button>' +
+              '</div>'
+            )).join('') + '</div>'
+          : '<p class="dim small">Aucun autre joueur en ligne pour l’instant.</p>');
+    }
+    return (
+      '<details class="profile-admin"' + (this.adminOpen ? ' open' : '') + '>' +
+        '<summary>🛠 Outils de test (admin)</summary>' +
+        '<button id="adminSpawnBossBtn" class="btn primary wide">Faire apparaître le boss (donjon)</button>' +
+        worldBossHtml +
+        joinListHtml +
+      '</details>'
+    );
   }
 
   buildCharactersSection(me) {

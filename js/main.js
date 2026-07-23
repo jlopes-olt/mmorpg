@@ -13,7 +13,7 @@
 
 (function () {
   const remote = typeof io !== 'undefined' && location.protocol.indexOf('http') === 0;
-  const SHELL_REV = '20260722-moonstone-prices';
+  const SHELL_REV = '20260723-trade-scroll-fix';
 
   // PWA : service worker (cache + installation sur l'écran d'accueil).
   // Échec silencieux en file:// / artifact.
@@ -680,6 +680,14 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
     server.on('otpRequired', (d) => {
       hideSplash(1100);
       ui.showOtpStep(d || {});
+    });
+    // Compte supprimé par un administrateur pendant la session : le serveur
+    // a déjà coupé la socket côté back-end juste après cet évènement (voir
+    // Game.adminDeleteAccount) — on ramène simplement ce client à l'écran de
+    // connexion, comme une déconnexion volontaire.
+    server.on('accountDeleted', () => {
+      ui.toast('Votre compte a été supprimé par un administrateur.');
+      setTimeout(() => ui.onLogout(), 1500);
     });
     server.on('ready', () => {
       document.getElementById('creation').classList.add('hidden');

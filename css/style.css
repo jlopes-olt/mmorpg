@@ -1910,17 +1910,6 @@ html, body {
     inset 0 -10px 18px rgba(186, 143, 96, 0.08),
     0 10px 18px rgba(0,0,0,0.1);
 }
-.admin-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-top: 10px;
-}
-.admin-grid .btn {
-  min-height: 40px;
-  padding: 8px 10px;
-  font-size: 12px;
-}
 .upg-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .upg-needs { list-style: none; margin: 0 0 10px; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
 .equipment-upgrade-card {
@@ -2521,12 +2510,33 @@ html, body {
   gap: 8px;
 }
 .popup-actions-wrap { flex-wrap: wrap; }
-.trade-popup { width: min(94vw, 720px); }
+/* Le popup d'échange ne défile plus lui-même (contrairement aux autres
+   popups) : titre et boutons Valider/Annuler restent fixes en haut/bas, seul
+   .popup-body défile au milieu — sinon un long catalogue d'objets pouvait
+   pousser le bouton Valider hors champ, et un correctif par position:sticky
+   + marges négatives laissait un espace où les tuiles du dessous
+   transparaissaient sous les boutons (le padding de .popup-card n'était pas
+   entièrement annulé par la marge négative de l'ancienne barre sticky). */
+.trade-popup {
+  width: min(94vw, 560px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.trade-popup > .popup-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
 .trade-head { margin-bottom: 10px; }
+/* Toujours en colonne unique : la largeur réellement disponible est celle de
+   la coquille mobile (~520px), pas celle de la fenêtre du navigateur — un
+   @media (max-width) ne s'en aperçoit jamais sur un poste de bureau/portable,
+   d'où le chevauchement de texte qu'un vrai layout 2 colonnes provoquait ici. */
 .trade-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 .trade-side {
   padding: 10px;
@@ -2540,25 +2550,6 @@ html, body {
   font-size: 16px;
   font-weight: 700;
   color: #4f2c12;
-}
-.trade-gold-label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  font-size: 13px;
-  font-weight: 700;
-  color: #6a573f;
-}
-.trade-gold-input,
-.trade-qty-input {
-  width: 84px;
-  padding: 7px 8px;
-  border-radius: 10px;
-  border: 1px solid rgba(167, 127, 66, 0.28);
-  background: rgba(255, 248, 231, 0.92);
-  color: #3a2615;
-  font-weight: 700;
 }
 .trade-filterbar {
   display: flex;
@@ -2577,81 +2568,208 @@ html, body {
   border-color: rgba(201, 156, 82, 0.5);
   color: #4f2c12;
 }
-.trade-list {
-  margin-top: 10px;
-  max-height: min(34vh, 260px);
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding-right: 4px;
-}
-.trade-row {
-  display: grid;
-  grid-template-columns: 52px minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 12px;
-  background: rgba(255, 250, 239, 0.72);
-  border: 1px solid rgba(176, 129, 58, 0.2);
-}
-.trade-row-art {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(180deg, rgba(244, 232, 205, 0.92), rgba(226, 206, 164, 0.84));
-  border: 1px solid rgba(171, 129, 70, 0.22);
-}
-.trade-row-icon {
-  width: 36px;
-  height: 36px;
-  object-fit: contain;
-  filter: drop-shadow(0 6px 10px rgba(0,0,0,0.16));
-}
-.trade-row-fallback {
-  font-size: 24px;
-  line-height: 1;
-}
-.trade-row-copy {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.trade-row-name {
-  font-size: 13px;
-  color: #4f2c12;
-  font-weight: 700;
-}
-.trade-row-kind {
-  font-size: 10px;
+.trade-empty-hint { padding: 6px 2px; }
+.trade-subtitle {
+  margin: 12px 0 6px;
+  font-size: 11px;
   font-weight: 800;
   color: #8a7457;
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
-.trade-row-have {
-  font-size: 12px;
-  color: #7c6953;
-  font-weight: 700;
-}
-.trade-summary-box {
-  min-height: 120px;
-  padding: 10px;
-  border-radius: 12px;
-  background: rgba(255, 250, 239, 0.72);
-  border: 1px solid rgba(176, 129, 58, 0.2);
-  color: #4f2c12;
+.trade-search-input {
+  width: 100%;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(167, 127, 66, 0.28);
+  background: rgba(255, 248, 231, 0.92);
+  color: #3a2615;
   font-size: 13px;
-  line-height: 1.45;
 }
 
-@media (max-width: 640px) {
-  .trade-grid { grid-template-columns: 1fr; }
+/* Grille compacte de tuiles (icône + pastille de tier, comme .tier utilisé
+   dans l'inventaire) plutôt qu'une liste d'une ligne par objet — bien plus
+   dense, et le tier suffit à identifier un objet d'un coup d'œil sans avoir
+   à afficher son nom complet sur chaque tuile. */
+.trade-slot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+  gap: 8px;
+}
+.trade-slot {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  padding: 4px;
+  border-radius: 12px;
+  background: rgba(255, 250, 239, 0.72);
+  border: 1px solid rgba(176, 129, 58, 0.22);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.trade-slot.trade-slot-catalog { cursor: pointer; }
+.trade-slot.trade-slot-readonly { cursor: default; }
+.trade-slot.has-qty {
+  background: rgba(243, 219, 162, 0.55);
+  border-color: rgba(201, 156, 82, 0.5);
+}
+.trade-slot.selected {
+  border-color: rgba(201, 156, 82, 0.95);
+  box-shadow: 0 0 0 2px rgba(232, 178, 63, 0.6);
+}
+.trade-slot.hidden { display: none; }
+.trade-slot-art {
+  width: 70%;
+  height: 70%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.trade-slot-icon {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 8px rgba(0,0,0,0.16));
+}
+.trade-slot-emoji { font-size: 22px; line-height: 1; }
+.trade-slot-gold .trade-slot-art .currency-icon { width: 28px; height: 28px; }
+.trade-slot-tier {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  min-width: 20px;
+  padding: 1px 3px;
+  font-size: 9px;
+}
+.trade-slot-qty {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  min-width: 18px;
+  padding: 1px 4px;
+  border-radius: 999px;
+  background: rgba(79, 44, 18, 0.88);
+  color: #fff2da;
+  font-size: 10px;
+  font-weight: 800;
+  text-align: center;
+}
+
+/* Éditeur de quantité unique, fixé en haut de « Votre offre » (position:
+   sticky) : on sélectionne une tuile ci-dessous et on ajuste sa quantité ici,
+   sans jamais avoir à faire défiler pour l'atteindre — c'est ce qui rendait
+   le bouton Valider inaccessible quand une mise à jour survenait pendant
+   qu'on faisait défiler la liste. */
+.trade-qty-editor {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(247, 234, 202, 0.98), rgba(232, 213, 172, 0.96));
+  border: 1px solid rgba(176, 129, 58, 0.32);
+  box-shadow: 0 6px 14px rgba(0,0,0,0.14);
+}
+.trade-qty-editor-placeholder { margin: 0; width: 100%; text-align: center; }
+.trade-qty-editor-art {
+  position: relative;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(244, 232, 205, 0.92), rgba(226, 206, 164, 0.84));
+  border: 1px solid rgba(171, 129, 70, 0.22);
+}
+.trade-qty-editor-art .trade-slot-icon { width: 30px; height: 30px; }
+.trade-qty-editor-tier {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  min-width: 20px;
+  padding: 1px 3px;
+  font-size: 9px;
+}
+.trade-qty-editor-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+.trade-qty-editor-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #4f2c12;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.trade-row-have {
+  font-size: 11px;
+  font-weight: 700;
+  color: #6a573f;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(176, 129, 58, 0.28);
+  border-radius: 999px;
+  padding: 3px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.trade-row-have:hover {
+  background: rgba(243, 219, 162, 0.7);
+  border-color: rgba(201, 156, 82, 0.6);
+}
+.trade-stepper {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.trade-step-btn {
+  width: 28px;
+  height: 28px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1;
+  border: 1px solid rgba(167, 127, 66, 0.32);
+  background: rgba(255, 248, 231, 0.92);
+  color: #6a4a1f;
+}
+.trade-step-btn:active { background: rgba(243, 219, 162, 0.92); }
+.trade-gold-input,
+.trade-qty-input {
+  width: 56px;
+  padding: 6px 4px;
+  border-radius: 8px;
+  border: 1px solid rgba(167, 127, 66, 0.28);
+  background: rgba(255, 248, 231, 0.92);
+  color: #3a2615;
+  font-weight: 700;
+  text-align: center;
+}
+/* Actions (Valider/Annuler) toujours visibles au bas du popup, quelle que
+   soit la longueur du catalogue au-dessus — évite d'avoir à faire défiler
+   jusqu'en bas pour valider un échange. */
+.trade-popup > .popup-actions {
+  flex: 0 0 auto;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(176, 129, 58, 0.28);
 }
 .popup-card-ornament {
   display: none;

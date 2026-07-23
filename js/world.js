@@ -25,6 +25,21 @@ function hash2(x, y, seed, salt) {
   return (h >>> 0) / 4294967296;
 }
 
+// Mélange de Fisher-Yates déterministe (même seed = même résultat, comme
+// tout le reste de la génération) — sert à répartir des positions choisies
+// dans une liste balayée en ordre de lecture (y puis x) sans grouper les
+// premières entrées retenues dans la toute première salle rencontrée (voir
+// generateDungeonMap : monstres/ressources sinon tous massés près du haut
+// du donjon plutôt qu'étalés dans les couloirs).
+function seededShuffle(list, seed, worldX, worldY, saltBase) {
+  const out = list.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(hash2(i + worldX, i + worldY, seed, saltBase) * (i + 1));
+    const tmp = out[i]; out[i] = out[j]; out[j] = tmp;
+  }
+  return out;
+}
+
 function tileKey(x, y) { return x + ',' + y; }
 function raidKey(mapId, x, y) { return mapId + '|' + tileKey(x, y); }
 
@@ -97,18 +112,19 @@ function dungeonBossFor(terrain) {
   }[terrain] || { type: 'BOSS', label: 'Seigneur du Donjon', force: 680 };
 }
 
+// Un matériau spécial dédié par biome de donjon (voir CONSUMABLE_RECIPES en
+// js/config.js : le T6 de cuisine exige TOURBE_VIVANTE_6, exclusivement issue
+// du donjon des marais — avant ce correctif MARECAGE retombait sur
+// FLEUR_ASTRALE/un mélange des 3 autres matériaux, ce qui rendait la Tourbe
+// vivante introuvable en récolte (seul un kill de monstre T6 avait 30 % de
+// chances d'en lâcher, voir foodDropFor).
 function dungeonResourceFor(terrain) {
   return {
     FORET: 'BOIS_ANCIEN',
     PLAINE: 'FLEUR_ASTRALE',
     MONTAGNE: 'MINERAI_RUNIQUE',
-    MARECAGE: 'FLEUR_ASTRALE',
+    MARECAGE: 'TOURBE_VIVANTE',
   }[terrain] || 'MINERAI_RUNIQUE';
-}
-
-function dungeonResourcePoolFor(terrain) {
-  if (terrain === 'MARECAGE') return ['BOIS_ANCIEN', 'MINERAI_RUNIQUE', 'FLEUR_ASTRALE'];
-  return [dungeonResourceFor(terrain)];
 }
 
 function tryPlacePoi(tiles, seed, terrain, kind, index, radius, tangentOffset) {
@@ -202,10 +218,11 @@ function generateWorldMap(seed) {
             inactiveUntil: 0,
           };
         } else if (r < 0.145 && dist > CONFIG.SAFE_RADIUS + 1) {
+          const monster = monsterFor(terrain, tier);
           content = {
             kind: 'monster',
-            type: MONSTERS[tier].type,
-            label: MONSTERS[tier].label,
+            type: monster.type,
+            label: monster.label,
             tier,
             force: MONSTER_FORCE[tier],
             inactiveUntil: 0,
@@ -254,10 +271,11 @@ function applyWildLayer(tiles, seed, salt) {
         inactiveUntil: 0,
       };
     } else if (r < 0.145 && dist > CONFIG.SAFE_RADIUS + 1) {
+      const monster = monsterFor(tile.terrain, tier);
       tile.content = {
         kind: 'monster',
-        type: MONSTERS[tier].type,
-        label: MONSTERS[tier].label,
+        type: monster.type,
+        label: monster.label,
         tier,
         force: MONSTER_FORCE[tier],
         inactiveUntil: 0,
@@ -329,6 +347,11 @@ function generateDungeonMap(seed, terrain, mapId, worldX, worldY) {
     const px = Math.round((hash2(i, worldX, seed, 401) - 0.5) * 22);
     const py = Math.round((hash2(i, worldY, seed, 402) - 0.25) * 22);
     const tx = px + Math.round((hash2(i, worldY, seed, 403) - 0.5) * 4);
+    // Relie cette salle bonus au hub principal (0,-6) — sans ce corridor,
+    // (px,py) n'était rattachée à rien d'autre que son propre segment
+    // (px,py)-(tx,py), donc un îlot inaccessible à pied (voir carveDungeon
+    // ci-dessous, qui elle ne fait que ce court trajet local).
+    carveDungeon(walkable, 0, -6, px, py);
     carveDungeon(walkable, px, py, tx, py);
     carveRoom(
       walkable,
@@ -341,11 +364,13 @@ function generateDungeonMap(seed, terrain, mapId, worldX, worldY) {
     );
   }
 
+  // Même remarque pour la salle du bas : sans ce corridor, elle n'est
+  // connectée que si un branch/couloir aléatoire la traverse par coïncidence.
+  carveDungeon(walkable, 0, -6, 0, min + 4);
   carveRoom(walkable, 0, min + 4, 5, 3, min, max);
 
   const boss = dungeonBossFor(terrain);
   const specialResource = dungeonResourceFor(terrain);
-  const resourcePool = dungeonResourcePoolFor(terrain);
   const tiles = attachBounds(new Map(), min, max, mapId);
   const monsterSpots = [];
   const resourceSpots = [];
@@ -392,8 +417,16 @@ function generateDungeonMap(seed, terrain, mapId, worldX, worldY) {
   };
   if (bossTile) bossTile.content = null;
 
-  for (let i = 0; i < monsterSpots.length && i < 10; i++) {
-    const spot = monsterSpots[i];
+  // Mélangés avant de tronquer : sans ça, ne garder que les N premières
+  // entrées d'un balayage y-puis-x revient à ne garder que celles de la
+  // toute première salle rencontrée près du haut du donjon — monstres et
+  // ressources se retrouvaient tous massés au même endroit, le reste du
+  // donjon vide (voir seededShuffle).
+  const shuffledMonsterSpots = seededShuffle(monsterSpots, seed, worldX, worldY, 481);
+  const shuffledResourceSpots = seededShuffle(resourceSpots, seed, worldX, worldY, 482);
+
+  for (let i = 0; i < shuffledMonsterSpots.length && i < 16; i++) {
+    const spot = shuffledMonsterSpots[i];
     const tile = tiles.get(tileKey(spot.x, spot.y));
     if (!tile || tile.content) continue;
     tile.content = {
@@ -407,16 +440,13 @@ function generateDungeonMap(seed, terrain, mapId, worldX, worldY) {
     };
   }
 
-  for (let i = 0; i < resourceSpots.length && i < 6; i++) {
-    const spot = resourceSpots[i];
+  for (let i = 0; i < shuffledResourceSpots.length && i < 10; i++) {
+    const spot = shuffledResourceSpots[i];
     const tile = tiles.get(tileKey(spot.x, spot.y));
     if (!tile || tile.content) continue;
-    const resourceType = terrain === 'MARECAGE' && i < resourcePool.length
-      ? resourcePool[i]
-      : resourcePool[Math.floor(hash2(spot.x, spot.y, seed, 451) * resourcePool.length) % resourcePool.length];
     tile.content = {
       kind: 'resource',
-      type: resourceType,
+      type: specialResource,
       tier: 6,
       inactiveUntil: 0,
       dungeonResource: true,
@@ -439,7 +469,7 @@ function generateDungeonMap(seed, terrain, mapId, worldX, worldY) {
       bossTileKey,
       bossTemplate,
     },
-    resourceType: terrain === 'MARECAGE' ? resourcePool.slice() : specialResource,
+    resourceType: specialResource,
     tiles,
   };
 }
@@ -484,7 +514,7 @@ function isWalkable(tiles, x, y) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     mulberry32, hash2, tileKey, raidKey, tierAtDistance, terrainAt, resourceTypeAt,
-    villageNameFor, dungeonBossFor, dungeonResourceFor, dungeonResourcePoolFor,
+    villageNameFor, dungeonBossFor, dungeonResourceFor,
     generateWorld, generateWorldMap, generateDungeonMap, generateGameMaps,
     inBounds, isWalkable, boundsOf, attachBounds, applyWildLayer,
   };

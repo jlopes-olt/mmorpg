@@ -101,10 +101,25 @@ const WORLD_ICON_FILES = {
   },
   monster: {
     LUPUS: 'assets/monstre_01_lupus.png',
+    OURS_MOUSSE: 'assets/monster_foret_t2_ours_mousse.png',
+    ARAIGNEE_SYLVESTRE: 'assets/monster_foret_t3_araignee_sylvestre.png',
+    CERF_CORROMPU: 'assets/monster_foret_t4_cerf_corrompu.png',
+    ENT_HOSTILE: 'assets/monster_foret_t5_ent_hostile.png',
+    CHACAL_STEPPE: 'assets/monster_plaine_t1_chacal_steppe.png',
+    SANGLIER_HERBES: 'assets/monster_plaine_t2_sanglier_herbes.png',
+    VAUTOUR_CHAROGNARD: 'assets/monster_plaine_t3_vautour_charognard.png',
+    LION_PLAINES: 'assets/monster_plaine_t4_lion_plaines.png',
+    MANTICORE_VENTS: 'assets/monster_plaine_t5_manticore_vents.png',
+    BOUQUETIN_HARGNEUX: 'assets/monster_montagne_t1_bouquetin_hargneux.png',
     OURS_PIERRE: 'assets/monstre_02_ours.png',
+    SPECTRE_EBOULIS: 'assets/monster_montagne_t3_spectre_eboulis.png',
     SPECTRE: 'assets/monstre_03_spectre.png',
     BASILIC: 'assets/monstre_04_basilic.png',
     WYRM: 'assets/monstre_05_wyrm.png',
+    CRAPAUD_FANGEUX: 'assets/monster_marecage_t1_crapaud_fangeux.png',
+    SERPENT_VASIERES: 'assets/monster_marecage_t2_serpent_vasieres.png',
+    HYDRE_TOURBIERES: 'assets/monster_marecage_t4_hydre_tourbieres.png',
+    DRAKE_PUTRIDE: 'assets/monster_marecage_t5_drake_putride.png',
     SQUELETTE: 'assets/monstre_t6_squelette.png',
     BOSS_FORET: 'assets/boss_foret_t6.png',
     BOSS_PLAINE: 'assets/boss_plaine_t6.png',
@@ -975,8 +990,14 @@ class Renderer {
       // regarde ailleurs en mode glissé), pas sur le héros — sans cette
       // exception, s'éloigner assez avec la caméra libre faisait disparaître
       // son propre personnage alors qu'il reste bien à l'écran.
+      // Rayon R (celui de l'écran, voir plus haut) et non CONFIG.VIEW_RADIUS
+      // (qui sert uniquement au brouillard de l'exploration/minimap, un rayon
+      // de 4 cases sans rapport avec la taille réelle affichée) — sinon un
+      // autre joueur pourtant bien visible à l'écran (terrain, ressources et
+      // monstres ne sont eux jamais coupés à 4 cases) disparaissait dès qu'il
+      // dépassait cette toute petite bulle autour du héros.
       .filter((p) => p.mapId === (me.mapId || 'world') && p.pos &&
-        (p.id === me.id || Math.hypot(p.pos.x - px, p.pos.y - py) <= CONFIG.VIEW_RADIUS + 0.5))
+        (p.id === me.id || Math.hypot(p.pos.x - px, p.pos.y - py) <= R + 0.5))
       .sort((a, b) => {
         const da = (a.pos.x + a.pos.y) - (b.pos.x + b.pos.y);
         if (da) return da;

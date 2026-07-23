@@ -327,6 +327,36 @@ assert.ok(winChance(teamPowerOf(team(4, t6p)), BOSS_FORCE) > 0.75, 'boss : 4 jou
 console.log('Donjons : squelette 3×T5 ✔ (duo T6 tentable), boss 5×T5 ✔ (4×T6 suffisent)');
 console.log('Courbe de probabilité : parité ~70 %, bornes 2/98 %, PV influents ✔');
 
+// --- Génération de donjon : aucune salle inaccessible (îlot sans chemin) ---
+// Régression : les salles bonus (boucle des 7 couloirs aléatoires + la salle
+// du bas) n'étaient reliées à rien d'autre qu'elles-mêmes, laissant des
+// salles entières hors d'atteinte à pied (voir generateDungeonMap).
+const { generateDungeonMap: genDungeonForTest } = require('../js/world.js');
+function reachableFloorCount(map) {
+  const floors = [];
+  for (const t of map.tiles.values()) { if (!t.blocked) floors.push(t.x + ',' + t.y); }
+  const floorSet = new Set(floors);
+  const visited = new Set(['0,0']);
+  const stack = ['0,0'];
+  while (stack.length) {
+    const [x, y] = stack.pop().split(',').map(Number);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nk = (x + dx) + ',' + (y + dy);
+      if (floorSet.has(nk) && !visited.has(nk)) { visited.add(nk); stack.push(nk); }
+    }
+  }
+  return { total: floors.length, reachable: visited.size };
+}
+for (const terrain of ['FORET', 'PLAINE', 'MONTAGNE', 'MARECAGE']) {
+  for (const [wx, wy] of [[0, 0], [7, -13], [-20, 25], [33, 5]]) {
+    const map = genDungeonForTest(CONFIG.WORLD.SEED, terrain, 'donjontest_' + terrain + '_' + wx + '_' + wy, wx, wy);
+    const { total, reachable } = reachableFloorCount(map);
+    assert.strictEqual(reachable, total,
+      'donjon ' + terrain + ' (' + wx + ',' + wy + ') : toutes les salles accessibles depuis l’entrée (' + reachable + '/' + total + ')');
+  }
+}
+console.log('Génération de donjon : aucune salle inaccessible (toutes reliées à l’entrée) ✔');
+
 // --- Personnages multiples : création, métamorphose, partages ---
 assert.strictEqual(alice.characters.length, 1, 'un personnage à l’inscription');
 assert.strictEqual(alice.charSlots, 2, 'deux emplacements gratuits');
@@ -481,6 +511,63 @@ assert.ok(stats.total >= 3 && stats.admins >= 1, 'stats globales cohérentes');
 const carlRow = g.adminPlayerList().find((row) => row.username === 'Carl');
 assert.ok(carlRow && carlRow.gold === carl.gold && carlRow.role === 'user', 'liste des comptes à jour');
 console.log('Administration : rôles ✔, triche gatée ✔, dashboard ✔');
+
+// --- Admin : réveil forcé du boss mondial ---
+// Endormi explicitement avant le test : l'horloge RÉELLE (Date.now(), voir
+// tick()) l'aurait sinon déjà réveillé de lui-même à ce stade du fichier.
+g.worldBossAlive = false;
+assert.ok(!g.adminSpawnWorldBoss(bob).ok, 'un non-admin ne peut pas réveiller le boss mondial');
+assert.ok(g.adminSpawnWorldBoss(alice).ok, 'admin : réveil forcé du boss mondial');
+assert.strictEqual(g.worldBossAlive, true, 'boss mondial réveillé');
+assert.ok(!g.adminSpawnWorldBoss(alice).ok, 'refus si déjà réveillé');
+g.worldBossAlive = false;
+console.log('Admin : réveil forcé du boss mondial ✔');
+
+// --- Admin : rejoindre n'importe quel joueur connecté ---
+alice.mapId = 'world'; alice.pos = { x: 0, y: 0 };
+bob.online = true; bob.mapId = 'world'; bob.pos = { x: -6, y: 3 };
+assert.ok(!g.adminJoinPlayer(bob, 'Bob').ok, 'un non-admin ne peut pas utiliser rejoindre-joueur');
+assert.ok(!g.adminJoinPlayer(alice, 'Alice').ok, 'impossible de se rejoindre soi-même');
+assert.ok(!g.adminJoinPlayer(alice, 'Personne').ok, 'joueur inconnu refusé');
+bob.online = false;
+assert.ok(!g.adminJoinPlayer(alice, 'Bob').ok, 'rejoindre un joueur hors ligne refusé');
+bob.online = true;
+const expectedAdminJoinPos = g.nearestWalkablePos(g.worldMap, bob.pos);
+assert.ok(g.adminJoinPlayer(alice, 'Bob').ok, 'admin : rejoindre un joueur en ligne accepté');
+assert.deepStrictEqual(alice.pos, expectedAdminJoinPos, 'téléportation sur la position du joueur rejoint');
+assert.strictEqual(alice.mapId, 'world', 'arrivée sur la carte du monde');
+bob.online = false;
+alice.pos = { x: 0, y: 0 };
+console.log('Admin : rejoindre n’importe quel joueur connecté ✔');
+
+// --- Admin : suppression de compte (nettoyage guilde/jeton, jamais son propre compte) ---
+const rDave = g.register({ username: 'Dave', password: 'secret4', speciesClass: 'CHAT_MAGICIEN', email: 'dave@test.dev' });
+assert.ok(rDave.ok, 'compte jetable pour le test de suppression');
+const dave = rDave.player;
+const rEve = g.register({ username: 'Eve', password: 'secret5', speciesClass: 'CORBEAU_NECROMANCIEN', email: 'eve@test.dev' });
+const eve = rEve.player;
+assert.ok(g.createGuild(dave, 'Éphémères').ok, 'Dave fonde une guilde jetable');
+const daveGuildId = dave.guildId;
+assert.ok(g.inviteToGuild(dave, 'Eve').ok && g.respondGuildInvite(eve, true).ok, 'Eve rejoint la guilde de Dave');
+assert.strictEqual(g.guilds.get(daveGuildId).leaderId, dave.id, 'Dave est bien le chef');
+assert.ok(g.sendFriendRequest(eve, 'Dave').ok && g.respondFriendRequest(dave, eve.id, true).ok, 'Eve et Dave amis (référence pendante à vérifier après suppression)');
+
+let deletedAccountId = null;
+g.onAccountDeleted = (id) => { deletedAccountId = id; };
+assert.ok(!g.adminDeleteAccount(bob, 'Dave').ok, 'un non-admin ne peut pas supprimer un compte');
+assert.ok(!g.adminDeleteAccount(alice, 'Personne').ok, 'suppression d’un compte inconnu refusée');
+assert.ok(!g.adminDeleteAccount(alice, 'Alice').ok, 'un admin ne peut pas supprimer son propre compte');
+
+const daveId = dave.id;
+assert.ok(g.adminDeleteAccount(alice, 'Dave').ok, 'admin : suppression de compte acceptée');
+assert.strictEqual(deletedAccountId, daveId, 'le hook onAccountDeleted reçoit le bon identifiant (persistance déléguée à index.js)');
+assert.ok(!g.players.has(daveId), 'compte retiré de la partie en mémoire');
+assert.strictEqual(g.adminFindTarget('Dave'), null, 'compte introuvable après suppression');
+assert.strictEqual(g.guilds.get(daveGuildId).leaderId, eve.id, 'le chef restant hérite de la guilde (leaveGuild réutilisé)');
+assert.deepStrictEqual(g.friendsList(eve), [], 'aucune référence pendante ne fait planter la liste d’amis d’un tiers');
+assert.ok(!g.adminDeleteAccount(alice, 'Dave').ok, 'suppression d’un compte déjà supprimé refusée');
+g.onAccountDeleted = () => {};
+console.log('Admin : suppression de compte ✔ (nettoyage guilde, jamais son propre compte)');
 
 // --- Duels amicaux : aucune perte de PV ni d'or, seul le palmarès évolue ---
 bob.pos = { x: 5, y: 5 }; bob.mapId = 'world'; bob.status = 'IDLE';

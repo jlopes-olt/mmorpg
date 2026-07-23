@@ -920,6 +920,8 @@ class ServerSim {
     return { ok: false, error: 'Équipement admin inconnu.' };
   }
 
+  adminJoinPlayer(username) { return { ok: false, error: 'Aucun autre joueur en solo.' }; }
+
   adminSpawnBoss() {
     const me = this.me;
     const map = this.mapOf(me.mapId || 'world');

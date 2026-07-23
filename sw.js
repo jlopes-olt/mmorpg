@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v85-moonstone-prices';
+const VERSION = 'wildrift-v96-trade-scroll-fix';
 
 const CORE = [
   '/',
