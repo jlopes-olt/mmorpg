@@ -1561,10 +1561,11 @@ class Game {
     const rollerPool = attackers.concat(defenders);
     const roller = rollerPool.length ? rollerPool[Math.floor(this.rng() * rollerPool.length)] : null;
     let captured = false;
+    let captureGold = 0;
 
     if (!victory) {
       for (const a of attackers) {
-        a.hp = Math.max(1, Math.ceil(maxHp(a) * CONFIG.COMBAT.DEATH_HP_PCT));
+        a.hp = Math.max(1, Math.ceil(maxHp(a) * reviveHpPct(attackers)));
         a.mapId = 'world';
         a.pos = { x: 0, y: 0 };
       }
@@ -1580,6 +1581,15 @@ class Game {
       c.hp = Math.max(0, c.hp - totalDamage);
       if (c.hp <= 0) {
         captured = true;
+        // Butin de guerre : jusqu'ici un siège ne rapportait aucun or,
+        // contrairement à un raid — désormais toute l'équipe assaillante
+        // touche de l'or à la capture (proportionnel au niveau du château
+        // pris), amplifié par un Chapardeur (Renard Voleur) présent.
+        const renardBonus = attackers.some((a) => a.speciesClass === 'RENARD_VOLEUR') ? 1 + RENARD_SIEGE_LOOT_BONUS : 1;
+        captureGold = Math.ceil(SIEGE_CAPTURE_GOLD_PER_LEVEL * c.level * renardBonus);
+        for (const a of attackers) {
+          if (!a.bot) a.gold = (a.gold || 0) + captureGold;
+        }
         c.ownerGuildId = raid.attackerGuildId;
         c.hp = Math.round(c.hpMax * 0.5);
         c.fortLevel = 0;   // les fortifications de l'ancien propriétaire tombent avec lui
@@ -1614,6 +1624,7 @@ class Game {
         engineForce, engineDamage, engineCount: engines.length,
         hp: c.hp,
         hpMax: c.hpMax,
+        goldReward: captureGold,
         attackerGuildName: guildAtk.name,
         defenderGuildName: guildDef.name,
         participants: attackers.map((m) => m.username),
@@ -2160,7 +2171,8 @@ class Game {
 
       if (!victory) {
         // Défaite = mort : rapatriement à la Capitale, sans autre pénalité
-        p.hp = Math.max(1, Math.ceil(maxHp(p) * CONFIG.COMBAT.DEATH_HP_PCT));
+        // (Rempart et Sève adoucissent aussi cette blessure totale, voir reviveHpPct)
+        p.hp = Math.max(1, Math.ceil(maxHp(p) * reviveHpPct(members)));
         if (p.bot) {
           p.pos = { ...p.home };
         } else {
@@ -2192,7 +2204,7 @@ class Game {
       let hpAfterLoss = p.hp - loss;
       if (druid) hpAfterLoss = Math.min(maxHp(p), hpAfterLoss + Math.round(maxHp(p) * CONFIG.COMBAT.DRUID_HEAL_PCT));
       if (hpAfterLoss <= 0) {
-        p.hp = Math.max(1, Math.ceil(maxHp(p) * CONFIG.COMBAT.DEATH_HP_PCT));
+        p.hp = Math.max(1, Math.ceil(maxHp(p) * reviveHpPct(members)));
         if (p.bot) p.pos = { ...p.home };
         else { p.mapId = 'world'; p.pos = { x: 0, y: 0 }; }
         if (!p.bot) diedById.add(p.id);
@@ -2208,12 +2220,16 @@ class Game {
         const boosted = this.consumeRegainBonus(p, CONFIG.COSTS.RAID);
         const xp = (15 + Math.min(6, monster.tier) * 15) * (boosted ? 2 : 1);
         p.weaponXp += xp;
-        // Chapardeur (Renard Voleur) : +50 % d'or pour lui
+        // Chapardeur (Renard Voleur) : +50 % d'or pour lui, et une part
+        // (RENARD_TEAM_GOLD_BONUS) partagée par toute l'équipe — jusque-là
+        // ce talent ne profitait jamais à ses coéquipiers.
         const lootMult = p.speciesClass === 'RENARD_VOLEUR' ? 1.5 : 1;
+        const teamLootMult = members.some((m) => m.speciesClass === 'RENARD_VOLEUR')
+          ? 1 + CONFIG.COMBAT.RENARD_TEAM_GOLD_BONUS : 1;
         // Territoire : la guilde propriétaire du château de la zone bonifie l'or de ses membres
         const zoneMult = (p.guildId && tile.terrain && this.castleOf(tile.terrain).ownerGuildId === p.guildId)
           ? CASTLE_ZONE_GOLD_BONUS : 1;
-        const gold = Math.ceil(rollGoldLoot(monster.tier) * lootMult * zoneMult);
+        const gold = Math.ceil(rollGoldLoot(monster.tier) * lootMult * teamLootMult * zoneMult);
         p.gold = (p.gold || 0) + gold;
         let food = null;
         if (this.rng() < CONFIG.FOOD_DROP_CHANCE) {

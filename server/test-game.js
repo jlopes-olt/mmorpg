@@ -8,14 +8,14 @@ const assert = require('assert');
 const { Game, CHAT_LOG_MAX } = require('./game.js');
 const {
   CONFIG, CLASSES, MAX_CHAR_SLOTS, MAX_PLAYER_CHAR_SLOTS, CHAR_SLOT_COST_MOONSTONES, MONSTER_FORCE, playerForce, maxHp,
-  combatPower, teamPowerOf, winChance, BUFF_COMBATS,
+  combatPower, teamPowerOf, winChance, BUFF_COMBATS, reviveHpPct,
   CASTLE_TERRAINS, CASTLE_BASE_HP, CASTLE_HP_PER_LEVEL, CASTLE_MAX_LEVEL,
   CASTLE_CLAIM_COST_GOLD, CASTLE_REINFORCE_COST_GOLD, CASTLE_REPAIR_GOLD_PER_HP,
   CASTLE_DAMAGE_PER_ASSAULT, CASTLE_ZONE_GOLD_BONUS,
   SIEGE_ENGINE_ITEM, SIEGE_ENGINE_RECIPES, SIEGE_ENGINE_FORCE, SIEGE_ENGINE_DAMAGE,
   CASTLE_FORTIFY_COST_GOLD, CASTLE_FORTIFY_BONUS_PER_LEVEL, stackKey,
   PREMIUM_CURRENCY, GOLD_PACKS,
-  MOUNT_ITEMS,
+  MOUNT_ITEMS, SIEGE_CAPTURE_GOLD_PER_LEVEL, RENARD_SIEGE_LOOT_BONUS,
 } = require('../js/config.js');
 const { ACHIEVEMENTS } = require('../js/achievements.js');
 
@@ -271,7 +271,7 @@ assert.ok(!res[0].victory && res[0].died, 'défaite = mort');
 assert.ok(typeof res[0].chance === 'number' && res[0].chance > 0, '% de victoire dans le rapport');
 assert.deepStrictEqual(alice.pos, { x: 0, y: 0 }, 'mort → rapatriement Capitale');
 assert.strictEqual(alice.mapId, 'world', 'mort → carte monde');
-assert.strictEqual(alice.hp, Math.ceil(maxHp(alice) * CONFIG.COMBAT.DEATH_HP_PCT), 'réveil à 25 % des PV');
+assert.strictEqual(alice.hp, Math.ceil(maxHp(alice) * reviveHpPct([alice, bob])), 'réveil (Sève de Bob incluse)');
 assert.strictEqual(alice.gold, goldBeforeDeath, 'aucune perte d’or à la mort');
 
 // 2) Victoire forcée (jet 100, au-dessus de n'importe quel seuil) : Rempart d'équipe + Sève en % des PV max
@@ -323,7 +323,7 @@ res = sent.filter((m) => m.ev === 'result').map((m) => m.data);
 assert.strictEqual(res.length, 2, 'résultats envoyés aux deux (victoire mortelle)');
 assert.ok(res[0].victory, 'combat gagné malgré la mort d’Alice');
 assert.ok(res[0].died, 'victoire trop coûteuse en PV = mort (plus de plancher à 1 PV)');
-assert.strictEqual(alice.hp, Math.ceil(maxHp(alice) * CONFIG.COMBAT.DEATH_HP_PCT), 'réveil à 25 % des PV malgré la victoire');
+assert.strictEqual(alice.hp, Math.ceil(maxHp(alice) * reviveHpPct([alice, cara])), 'réveil (Rempart de Cara inclus) malgré la victoire');
 assert.deepStrictEqual(alice.pos, { x: 0, y: 0 }, 'victoire mortelle → rapatriement Capitale');
 assert.strictEqual(alice.mapId, 'world', 'victoire mortelle → carte monde');
 assert.ok(alice.gold > goldBeforeLethalVictory, 'le butin reste acquis malgré une victoire mortelle');
