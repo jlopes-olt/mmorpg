@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v114-mobile-perf';
+const VERSION = 'wildrift-v122-dice-icon-fix';
 
 const CORE = [
   '/',

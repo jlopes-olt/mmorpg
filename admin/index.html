@@ -10,7 +10,7 @@
        Du coup les refs de CETTE page (admin.css/admin.js) doivent rester en /admin/... . -->
   <base href="/">
   <link rel="icon" type="image/png" sizes="192x192" href="/assets/icons/icon-192.png">
-  <link rel="stylesheet" href="/admin/admin.css?v=5">
+  <link rel="stylesheet" href="/admin/admin.css?v=6">
 </head>
 <body>
 
@@ -99,14 +99,28 @@
           <label class="sim-checkbox"><input type="checkbox" id="simIsMe" checked> Vue « mon personnage » (échelle pleine)</label>
         </div>
       </div>
+
+      <!-- Aperçu du dé de combat : même rendu à deux calques que le jeu
+           (aura fixe + sprite qui tourne, voir js/ui.js playCombatClash) —
+           permet de vérifier un dé de boutique sans lancer un vrai combat. -->
+      <div class="sim-dice-section">
+        <h3>Dé de combat</h3>
+        <label>Dé<select id="simDice"></select></label>
+        <div class="sim-dice-buttons">
+          <button id="simDiceNormal" class="btn" type="button">Jet normal</button>
+          <button id="simDiceCritSuccess" class="btn" type="button">Critique réussite</button>
+          <button id="simDiceCritFail" class="btn" type="button">Critique échec</button>
+        </div>
+        <div id="simDicePreview" class="sim-dice-preview"></div>
+      </div>
     </div>
   </aside>
   <div id="simOverlay" class="panel-overlay hidden"></div>
 
   <div id="toasts" class="toasts"></div>
 
-  <script src="/js/config.js?v=20260724-mobile-perf"></script>
-  <script src="/js/render.js?v=20260724-mobile-perf"></script>
-  <script src="/admin/admin.js?v=6"></script>
+  <script src="/js/config.js?v=20260724-dice-icon-fix"></script>
+  <script src="/js/render.js?v=20260724-dice-icon-fix"></script>
+  <script src="/admin/admin.js?v=8"></script>
 </body>
 </html>

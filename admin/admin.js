@@ -178,6 +178,11 @@ function mountOptions() {
     .map((item) => '<option value="mount:' + item.id + '">' + item.label + '</option>').join('');
 }
 
+function diceOptions() {
+  return DICE_SKIN_ITEMS
+    .map((item) => '<option value="dice:' + item.id + '">' + item.label + '</option>').join('');
+}
+
 function grantFormHtml() {
   const resourceOptions = Object.keys(RESOURCES)
     .map((t) => '<option value="item:' + t + '">' + RESOURCES[t].label + '</option>').join('');
@@ -203,6 +208,7 @@ function grantFormHtml() {
           '<optgroup label="Consommables">' + consumableOptions + '</optgroup>' +
           '<optgroup label="Accessoires cosmétiques (rares)">' + accessoryOptions() + '</optgroup>' +
           '<optgroup label="Montures (rares)">' + mountOptions() + '</optgroup>' +
+          '<optgroup label="Dés cosmétiques">' + diceOptions() + '</optgroup>' +
         '</select>' +
         '<select id="grantTier">' + tierOptions + '</select>' +
         '<input id="grantQty" type="number" min="1" max="999" value="1">' +
@@ -254,6 +260,7 @@ function renderPlayerPanel(p) {
         '<div><span>' + esc(PREMIUM_CURRENCY.label) + '</span> <b>' + (p.premium || 0).toLocaleString('fr-FR') + '</b></div>' +
         '<div><span>Accessoire</span> <b>' + esc((ACCESSORY_ITEMS[p.accessoryId] || {}).label || '—') + '</b></div>' +
         '<div><span>Monture</span> <b>' + esc((MOUNT_ITEMS[p.mountId] || {}).label || '—') + '</b></div>' +
+        '<div><span>Dé</span> <b>' + esc((DICE_SKIN_BY_ID[p.diceId] || {}).label || 'Par défaut') + '</b></div>' +
       '</div>' +
     '</div>' +
 
@@ -310,6 +317,7 @@ function renderPlayerPanel(p) {
     else if (what.indexOf('item:') === 0) r = await api('POST', '/players/' + u + '/item', { key: stackKey(what.slice(5), tier), qty });
     else if (what.indexOf('accessory:') === 0) r = await api('POST', '/players/' + u + '/accessory', { accessoryId: what.slice(10) });
     else if (what.indexOf('mount:') === 0) r = await api('POST', '/players/' + u + '/mount', { mountId: what.slice(6) });
+    else if (what.indexOf('dice:') === 0) r = await api('POST', '/players/' + u + '/dice', { diceId: what.slice(5) });
     toast((r && r.ok) ? 'Attribution effectuée.' : ((r && r.error) || 'Erreur serveur.'), !(r && r.ok));
     if (r && r.ok) loadAll();
   });
@@ -337,8 +345,99 @@ function populateSimSelectors() {
     Object.values(ACCESSORY_ITEMS).map((a) => '<option value="' + esc(a.id) + '">' + esc(a.label) + '</option>').join('');
   $('simMount').innerHTML = '<option value="">À pied</option>' +
     Object.values(MOUNT_ITEMS).map((m) => '<option value="' + esc(m.id) + '">' + esc(m.label) + '</option>').join('');
+  $('simDice').innerHTML = '<option value="">Dé par défaut</option>' +
+    DICE_SKIN_ITEMS.map((d) => '<option value="' + esc(d.id) + '">' + esc(d.label) + '</option>').join('');
   refreshSimSkinOptions();
 }
+
+/* ---------- Aperçu du dé de combat ----------
+ * Même rendu à deux calques que le jeu (aura fixe + sprite qui tourne, voir
+ * js/ui.js playCombatClash) : cette page n'a jamais chargé js/ui.js (trop
+ * couplé à l'écran de jeu pour être réutilisé tel quel), donc le détourage
+ * magenta et la mini-animation sont dupliqués ici en version autonome. */
+const diceSpriteCache = {};   // '' (dé par défaut) ou id -> sprite détouré (data URL)
+const diceSpriteLoading = new Set();
+
+function removeChromaToCanvas(image) {
+  const c = document.createElement('canvas');
+  c.width = image.naturalWidth;
+  c.height = image.naturalHeight;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(image, 0, 0);
+  const img = g.getImageData(0, 0, c.width, c.height);
+  const data = img.data;
+  const KEY = 90;
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i], gg = data[i + 1], b = data[i + 2];
+    const spill = Math.min(r, b) - gg;
+    if (spill <= 0) continue;
+    const amount = Math.min(1, spill / KEY);
+    data[i + 3] = Math.round(data[i + 3] * (1 - amount));
+    if (amount < 1) {
+      data[i] = Math.round(r - (r - gg) * amount);
+      data[i + 2] = Math.round(b - (b - gg) * amount);
+    }
+  }
+  g.putImageData(img, 0, 0);
+  return c;
+}
+
+function ensureDiceSpriteLoaded(diceId, onReady) {
+  const key = diceId || '';
+  if (diceSpriteCache[key]) { onReady(diceSpriteCache[key]); return; }
+  if (diceSpriteLoading.has(key)) { setTimeout(() => ensureDiceSpriteLoaded(diceId, onReady), 150); return; }
+  const src = diceId ? (DICE_SKIN_BY_ID[diceId] || {}).sprite : 'assets/dice_rune_base_magenta.png';
+  if (!src) return;
+  diceSpriteLoading.add(key);
+  const img = new Image();
+  img.onload = () => {
+    diceSpriteCache[key] = removeChromaToCanvas(img).toDataURL('image/png');
+    diceSpriteLoading.delete(key);
+    onReady(diceSpriteCache[key]);
+  };
+  img.src = src;
+}
+
+let simDiceCloseTimer = null;
+function playDicePreviewRoll(outcome) {
+  const diceId = $('simDice').value || null;
+  ensureDiceSpriteLoaded(diceId, (sprite) => {
+    if (simDiceCloseTimer) { clearTimeout(simDiceCloseTimer); simDiceCloseTimer = null; }
+    const wrap = $('simDicePreview');
+    wrap.innerHTML =
+      '<div class="combat-die spinning">' +
+        '<div class="combat-die-face">' +
+          '<img class="combat-die-fx" src="' + DICE_FX.idle + '" alt="">' +
+          '<div class="combat-die-spin-layer">' +
+            '<img class="combat-die-art" src="' + sprite + '" alt="">' +
+            '<span class="combat-die-number">?</span>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    const dieEl = wrap.querySelector('.combat-die');
+    const numberEl = wrap.querySelector('.combat-die-number');
+    const fxEl = wrap.querySelector('.combat-die-fx');
+    const roll = outcome === 'critSuccess' ? 100 : (outcome === 'critFail' ? 1 : (2 + Math.floor(Math.random() * 97)));
+    const SPIN_MS = 1000;
+    const spinStart = Date.now();
+    const spinTimer = setInterval(() => {
+      numberEl.textContent = String(1 + Math.floor(Math.random() * 100));
+      if (Date.now() - spinStart >= SPIN_MS) {
+        clearInterval(spinTimer);
+        numberEl.textContent = String(roll);
+        dieEl.classList.remove('spinning');
+        dieEl.classList.add('settled');
+        if (outcome === 'critSuccess') { dieEl.classList.add('crit-success'); fxEl.src = DICE_FX.critSuccess; }
+        else if (outcome === 'critFail') { dieEl.classList.add('crit-fail'); fxEl.src = DICE_FX.critFail; }
+      }
+    }, 60);
+    simDiceCloseTimer = setTimeout(() => { wrap.innerHTML = ''; }, SPIN_MS + 2500);
+  });
+}
+
+$('simDiceNormal').addEventListener('click', () => playDicePreviewRoll('normal'));
+$('simDiceCritSuccess').addEventListener('click', () => playDicePreviewRoll('critSuccess'));
+$('simDiceCritFail').addEventListener('click', () => playDicePreviewRoll('critFail'));
 
 function simFakePlayer() {
   return {
@@ -402,6 +501,8 @@ function closeSimPanel() {
   $('simOverlay').classList.add('hidden');
   $('simPanel').classList.add('hidden');
   if (simSettleTimer) { clearInterval(simSettleTimer); simSettleTimer = null; }
+  if (simDiceCloseTimer) { clearTimeout(simDiceCloseTimer); simDiceCloseTimer = null; }
+  $('simDicePreview').innerHTML = '';
 }
 
 $('openSimulatorBtn').addEventListener('click', openSimPanel);

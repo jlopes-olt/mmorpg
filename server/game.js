@@ -117,8 +117,10 @@ class Game {
     if (!Array.isArray(p.ownedSkins)) p.ownedSkins = [];
     if (!Array.isArray(p.ownedAccessories)) p.ownedAccessories = [];
     if (!Array.isArray(p.ownedMounts)) p.ownedMounts = [];
+    if (!Array.isArray(p.ownedDice)) p.ownedDice = [];
     if (typeof p.accessoryId === 'undefined') p.accessoryId = null;
     if (typeof p.mountId === 'undefined') p.mountId = null;
+    if (typeof p.diceId === 'undefined') p.diceId = null;
     if (typeof p[PREMIUM_CURRENCY.key] !== 'number') p[PREMIUM_CURRENCY.key] = 0;
     if (typeof p.skinId === 'undefined') p.skinId = null;
     if (!Array.isArray(p.characters) || !p.characters.length) return;
@@ -352,6 +354,8 @@ class Game {
       accessoryId: null,
       ownedMounts: [],
       mountId: null,
+      ownedDice: [],
+      diceId: null,
       status: 'IDLE',
       harvestKey: null, harvestEndsAt: 0,
       raidKey: null,
@@ -645,6 +649,21 @@ class Game {
     return { ok: true };
   }
 
+  // Dé cosmétique : indépendant de la classe (comme une monture), en vente
+  // uniquement contre Écailles Lunaires — pas d'équivalent or.
+  buyDiceSkin(p, diceId) {
+    const item = diceSkinFor(String(diceId || ''));
+    if (!item) return { ok: false, error: 'Dé inconnu.' };
+    this.skinStateOf(p);
+    if (p.ownedDice.includes(item.id)) return { ok: false, error: 'Dé déjà possédé.' };
+    const balance = Number(p[PREMIUM_CURRENCY.key] || 0);
+    if (balance < item.price) return { ok: false, error: 'Pas assez de ' + PREMIUM_CURRENCY.label.toLowerCase() + '.' };
+    p[PREMIUM_CURRENCY.key] = balance - item.price;
+    p.ownedDice.push(item.id);
+    this.pushSelf(p);
+    return { ok: true };
+  }
+
   buyGoldPack(p, packId) {
     const pack = GOLD_PACKS.find((item) => item.id === String(packId || ''));
     if (!pack) return { ok: false, error: 'Pack d’or inconnu.' };
@@ -736,6 +755,20 @@ class Game {
     if (!MOUNT_ITEMS[desired]) return { ok: false, error: 'Monture inconnue.' };
     if (!p.ownedMounts.includes(desired)) return { ok: false, error: 'Vous ne possédez pas cette monture.' };
     p.mountId = desired;
+    this.pushSelf(p);
+    return { ok: true };
+  }
+
+  equipDiceSkin(p, diceId) {
+    const desired = diceId ? String(diceId) : null;
+    if (!desired) {
+      p.diceId = null;
+      this.pushSelf(p);
+      return { ok: true };
+    }
+    if (!DICE_SKIN_BY_ID[desired]) return { ok: false, error: 'Dé inconnu.' };
+    if (!p.ownedDice.includes(desired)) return { ok: false, error: 'Vous ne possédez pas ce dé.' };
+    p.diceId = desired;
     this.pushSelf(p);
     return { ok: true };
   }
@@ -1067,12 +1100,12 @@ class Game {
     this.send(a.id, 'duelResult', {
       opponent: b.username, won: aWins,
       chance: Math.round(chanceA * 100), yourPower: Math.round(powerA), opponentPower: Math.round(powerB),
-      roll, threshold: thresholdA, critical: critOf(roll), rollerUsername: roller.username,
+      roll, threshold: thresholdA, critical: critOf(roll), rollerUsername: roller.username, rollerDiceId: roller.diceId || null,
     });
     this.send(b.id, 'duelResult', {
       opponent: a.username, won: !aWins,
       chance: Math.round(chanceB * 100), yourPower: Math.round(powerB), opponentPower: Math.round(powerA),
-      roll: 101 - roll, threshold: thresholdB, critical: critOf(101 - roll), rollerUsername: roller.username,
+      roll: 101 - roll, threshold: thresholdB, critical: critOf(101 - roll), rollerUsername: roller.username, rollerDiceId: roller.diceId || null,
     });
     this.log('⚔️ ' + winner.username + ' bat ' + loser.username + ' en duel amical.');
     this.pushSelf(a);
@@ -1616,7 +1649,7 @@ class Game {
       this.send(a.id, 'siegeResult', {
         role: 'attacker',
         victory, captured, chance,
-        roll, threshold, critical, rollerUsername: roller ? roller.username : null,
+        roll, threshold, critical, rollerUsername: roller ? roller.username : null, rollerDiceId: roller ? (roller.diceId || null) : null,
         terrain: raid.terrain,
         label: raid.label,
         teamForce: Math.round(force),
@@ -1639,7 +1672,7 @@ class Game {
       this.send(d.id, 'siegeResult', {
         role: 'defender',
         victory, captured, chance,
-        roll, threshold, critical, rollerUsername: roller ? roller.username : null,
+        roll, threshold, critical, rollerUsername: roller ? roller.username : null, rollerDiceId: roller ? (roller.diceId || null) : null,
         terrain: raid.terrain,
         label: raid.label,
         teamForce: Math.round(force),
@@ -2317,6 +2350,7 @@ class Game {
         threshold,
         critical,
         rollerUsername: roller ? roller.username : null,
+        rollerDiceId: roller ? (roller.diceId || null) : null,
         label: raid.label,
         monsterType: monster.type,
         tier: raid.tier,
@@ -2642,6 +2676,8 @@ class Game {
       accessoryId: p.accessoryId || null,
       ownedMounts: p.ownedMounts || [],
       mountId: p.mountId || null,
+      ownedDice: p.ownedDice || [],
+      diceId: p.diceId || null,
     })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   }
 
@@ -2768,6 +2804,19 @@ class Game {
     if (!MOUNT_ITEMS[id]) return { ok: false, error: 'Monture inconnue.' };
     if (!target.ownedMounts.includes(id)) target.ownedMounts.push(id);
     target.mountId = id;
+    this.pushSelf(target);
+    return { ok: true };
+  }
+
+  adminGrantDiceSkin(admin, username, diceId) {
+    if (!admin || admin.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
+    const target = this.adminFindTarget(username);
+    if (!target) return { ok: false, error: 'Joueur introuvable.' };
+    const id = String(diceId || '');
+    if (!DICE_SKIN_BY_ID[id]) return { ok: false, error: 'Dé inconnu.' };
+    this.skinStateOf(target);
+    if (!target.ownedDice.includes(id)) target.ownedDice.push(id);
+    target.diceId = id;
     this.pushSelf(target);
     return { ok: true };
   }

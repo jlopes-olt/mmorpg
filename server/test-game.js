@@ -16,6 +16,7 @@ const {
   CASTLE_FORTIFY_COST_GOLD, CASTLE_FORTIFY_BONUS_PER_LEVEL, stackKey,
   PREMIUM_CURRENCY, GOLD_PACKS,
   MOUNT_ITEMS, SIEGE_CAPTURE_GOLD_PER_LEVEL, RENARD_SIEGE_LOOT_BONUS,
+  DICE_SKIN_ITEMS, DICE_SKIN_BY_ID,
 } = require('../js/config.js');
 const { ACHIEVEMENTS } = require('../js/achievements.js');
 
@@ -734,6 +735,11 @@ const bobHpBefore = bob.hp, carlHpBefore = carl.hp;
 const bobWinsBefore = bob.duels.wins, carlLossesBefore = carl.duels.losses;
 sent.length = 0;
 assert.ok(g.requestDuel(bob, carl.id).ok, 'second défi envoyé');
+// Bob équipe un dé cosmétique avant la résolution : comme Bob est le lanceur
+// désigné ci-dessous (rng forcé), les DEUX duellistes doivent voir SON dé —
+// pas le leur propre — pour que l'habillage donne envie à l'adversaire aussi.
+bob.ownedDice = [DICE_SKIN_ITEMS[0].id];
+bob.diceId = DICE_SKIN_ITEMS[0].id;
 // resolveDuel tire désormais UN SEUL jet partagé (issue collective, comme un
 // raid/siège — voir Game.resolveDuel) plutôt qu'un jet indépendant par
 // duelliste : deux dés indépendants faussaient le pourcentage annoncé (la
@@ -762,6 +768,9 @@ assert.strictEqual(carlResult.roll, 101 - bobResult.roll, 'jet de Carl = miroir 
 assert.strictEqual(carlResult.threshold, 102 - bobResult.threshold, 'seuil de Carl = miroir exact du seuil de Bob (102 − seuil)');
 assert.strictEqual(bobResult.rollerUsername, carlResult.rollerUsername, 'le même lanceur de dé est rapporté aux deux duellistes');
 assert.ok(['Bob', 'Carl'].includes(bobResult.rollerUsername), 'le lanceur de dé est bien l’un des deux duellistes');
+assert.strictEqual(bobResult.rollerUsername, 'Bob', 'Bob est le lanceur désigné (rng forcé)');
+assert.strictEqual(bobResult.rollerDiceId, bob.diceId, 'Bob voit SON PROPRE dé (il est le lanceur)');
+assert.strictEqual(carlResult.rollerDiceId, bob.diceId, 'Carl voit le dé de Bob (le lanceur), pas le sien (aucun équipé)');
 assert.strictEqual(carlResult.opponent, 'Bob', 'adversaire de Carl correctement identifié');
 assert.strictEqual(bob.duels.wins, bobWinsBefore + 1, 'victoire comptabilisée');
 assert.strictEqual(carl.duels.losses, carlLossesBefore + 1, 'défaite comptabilisée');
@@ -1394,6 +1403,26 @@ assert.strictEqual(alice[PREMIUM_CURRENCY.key], 7, 'prix en Écailles Lunaires d
 assert.ok(alice.ownedMounts.includes('mount_licorne'), 'monture premium ajoutée à la possession');
 assert.ok(!g.buyMount(alice, 'mount_licorne').ok, 'rachat de la même monture premium refusé');
 console.log('Montures premium : configuration ✔, achat Écailles Lunaires (débit exact, anti-double achat) ✔');
+
+// --- Dés cosmétiques : boutique Écailles Lunaires uniquement, indépendants de la classe ---
+for (const item of DICE_SKIN_ITEMS) {
+  assert.strictEqual(item.currency, PREMIUM_CURRENCY.key, item.id + ' payable en Écailles Lunaires');
+}
+assert.ok(!g.equipDiceSkin(alice, 'dice_voile_lunaire').ok, 'dé refusé avant obtention');
+const voileLunaire = DICE_SKIN_BY_ID.dice_voile_lunaire;
+alice[PREMIUM_CURRENCY.key] = voileLunaire.price - 1;
+assert.ok(!g.buyDiceSkin(alice, 'dice_voile_lunaire').ok, 'achat refusé sans assez d’Écailles Lunaires');
+assert.ok(!alice.ownedDice.includes('dice_voile_lunaire'), 'rien débité/ajouté après un refus');
+alice[PREMIUM_CURRENCY.key] = voileLunaire.price + 5;
+const buyDiceRes = g.buyDiceSkin(alice, 'dice_voile_lunaire');
+assert.ok(buyDiceRes.ok, 'dé acheté avec assez d’Écailles Lunaires');
+assert.strictEqual(alice[PREMIUM_CURRENCY.key], 5, 'prix débité exactement');
+assert.ok(alice.ownedDice.includes('dice_voile_lunaire'), 'dé ajouté à la possession');
+assert.ok(!g.buyDiceSkin(alice, 'dice_voile_lunaire').ok, 'rachat du même dé refusé');
+assert.ok(!g.equipDiceSkin(alice, 'dice_inconnu').ok, 'dé inconnu refusé à l’équipement');
+assert.ok(g.equipDiceSkin(alice, 'dice_voile_lunaire').ok && alice.diceId === 'dice_voile_lunaire', 'dé possédé équipé');
+assert.ok(g.equipDiceSkin(alice, null).ok && !alice.diceId, 'retour au dé par défaut possible');
+console.log('Dés cosmétiques : boutique Écailles Lunaires ✔, possession/équipement indépendants de la classe ✔');
 
 // --- Crédit Stripe (webhook) : appliqué même hors ligne, comptes/montants invalides refusés ---
 alice.online = false;

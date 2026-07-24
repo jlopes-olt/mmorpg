@@ -46,7 +46,14 @@ class UI {
     this.pushSupported = false;   // calculé de façon asynchrone, voir checkPushSupport()
     this.pushSubscribed = false;
     this.checkPushSupport();
-    this.diceSrc = { base: '', critSuccess: '', critFail: '' };
+    // Rendu du dé en deux calques (voir playCombatClash) : une aura de fond
+    // partagée (DICE_FX, déjà en vraie transparence, jamais détourée) fixe
+    // derrière, et un sprite de dé propre par-dessus, qui peut tourner sans
+    // embarquer l'aura. defaultDiceSprite = dé gratuit détouré ; diceSkinSrc
+    // = un sprite détouré par dé de boutique (voir ensureDiceSkinAssets).
+    this.defaultDiceSprite = '';
+    this.diceSkinSrc = {};
+    this.diceSkinLoading = new Set();
     this.modalAssetSrc = {
       frame: 'assets/modal_frame_raw.png',
       buttonSecondary: 'assets/modal_button_secondary_raw.png',
@@ -335,22 +342,25 @@ class UI {
     return this.diceIconHtml() + '<b class="' + this.chanceClass(chance) + '">' + winThreshold(chance) + '+</b>';
   }
 
-  /* Petite icône de dé (même asset que l'animation de combat) accolée à
-   * chaque affichage de seuil, avant même le début du combat — pour que le
-   * jet nécessaire soit visuellement identifiable au premier coup d'œil. */
-  diceIconHtml() {
-    return this.diceSrc.base ? '<img class="threshold-die-icon" src="' + this.diceSrc.base + '" alt="">' : '';
+  /* Petite icône de dé (même sprite que l'animation de combat, voir
+   * diceSrcForId) accolée à chaque affichage de seuil — avant le combat,
+   * c'est encore notre propre dé équipé (personne n'a été désigné lanceur) ;
+   * après résolution, diceResultHtml passe l'id du LANCEUR réel. */
+  diceIconHtml(diceId) {
+    const src = this.diceSrcForId(diceId || (this.server.me && this.server.me.diceId));
+    return src ? '<img class="threshold-die-icon" src="' + src + '" alt="">' : '';
   }
 
   /* Résultat du jet de dé APRÈS résolution (contrairement à thresholdHtml, qui
    * n'affiche qu'une prévision avant que les dés soient lancés) : le seuil
-   * affiché est celui réellement comparé au jet côté serveur. */
-  diceResultHtml(roll, threshold, critical) {
+   * affiché est celui réellement comparé au jet côté serveur, et l'icône est
+   * celle du dé du LANCEUR désigné (rollerDiceId), pas forcément le nôtre. */
+  diceResultHtml(roll, threshold, critical, rollerDiceId) {
     if (typeof roll !== 'number' || typeof threshold !== 'number') return '';
     const success = roll >= threshold;
     const cls = success ? 'chance-good' : 'chance-bad';
     const critTag = critical === 'success' ? ' ⭐ critique' : (critical === 'fail' ? ' 💀 critique' : '');
-    return this.diceIconHtml() + '<b class="' + cls + '">' + roll + '</b> (seuil ' + threshold + '+)' + critTag;
+    return this.diceIconHtml(rollerDiceId) + '<b class="' + cls + '">' + roll + '</b> (seuil ' + threshold + '+)' + critTag;
   }
 
   terrainLabel(terrain) {
@@ -963,7 +973,7 @@ showDungeonPopup(tile, onEnter) {
       r.won ? '⚔ Victoire en duel !' : '⚔ Défaite en duel',
       '<p>Face à <b>' + esc(r.opponent) + '</b>.</p>' +
       (typeof r.roll === 'number'
-        ? '<p><span class="battle-label">Jet</span> ' + this.diceResultHtml(r.roll, r.threshold, r.critical) +
+        ? '<p><span class="battle-label">Jet</span> ' + this.diceResultHtml(r.roll, r.threshold, r.critical, r.rollerDiceId) +
           (r.rollerUsername ? ' — lancé par ' + esc(r.rollerUsername) : '') + '.</p>'
         : '') +
       '<p class="dim small">Puissance : ' + r.yourPower + ' contre ' + r.opponentPower + '.</p>' +
@@ -1694,16 +1704,17 @@ showDungeonPopup(tile, onEnter) {
   }
 
   loadCombatFxAssets() {
-    const diceSources = {
-      base: 'assets/dice_rune_base_magenta.png',
-      critSuccess: 'assets/dice_rune_crit_success_magenta.png',
-      critFail: 'assets/dice_rune_crit_fail_magenta.png',
-    };
-    Object.entries(diceSources).forEach(([key, src]) => {
-      const img = new Image();
-      img.onload = () => { this.diceSrc[key] = this.removeChromaToDataUrl(img); };
-      img.src = src;
-    });
+    // Dé par défaut (gratuit) : un seul sprite détouré désormais, l'aura
+    // vient de DICE_FX (partagée, déjà transparente, jamais détourée).
+    const defaultImg = new Image();
+    defaultImg.onload = () => { this.defaultDiceSprite = this.removeChromaToDataUrl(defaultImg); };
+    defaultImg.src = 'assets/dice_rune_base_magenta.png';
+
+    // Dés cosmétiques de la boutique (voir DICE_SKIN_ITEMS) : chargés et
+    // détourés à l'avance, pour être prêts dès le premier combat — voir
+    // aussi ensureDiceSkinAssets(), qui peut redéclencher ce chargement au
+    // cas où un dé serait acheté/équipé après coup.
+    DICE_SKIN_ITEMS.forEach((item) => this.ensureDiceSkinAssets(item.id));
 
     Object.entries(this.modalAssetSrc).forEach(([key, src]) => {
       const asset = new Image();
@@ -1750,15 +1761,56 @@ showDungeonPopup(tile, onEnter) {
     const img = g.getImageData(0, 0, c.width, c.height);
     const data = img.data;
 
+    // Magenta (255,0,255) : un seuil binaire (avant) rend transparents les
+    // pixels franchement magenta mais laisse une frange rose sur les pixels
+    // anti-crénelés à la frontière (mélange magenta + dessin réel) — invisible
+    // sur un fond sombre flou, mais très visible sur le parchemin clair du
+    // cadre (voir combat-fx-frame). On mesure la dominance du magenta en
+    // continu (R et B hauts, V bas) : au-delà du seuil, transparence totale
+    // comme avant ; entre les deux, alpha ET teinte sont réduits en
+    // proportion (spill suppression) plutôt qu'un tout-ou-rien.
+    const KEY = 90;
     for (let i = 0; i < data.length; i += 4) {
       const r = data[i];
       const gg = data[i + 1];
       const b = data[i + 2];
-      if (r > 220 && b > 220 && gg < 80) data[i + 3] = 0;
+      const spill = Math.min(r, b) - gg;
+      if (spill <= 0) continue;
+      const amount = Math.min(1, spill / KEY);
+      data[i + 3] = Math.round(data[i + 3] * (1 - amount));
+      if (amount < 1) {
+        data[i] = Math.round(r - (r - gg) * amount);
+        data[i + 2] = Math.round(b - (b - gg) * amount);
+      }
     }
 
     g.putImageData(img, 0, 0);
     return c;
+  }
+
+  // Charge et détoure le sprite d'un dé de la boutique (une seule fois par
+  // id — voir loadCombatFxAssets pour le chargement anticipé de toute la
+  // collection). Sans effet si l'id est inconnu ou déjà en cache/en cours.
+  ensureDiceSkinAssets(id) {
+    if (!id || this.diceSkinSrc[id] || this.diceSkinLoading.has(id)) return;
+    const item = DICE_SKIN_BY_ID[id];
+    if (!item) return;
+    this.diceSkinLoading.add(id);
+    const img = new Image();
+    img.onload = () => { this.diceSkinSrc[id] = this.removeChromaToDataUrl(img); };
+    img.src = item.sprite;
+  }
+
+  // Sprite à utiliser pour le prochain jet : celui du dé ÉQUIPÉ PAR LE
+  // LANCEUR (r.rollerDiceId, voir Game.resolveDuel/resolveRaid/resolveSiege),
+  // pas le nôtre — en duel/groupe, c'est le dé de la personne désignée pour
+  // lancer que tout le monde doit voir, justement pour donner envie aux
+  // autres joueurs d'acheter le même. Retombe sur le dé par défaut si son
+  // détourage n'est pas encore prêt (voir ensureDiceSkinAssets) ou si le
+  // lanceur n'a rien équipé. L'aura de fond (DICE_FX), elle, est PARTAGÉE
+  // par tous les dés — voir playCombatClash.
+  diceSrcForId(diceId) {
+    return (diceId && this.diceSkinSrc[diceId]) || this.defaultDiceSprite;
   }
 
   removeEdgeBackgroundToCanvas(image) {
@@ -1959,7 +2011,7 @@ showDungeonPopup(tile, onEnter) {
       '<p><span class="battle-label">Participants</span> ' + r.participants.map(esc).join(', ') + '</p>',
     ];
     if (typeof r.roll === 'number') {
-      lines.push('<p><span class="battle-label">Jet</span> ' + this.diceResultHtml(r.roll, r.threshold, r.critical) +
+      lines.push('<p><span class="battle-label">Jet</span> ' + this.diceResultHtml(r.roll, r.threshold, r.critical, r.rollerDiceId) +
         (r.rollerUsername ? ' — lancé par ' + esc(r.rollerUsername) : '') + '.</p>');
     } else if (typeof r.chance === 'number') {
       lines.push('<p><span class="battle-label">Jet nécessaire</span> ' + this.thresholdHtml(r.chance) + ' — le sort a ' + (r.victory ? 'souri' : 'tranché') + '.</p>');
@@ -2040,7 +2092,7 @@ showDungeonPopup(tile, onEnter) {
     await this.playCombatClash({
       victory: won, label: r.label,
       roll: diceRoll, threshold: diceThreshold, critical: diceCritical,
-      rollerUsername: r.rollerUsername,
+      rollerUsername: r.rollerUsername, rollerDiceId: r.rollerDiceId,
     });
     const lines = [
       '<div class="vs battle-vs"><span>' + esc(r.attackerGuildName) + ' <b>' + r.teamForce + '</b></span>' +
@@ -2056,7 +2108,7 @@ showDungeonPopup(tile, onEnter) {
         (r.engineDamage ? ', +' + r.engineDamage + ' PS garantis' : '') + '</p>');
     }
     if (diceRoll !== null) {
-      lines.push('<p><span class="battle-label">Jet</span> ' + this.diceResultHtml(diceRoll, diceThreshold, diceCritical) +
+      lines.push('<p><span class="battle-label">Jet</span> ' + this.diceResultHtml(diceRoll, diceThreshold, diceCritical, r.rollerDiceId) +
         (r.rollerUsername ? ' — lancé par ' + esc(r.rollerUsername) : '') + '.</p>');
     } else {
       lines.push('<p><span class="battle-label">Jet nécessaire</span> ' + this.thresholdHtml(isDefender ? 1 - r.chance : r.chance) +
@@ -2068,6 +2120,9 @@ showDungeonPopup(tile, onEnter) {
         : '<p class="hp-c"><b>☠ Assaut repoussé.</b> Rapatriement à la Capitale — reposez-vous à la fontaine avant de repartir.</p>');
     } else if (r.captured) {
       lines.push('<p class="ok-c"><b>🏰 Château conquis !</b> ' + esc(r.label) + ' appartient désormais à ' + esc(r.attackerGuildName) + '.</p>');
+      if (!isDefender && r.goldReward) {
+        lines.push('<p class="dim small">💰 Butin de guerre : +' + r.goldReward + ' or.</p>');
+      }
     } else if (isDefender) {
       lines.push('<p class="ok-c"><b>🛡 Assaut repoussé !</b> ' + r.hp + ' / ' + r.hpMax + ' PS restants.</p>');
     } else {
@@ -2095,17 +2150,36 @@ showDungeonPopup(tile, onEnter) {
     return new Promise((resolve) => {
       const wrap = $('combatFx');
       const hasDice = typeof r.roll === 'number' && typeof r.threshold === 'number';
+      // Le sprite affiché est celui du LANCEUR désigné (r.rollerDiceId), pas
+      // le nôtre — voir diceSrcForId. L'aura de fond (DICE_FX) est PARTAGÉE
+      // par tous les dés : seul le sprite change selon le skin équipé.
+      const diceArt = this.diceSrcForId(r.rollerDiceId);
 
+      // Deux calques : l'aura (.combat-die-fx) reste fixe derrière, le sprite
+      // (.combat-die-spin-layer > .combat-die-art) tourne seul par-dessus
+      // sans jamais entraîner l'aura avec lui (voir CSS .combat-die-fx).
       const diceHtml = hasDice ?
         '<div class="combat-die spinning">' +
           '<div class="combat-die-face">' +
-            (this.diceSrc.base ? '<img class="combat-die-art" src="' + this.diceSrc.base + '" alt="">' : '') +
-            '<span class="combat-die-number">?</span>' +
+            '<img class="combat-die-fx" src="' + DICE_FX.idle + '" alt="">' +
+            '<div class="combat-die-spin-layer">' +
+              (diceArt ? '<img class="combat-die-art" src="' + diceArt + '" alt="">' : '') +
+              '<span class="combat-die-number">?</span>' +
+            '</div>' +
           '</div>' +
-          '<div class="combat-die-threshold">Gagne sur ' + r.threshold + '+</div>' +
         '</div>' : '';
       const rollerHtml = (hasDice && r.rollerUsername)
         ? '<div class="combat-fx-roller">' + esc(r.rollerUsername) + (r.opponent ? ' lance le dé du duel' : ' lance le dé pour le groupe') + '</div>'
+        : '';
+      // Cadre en bois/or (assets/modal_frame_raw.png, voir --modal-frame-url) :
+      // sert d'écrin cérémoniel au jet, comme le jet de dé mis en scène dans
+      // un cadre orné — jusqu'ici cet asset était chargé mais jamais utilisé.
+      const frameHtml = hasDice
+        ? '<div class="combat-fx-frame">' +
+            rollerHtml +
+            '<div class="combat-fx-dice">' + diceHtml + '</div>' +
+            '<div class="combat-die-threshold">Gagne sur ' + r.threshold + '+</div>' +
+          '</div>'
         : '';
 
       wrap.innerHTML =
@@ -2113,8 +2187,7 @@ showDungeonPopup(tile, onEnter) {
           '<div class="combat-fx-center">' +
             '<div class="combat-fx-title">Affrontement</div>' +
             '<div class="combat-fx-subtitle">' + esc(r.label || '') + (r.tier ? ' T' + r.tier : '') + '</div>' +
-            rollerHtml +
-            (hasDice ? '<div class="combat-fx-dice">' + diceHtml + '</div>' : '') +
+            frameHtml +
             '<div class="combat-fx-status">' + (hasDice ? '…' : (r.victory ? 'Victoire…' : 'Défaite…')) + '</div>' +
           '</div>' +
         '</div>';
@@ -2124,20 +2197,25 @@ showDungeonPopup(tile, onEnter) {
       if (!hasDice) {
         // Filet de sécurité si jamais un appelant ne fournit pas de jet —
         // affiche juste l'issue, sans animation de dé.
-        setTimeout(() => backdrop.classList.add('phase-resolve'), 400);
-        setTimeout(() => { this.closeCombatFx(); resolve(); }, 900);
+        setTimeout(() => backdrop.classList.add('phase-resolve'), 500);
+        setTimeout(() => { this.closeCombatFx(); resolve(); }, 2400);
         return;
       }
 
       const dieEl = backdrop.querySelector('.combat-die');
       const numberEl = dieEl.querySelector('.combat-die-number');
-      const artEl = dieEl.querySelector('.combat-die-art');
+      const fxEl = dieEl.querySelector('.combat-die-fx');
       const status = backdrop.querySelector('.combat-fx-status');
 
       // Suspense : le dé affiche des chiffres aléatoires en boucle avant de
       // révéler le vrai jet — le nombre affiché à l'arrêt est TOUJOURS le
       // jet réel envoyé par le serveur, jamais un habillage indépendant.
-      const SPIN_MS = 700;
+      // Durée allongée (700 → 1000ms, voir aussi diceTumble en CSS) et surtout
+      // bien plus de temps laissé APRÈS l'arrêt du dé pour contempler le
+      // résultat avant fermeture — l'ancien minutage (850ms après l'arrêt du
+      // dé, dont ~470ms de statut Victoire/Défaite affiché) filait beaucoup
+      // trop vite pour être lu confortablement.
+      const SPIN_MS = 1000;
       const spinStart = Date.now();
       const spinTimer = setInterval(() => {
         numberEl.textContent = String(1 + Math.floor(Math.random() * 100));
@@ -2148,20 +2226,20 @@ showDungeonPopup(tile, onEnter) {
           dieEl.classList.add('settled');
           if (r.critical === 'success') {
             dieEl.classList.add('crit-success');
-            if (artEl && this.diceSrc.critSuccess) artEl.src = this.diceSrc.critSuccess;
+            if (fxEl) fxEl.src = DICE_FX.critSuccess;
           } else if (r.critical === 'fail') {
             dieEl.classList.add('crit-fail');
-            if (artEl && this.diceSrc.critFail) artEl.src = this.diceSrc.critFail;
+            if (fxEl) fxEl.src = DICE_FX.critFail;
           }
           status.textContent = r.victory ? 'Victoire…' : 'Défaite…';
         }
       }, 60);
 
-      setTimeout(() => backdrop.classList.add('phase-resolve'), SPIN_MS + 380);
+      setTimeout(() => backdrop.classList.add('phase-resolve'), SPIN_MS + 450);
       setTimeout(() => {
         this.closeCombatFx();
         resolve();
-      }, SPIN_MS + 850);
+      }, SPIN_MS + 2500);
     });
   }
 
@@ -2447,6 +2525,8 @@ showDungeonPopup(tile, onEnter) {
     const premiumSkins = SKIN_SHOP_ITEMS.filter((item) => item.currency === PREMIUM_CURRENCY.key);
     const goldMounts = Object.values(MOUNT_ITEMS).filter((item) => item.shop && item.shop.currency === 'gold');
     const premiumMounts = Object.values(MOUNT_ITEMS).filter((item) => item.shop && item.shop.currency === PREMIUM_CURRENCY.key);
+    const goldDice = DICE_SKIN_ITEMS.filter((item) => item.currency === 'gold');
+    const premiumDice = DICE_SKIN_ITEMS.filter((item) => item.currency === PREMIUM_CURRENCY.key);
     const moneyCard =
       '<div class="shop-wallets">' +
         '<div class="shop-wallet">' + this.currencyIcon('gold', 'large') + '<span><span class="shop-wallet-label">Or</span><b>' +
@@ -2478,6 +2558,12 @@ showDungeonPopup(tile, onEnter) {
           '<div class="shop-grid">' + goldMounts.map((item) => this.shopMountCard(me, item)).join('') + '</div>' +
         '</div>'
         : '') +
+      (goldDice.length ?
+        '<div class="shop-section">' +
+          '<div class="upg-head"><b>Coffret de dés</b><span class="dim">Dés contre or</span></div>' +
+          '<div class="shop-grid">' + goldDice.map((item) => this.shopDiceCard(me, item)).join('') + '</div>' +
+        '</div>'
+        : '') +
       '<div class="shop-section premium">' +
         '<div class="upg-head"><b>Collection premium</b><span class="dim">' + PREMIUM_CURRENCY.label + ' ' + this.currencyIcon('premium', 'small') + '</span></div>' +
         '<div class="shop-grid">' + premiumSkins.map((item) => this.shopSkinCard(me, item)).join('') + '</div>' +
@@ -2486,6 +2572,12 @@ showDungeonPopup(tile, onEnter) {
         '<div class="shop-section premium">' +
           '<div class="upg-head"><b>Montures premium</b><span class="dim">' + PREMIUM_CURRENCY.label + ' ' + this.currencyIcon('premium', 'small') + '</span></div>' +
           '<div class="shop-grid">' + premiumMounts.map((item) => this.shopMountCard(me, item)).join('') + '</div>' +
+        '</div>'
+        : '') +
+      (premiumDice.length ?
+        '<div class="shop-section premium">' +
+          '<div class="upg-head"><b>Dés premium</b><span class="dim">' + PREMIUM_CURRENCY.label + ' ' + this.currencyIcon('premium', 'small') + '</span></div>' +
+          '<div class="shop-grid">' + premiumDice.map((item) => this.shopDiceCard(me, item)).join('') + '</div>' +
         '</div>'
         : '');
     body.querySelectorAll('[data-shop-buy]').forEach((btn) => {
@@ -2512,6 +2604,19 @@ showDungeonPopup(tile, onEnter) {
         const mountId = btn.dataset.mount || null;
         const r = await Promise.resolve(this.server.equipMount(mountId));
         this.toast(r.ok ? 'Monture mise à jour.' : r.error);
+      });
+    });
+    body.querySelectorAll('[data-dice-buy]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.buyDiceSkin(btn.dataset.diceBuy));
+        this.toast(r.ok ? 'Dé acheté.' : r.error);
+      });
+    });
+    body.querySelectorAll('[data-dice]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const diceId = btn.dataset.dice || null;
+        const r = await Promise.resolve(this.server.equipDiceSkin(diceId));
+        this.toast(r.ok ? 'Dé mis à jour.' : r.error);
       });
     });
     body.querySelectorAll('[data-buy-pack]').forEach((btn) => {
@@ -2638,6 +2743,33 @@ showDungeonPopup(tile, onEnter) {
     );
   }
 
+  shopDiceCard(me, item) {
+    const owned = (me.ownedDice || []).includes(item.id);
+    const equipped = (me.diceId || null) === item.id;
+    const canAfford = Number(me[item.currency] || 0) >= item.price;
+    const thumb = this.diceSkinSrc[item.id] || item.sprite;
+    let cta = '';
+    if (equipped) cta = '<button class="btn shop-btn" data-dice="">Dé par défaut</button>';
+    else if (owned) cta = '<button class="btn primary shop-btn" data-dice="' + esc(item.id) + '">Équiper</button>';
+    else cta = '<button class="btn primary shop-btn" data-dice-buy="' + esc(item.id) + '"' + (canAfford ? '' : ' disabled') + '>Acheter</button>';
+    return (
+      '<article class="shop-card' + (equipped ? ' equipped' : '') + (owned ? ' owned' : '') + '">' +
+        '<div class="shop-card-art dice-shop-art"><img src="' + esc(thumb) + '" alt="' + esc(item.label) + '"></div>' +
+        '<div class="shop-card-copy">' +
+          '<div class="shop-card-top"><b>' + esc(item.label) + '</b></div>' +
+          '<div class="shop-card-meta">Dé cosmétique</div>' +
+          '<div class="shop-card-price ' + (item.currency === PREMIUM_CURRENCY.key ? 'premium' : 'gold') + '">' +
+            (item.currency === PREMIUM_CURRENCY.key ? this.currencyIcon('premium') : this.currencyIcon('gold')) + ' ' + item.price +
+          '</div>' +
+          '<div class="shop-card-state">' +
+            (equipped ? 'Actif' : owned ? 'Possédé' : (canAfford ? 'Disponible' : 'Fonds insuffisants')) +
+          '</div>' +
+        '</div>' +
+        '<div class="shop-card-actions">' + cta + '</div>' +
+      '</article>'
+    );
+  }
+
   /* Avatar découpé dans la feuille de sprites (grille 3x2) */
   spriteAvatar(speciesClass, extraClass, skinId, accessoryId) {
     const skin = skinFor(skinId);
@@ -2716,6 +2848,10 @@ showDungeonPopup(tile, onEnter) {
         '<div class="section-divider">✦</div>' + this.buildMountSectionHtml(me)
         : '') +
 
+      ((me.ownedDice || []).length ?
+        '<div class="section-divider">✦</div>' + this.buildDiceSectionHtml(me)
+        : '') +
+
       '<div class="section-divider">✦</div>' +
       this.buildCharactersSection(me) +
 
@@ -2752,6 +2888,13 @@ showDungeonPopup(tile, onEnter) {
       btn.addEventListener('click', async () => {
         const mountId = btn.dataset.mount || null;
         const r = await Promise.resolve(this.server.equipMount(mountId));
+        if (!r.ok) this.toast(r.error);
+      });
+    });
+    body.querySelectorAll('[data-dice]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const diceId = btn.dataset.dice || null;
+        const r = await Promise.resolve(this.server.equipDiceSkin(diceId));
         if (!r.ok) this.toast(r.error);
       });
     });
@@ -2912,6 +3055,26 @@ showDungeonPopup(tile, onEnter) {
       '<p class="dim small">Le cavalier et ses accessoires conservent leur taille normale.</p>' +
       '<div class="accessory-picker mount-picker">' +
         '<button class="accessory-none' + (!me.mountId ? ' active' : '') + '" data-mount="">À pied</button>' +
+        items +
+      '</div>';
+  }
+
+  buildDiceSectionHtml(me) {
+    const owned = me.ownedDice || [];
+    const items = owned.map((id) => {
+      const item = DICE_SKIN_BY_ID[id];
+      if (!item) return '';
+      const active = (me.diceId || null) === id;
+      const thumb = this.diceSkinSrc[id] || item.sprite;
+      return '<button class="accessory-card' + (active ? ' active' : '') + '" data-dice="' + esc(id) + '">' +
+        '<span class="accessory-card-art"><img src="' + esc(thumb) + '" alt=""></span>' +
+        '<span class="accessory-card-copy"><b>' + esc(item.label) + '</b><small>' + (active ? 'Équipé' : 'Cliquer pour équiper') + '</small></span>' +
+      '</button>';
+    }).join('');
+    return '<div class="profile-sec-title">Dés</div>' +
+      '<p class="dim small">Habillage du jet de combat — sans effet sur les chances de victoire.</p>' +
+      '<div class="accessory-picker">' +
+        '<button class="accessory-none' + (!me.diceId ? ' active' : '') + '" data-dice="">Dé par défaut</button>' +
         items +
       '</div>';
   }

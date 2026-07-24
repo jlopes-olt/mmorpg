@@ -47,8 +47,10 @@ class ServerSim {
     if (!Array.isArray(p.ownedSkins)) p.ownedSkins = [];
     if (!Array.isArray(p.ownedAccessories)) p.ownedAccessories = [];
     if (!Array.isArray(p.ownedMounts)) p.ownedMounts = [];
+    if (!Array.isArray(p.ownedDice)) p.ownedDice = [];
     if (typeof p.accessoryId === 'undefined') p.accessoryId = null;
     if (typeof p.mountId === 'undefined') p.mountId = null;
+    if (typeof p.diceId === 'undefined') p.diceId = null;
     if (typeof p[PREMIUM_CURRENCY.key] !== 'number') p[PREMIUM_CURRENCY.key] = 0;
     if (typeof p.skinId === 'undefined') p.skinId = null;
     if (!Array.isArray(p.characters) || !p.characters.length) return;
@@ -283,6 +285,8 @@ class ServerSim {
       accessoryId: null,
       ownedMounts: [],
       mountId: null,
+      ownedDice: [],
+      diceId: null,
       status: 'IDLE',
       harvestKey: null, harvestEndsAt: 0,
       raidKey: null,
@@ -365,6 +369,20 @@ class ServerSim {
     }
     me[walletKey] = balance - item.shop.price;
     me.ownedMounts.push(item.id);
+    this.emit('self', me);
+    return { ok: true };
+  }
+
+  buyDiceSkin(diceId) {
+    const me = this.me;
+    const item = diceSkinFor(String(diceId || ''));
+    if (!item) return { ok: false, error: 'Dé inconnu.' };
+    this.skinStateOf(me);
+    if (me.ownedDice.includes(item.id)) return { ok: false, error: 'Dé déjà possédé.' };
+    const balance = Number(me[PREMIUM_CURRENCY.key] || 0);
+    if (balance < item.price) return { ok: false, error: 'Pas assez de ' + PREMIUM_CURRENCY.label.toLowerCase() + '.' };
+    me[PREMIUM_CURRENCY.key] = balance - item.price;
+    me.ownedDice.push(item.id);
     this.emit('self', me);
     return { ok: true };
   }
@@ -461,6 +479,21 @@ class ServerSim {
     if (!MOUNT_ITEMS[desired]) return { ok: false, error: 'Monture inconnue.' };
     if (!me.ownedMounts.includes(desired)) return { ok: false, error: 'Vous ne possédez pas cette monture.' };
     me.mountId = desired;
+    this.emit('self', me);
+    return { ok: true };
+  }
+
+  equipDiceSkin(diceId) {
+    const me = this.me;
+    const desired = diceId ? String(diceId) : null;
+    if (!desired) {
+      me.diceId = null;
+      this.emit('self', me);
+      return { ok: true };
+    }
+    if (!DICE_SKIN_BY_ID[desired]) return { ok: false, error: 'Dé inconnu.' };
+    if (!me.ownedDice.includes(desired)) return { ok: false, error: 'Vous ne possédez pas ce dé.' };
+    me.diceId = desired;
     this.emit('self', me);
     return { ok: true };
   }
@@ -767,7 +800,8 @@ class ServerSim {
 
       if (!victory) {
         // Défaite = mort : rapatriement à la Capitale, sans autre pénalité
-        p.hp = Math.max(1, Math.ceil(maxHp(p) * CONFIG.COMBAT.DEATH_HP_PCT));
+        // (Rempart et Sève adoucissent aussi cette blessure totale, voir reviveHpPct)
+        p.hp = Math.max(1, Math.ceil(maxHp(p) * reviveHpPct(members)));
         if (p.bot) {
           p.pos = { ...p.home };
         } else {
@@ -782,7 +816,11 @@ class ServerSim {
       // sauver d'une blessure autrement fatale. Gagner le combat ne protège
       // plus d'une mort par blessure : une victoire trop coûteuse en PV reste
       // mortelle (même traitement qu'une défaite — rapatriement, PV réduits).
-      let loss = 4 + monster.tier * 3;
+      // La marge du jet module cette usure, comme côté serveur (voir Game.resolveRaid).
+      const marginRatio = Math.max(0, Math.min(1, (roll - threshold) / Math.max(1, 100 - threshold)));
+      const marginMult = CONFIG.COMBAT.HP_LOSS_MARGIN_MAX -
+        (CONFIG.COMBAT.HP_LOSS_MARGIN_MAX - CONFIG.COMBAT.HP_LOSS_MARGIN_MIN) * marginRatio;
+      let loss = (4 + monster.tier * 3) * marginMult;
       loss *= hpLossReduction(p);
       if (rampart) loss *= 0.7;
       loss *= buffLossReduction(p);
@@ -791,7 +829,7 @@ class ServerSim {
       let hpAfterLoss = p.hp - loss;
       if (druid) hpAfterLoss = Math.min(maxHp(p), hpAfterLoss + Math.round(maxHp(p) * CONFIG.COMBAT.DRUID_HEAL_PCT));
       if (hpAfterLoss <= 0) {
-        p.hp = Math.max(1, Math.ceil(maxHp(p) * CONFIG.COMBAT.DEATH_HP_PCT));
+        p.hp = Math.max(1, Math.ceil(maxHp(p) * reviveHpPct(members)));
         if (p.bot) p.pos = { ...p.home };
         else { p.mapId = 'world'; p.pos = { x: 0, y: 0 }; }
         if (p.id === this.meId) myDied = true;
@@ -804,10 +842,13 @@ class ServerSim {
         // de cuisine de leur tier.
         const boosted = this.consumeRegainBonus(p, CONFIG.COSTS.RAID);
         const xp = (15 + Math.min(6, monster.tier) * 15) * (boosted ? 2 : 1);
-        // Chapardeur (Renard Voleur) : +50 % d'or pour lui
+        // Chapardeur (Renard Voleur) : +50 % d'or pour lui, et une part
+        // partagée par toute l'équipe (voir Game.resolveRaid côté serveur)
         const lootMult = p.speciesClass === 'RENARD_VOLEUR' ? 1.5 : 1;
+        const teamLootMult = members.some((m) => m.speciesClass === 'RENARD_VOLEUR')
+          ? 1 + CONFIG.COMBAT.RENARD_TEAM_GOLD_BONUS : 1;
         p.weaponXp += xp;
-        const gold = Math.ceil(rollGoldLoot(monster.tier) * lootMult);
+        const gold = Math.ceil(rollGoldLoot(monster.tier) * lootMult * teamLootMult);
         p.gold = (p.gold || 0) + gold;
         if (this.rng() < CONFIG.FOOD_DROP_CHANCE) {
           myFood = foodDropFor(monster.tier);
@@ -849,6 +890,7 @@ class ServerSim {
       threshold,
       critical,
       rollerUsername: roller ? roller.username : null,
+      rollerDiceId: roller ? (roller.diceId || null) : null,
       label: raid.label,
       monsterType: monster.type,
       tier: raid.tier,
@@ -1087,6 +1129,7 @@ class ServerSim {
     if (typeof p.gold !== 'number') p.gold = 0;
     if (typeof p[PREMIUM_CURRENCY.key] !== 'number') p[PREMIUM_CURRENCY.key] = 0;
     if (!Array.isArray(p.ownedSkins)) p.ownedSkins = [];
+    if (!Array.isArray(p.ownedDice)) p.ownedDice = [];
     if (!Array.isArray(p.visitedVillages)) p.visitedVillages = [];
     if (!p.duels || typeof p.duels.wins !== 'number') p.duels = { wins: 0, losses: 0 };
     if (typeof p.guildId !== 'string') p.guildId = null;

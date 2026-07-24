@@ -885,6 +885,16 @@ html, body {
     radial-gradient(circle at top, rgba(196, 226, 255, 0.1), transparent 62%);
 }
 
+@media (max-width: 480px) {
+  #hud { gap: 6px; }
+  .hud-panel { padding: 6px 9px 7px; }
+  .hud-panel-head { margin-bottom: 3px; }
+  .hud-label { font-size: 10px; }
+  .hud-meta { padding: 3px 7px; font-size: 9px; }
+  .bar { height: 18px; }
+  .bar-text { font-size: 11px; }
+}
+
 #dungeonBanner {
   position: absolute;
   top: 0;
@@ -1237,7 +1247,7 @@ html, body {
 /* ---------- Action contextuelle (Capitale) ---------- */
 #ctxAction {
   position: absolute;
-  bottom: 86px;
+  bottom: calc(86px + env(safe-area-inset-bottom));
   left: 50%;
   transform: translateX(-50%);
   padding: 12px 20px;
@@ -1252,7 +1262,7 @@ html, body {
 
 #recenterBtn {
   position: absolute;
-  bottom: 86px;
+  bottom: calc(86px + env(safe-area-inset-bottom));
   right: 14px;
   width: 48px;
   height: 48px;
@@ -1269,7 +1279,7 @@ html, body {
 
 #helpBtn {
   position: absolute;
-  bottom: 86px;
+  bottom: calc(86px + env(safe-area-inset-bottom));
   left: 14px;
   width: 40px;
   height: 40px;
@@ -3062,15 +3072,46 @@ html, body {
   font-style: italic;
   text-shadow: 0 2px 10px rgba(0,0,0,0.45);
 }
+/* Écrin cérémoniel du jet : le cadre bois/or (assets/modal_frame_raw.png,
+ * --modal-frame-url, voir loadCombatFxAssets) était chargé mais jamais
+ * utilisé — on le réserve à ce moment fort. Dimensionné sur le ratio natif
+ * de l'image (243×512) pour ne jamais déformer les ornements des coins ;
+ * le padding en % cale le contenu dans la zone parchemin de l'image. */
+.combat-fx-frame {
+  position: relative;
+  width: min(58vw, 208px);
+  aspect-ratio: 243 / 512;
+  box-sizing: border-box;
+  background: var(--modal-frame-url) center / 100% 100% no-repeat;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 14px 0 4px;
+  padding: 19% 15% 17%;
+  filter: drop-shadow(0 16px 30px rgba(0, 0, 0, 0.55));
+}
+.combat-fx-frame .combat-fx-roller {
+  margin-top: 0;
+  color: #6b4a26;
+  font-size: 11.5px;
+  text-shadow: none;
+}
+.combat-fx-frame .combat-die-threshold {
+  color: #7a4a12;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-shadow: none;
+}
 .combat-fx-dice {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
-  gap: 14px;
-  margin: 16px 0 10px;
 }
 .combat-die {
-  width: 124px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -3080,6 +3121,35 @@ html, body {
   position: relative;
   width: 100px;
   height: 100px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Aura de fond (DICE_FX, partagée par tous les dés, voir js/config.js) :
+   calque FIXE, jamais animé — ni la rotation du jet, ni le pulse/secousse
+   critique ne doivent l'entraîner (voir .combat-die-spin-layer ci-dessous,
+   qui porte TOUTES les animations). Plus grande que le dé lui-même (l'anneau
+   lumineux de l'illustration entoure une zone creuse bien plus large que le
+   sprite du dé), centrée derrière via inset négatif. */
+.combat-die-fx {
+  position: absolute;
+  inset: -45%;
+  width: 190%;
+  height: 190%;
+  object-fit: contain;
+  z-index: 0;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+/* Calque du sprite (propre à chaque skin, sans aura peinte dessus) : porte
+   seul le drop-shadow et TOUTES les animations (tumble/settle/critique) —
+   il peut ainsi tourner librement sans jamais embarquer l'aura fixe. */
+.combat-die-spin-layer {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3111,8 +3181,8 @@ html, body {
    qui défilent dans une case immobile. Termine sur une rotation multiple de
    360° pour retomber visuellement « à plat », sans mélange 3D du texte
    (une vraie bascule 3D d'un texte plat rend mal — voir retour utilisateur). */
-.combat-die.spinning .combat-die-face {
-  animation: diceTumble 0.7s cubic-bezier(0.3, 0.05, 0.25, 1) 1 both;
+.combat-die.spinning .combat-die-spin-layer {
+  animation: diceTumble 1s cubic-bezier(0.3, 0.05, 0.25, 1) 1 both;
 }
 @keyframes diceTumble {
   0%   { transform: translateY(0)     rotate(0deg)   scale(1); }
@@ -3126,7 +3196,7 @@ html, body {
   86%  { transform: translateY(0)     rotate(710deg) scale(1.01); }
   100% { transform: translateY(0)     rotate(720deg) scale(1); }
 }
-.combat-die.settled .combat-die-face {
+.combat-die.settled .combat-die-spin-layer {
   animation: diceSettle 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 .combat-die-threshold {
@@ -3135,14 +3205,13 @@ html, body {
   text-align: center;
   text-shadow: 0 2px 8px rgba(0,0,0,0.45);
 }
-/* Réussite/échec critique : l'image du dé change (halo doré / lézardes
-   rouges déjà peints dans l'asset, voir loadCombatFxAssets) — ce CSS
-   n'ajoute qu'un pulse/secousse en complément, en suivant la silhouette
-   réelle du dé (drop-shadow, pas box-shadow qui dessinerait un rectangle). */
-.combat-die.crit-success .combat-die-face {
+/* Réussite/échec critique : l'AURA change d'illustration (voir DICE_FX,
+   partagée par tous les dés), le sprite lui reste identique — seul le calque
+   du sprite reçoit le pulse/secousse complémentaire, l'aura reste fixe. */
+.combat-die.crit-success .combat-die-spin-layer {
   animation: diceCritGlow 0.7s ease infinite alternate;
 }
-.combat-die.crit-fail .combat-die-face {
+.combat-die.crit-fail .combat-die-spin-layer {
   animation: combatCardShake 0.24s ease-in-out 2;
 }
 .combat-fx-status {

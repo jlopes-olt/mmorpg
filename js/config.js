@@ -69,6 +69,27 @@ const CONFIG = {
     // au-dessus du seuil, critique compris) laisse presque indemne.
     HP_LOSS_MARGIN_MIN: 0.4,   // victoire écrasante (marge maximale)
     HP_LOSS_MARGIN_MAX: 1.8,   // victoire arrachée (marge nulle, jet == seuil)
+    // Rempart et Sève adoucissent aussi une défaite totale (pas seulement
+    // l'usure d'une victoire) : le réveil se fait avec un peu plus de PV que
+    // le socle DEATH_HP_PCT, cumulable entre les deux classes.
+    OURS_REVIVE_BONUS: 0.10,
+    CERF_REVIVE_BONUS: 0.10,
+    // Bonus de PUISSANCE D'ÉQUIPE par rôle (voir teamPowerOf) — chacun ne se
+    // cumule pas avec lui-même (deux Ours = un seul Rempart), mais s'additionne
+    // avec les AUTRES rôles : un groupe mixte cumule plusieurs bonus en plus
+    // de sa puissance brute, un groupe mono-classe (ex. 3 Chats) n'en a droit
+    // qu'à un seul (ou aucun) malgré une puissance brute supérieure — c'est
+    // précisément ce qui doit rendre un groupe équilibré plus FIABLE (chance
+    // de victoire) qu'un groupe tout-dégâts, sans pour autant taper aussi fort.
+    ROLE_BONUS: {
+      PALADIN: 0.10,
+      OURS: 0.06,
+      CERF: 0.06,
+      CORBEAU_PER_MEMBER: 0.03,
+    },
+    // Chapardeur (Renard Voleur) : part de son bonus d'or profite à toute
+    // l'équipe en raid (en plus de son propre +50 %) — jusque-là purement égoïste.
+    RENARD_TEAM_GOLD_BONUS: 0.15,
   },
 
   // Chance qu'un monstre vaincu lâche un ingrédient de cuisine de son tier
@@ -78,7 +99,13 @@ const CONFIG = {
 /* Combos espèce/classe fixes — un talent de GROUPE unique par classe.
  * Pensés pour les raids et les futurs donjons T6 non-soloables (trinité :
  * tank / soin / soutien / dégâts). Les talents d'équipe (Aura, Rempart,
- * Sève) ne se cumulent jamais : deux Ours = un seul Rempart. */
+ * Sève, Nuée) ne se cumulent jamais entre EUX-MÊMES : deux Ours = un seul
+ * Rempart. Mais ils s'ADDITIONNENT entre classes différentes (voir
+ * teamPowerOf) : un groupe mixte cumule plusieurs bonus de puissance en plus
+ * de sa puissance brute, là où un groupe mono-classe (ex. 3 Chats) n'en a
+ * droit qu'à un seul (ou aucun) malgré une puissance brute supérieure —
+ * c'est ce qui doit rendre un groupe équilibré plus FIABLE qu'un groupe
+ * tout-dégâts, sans pour autant taper aussi fort. */
 /* Bases resserrées (18-22) : avec le combat probabiliste, un gros écart de
  * base créerait des % de victoire trop inégaux entre classes au T1 — la
  * différenciation vient des talents, pas des stats brutes. */
@@ -99,12 +126,12 @@ const CLASSES = {
   OURS_GUERRIER: {
     label: 'Ours Guerrier', icon: 'OG', color: '#c96f4a', baseForce: 22, baseHp: 130,
     role: 'Tank',
-    bonus: 'Rempart : réduit de 30 % la perte de PV de toute l’équipe (ne se cumule pas)',
+    bonus: 'Rempart : +6 % de puissance pour toute l’équipe, -30 % de perte de PV en raid, et adoucit une défaite totale (ne se cumule pas)',
   },
   RENARD_VOLEUR: {
     label: 'Renard Voleur', icon: 'RV', color: '#d98f3d', baseForce: 19, baseHp: 95,
     role: 'Butin',
-    bonus: 'Chapardeur : +50 % d’or looté en raid pour lui',
+    bonus: 'Chapardeur : +50 % d’or pour lui, +15 % pour toute l’équipe en raid, et butin de guerre à la capture d’un château',
   },
   CHAT_MAGICIEN: {
     label: 'Chat Magicien', icon: 'CM', color: '#7f7fd9', baseForce: 18, baseHp: 85,
@@ -114,12 +141,12 @@ const CLASSES = {
   CERF_DRUIDE: {
     label: 'Cerf Druide', icon: 'CD', color: '#58b368', baseForce: 19, baseHp: 100,
     role: 'Soin',
-    bonus: 'Sève : rend 15 % de leurs PV max aux participants après une victoire (ne se cumule pas)',
+    bonus: 'Sève : +6 % de puissance pour toute l’équipe, rend 15 % des PV max après une victoire, et adoucit une défaite totale (ne se cumule pas)',
   },
   CORBEAU_NECROMANCIEN: {
     label: 'Corbeau Nécromancien', icon: 'CN', color: '#9a6fd1', baseForce: 19, baseHp: 90,
     role: 'Dégâts de groupe',
-    bonus: 'Nuée : +8 % de puissance personnelle par participant au combat',
+    bonus: 'Nuée : +3 % de puissance pour toute l’équipe par participant au combat (ne se cumule pas entre Corbeaux)',
   },
 };
 
@@ -233,6 +260,14 @@ const SIEGE_ENGINE_RECIPES = {
 };
 const SIEGE_ENGINE_FORCE = { 1: 20, 2: 32, 3: 44, 4: 56, 5: 70 };
 const SIEGE_ENGINE_DAMAGE = { 1: 40, 2: 60, 3: 80, 4: 100, 5: 130 };
+
+/* Butin de guerre à la capture d'un château : jusqu'ici un siège n'offrait
+ * strictement aucun or (contrairement à un raid), rendant le Renard Voleur
+ * (Chapardeur) hors-jeu dans ce type de contenu — désormais toute l'équipe
+ * assaillante touche de l'or au moment de la capture, proportionnel au
+ * niveau du château pris, et un Renard dans l'équipe l'amplifie pour tous. */
+const SIEGE_CAPTURE_GOLD_PER_LEVEL = 80;
+const RENARD_SIEGE_LOOT_BONUS = 0.5;
 const SIEGE_ENGINES = {
   1: { label: 'Bélier léger', asset: 'assets/siege_engines/engin_siege_t1_belier.png' },
   2: { label: 'Baliste', asset: 'assets/siege_engines/engin_siege_t2_baliste.png' },
@@ -457,6 +492,69 @@ const SKIN_SHOP_ITEMS = [
 ];
 
 const SKIN_BY_ID = Object.fromEntries(SKIN_SHOP_ITEMS.map((item) => [item.id, item]));
+
+/* Dés cosmétiques : habillage du jet de combat (voir playCombatClash côté
+ * client), totalement indépendant de la classe/du skin — un seul actif à la
+ * fois, en vente contre Écailles Lunaires uniquement (pas d'équivalent or,
+ * contrairement aux skins). Rendu en DEUX calques désormais : une aura de
+ * fond (DICE_FX, partagée par tous les dés) fixe derrière, et le sprite
+ * "clean" du dé (propre à chaque skin, sans aura peinte dessus) qui tourne
+ * seul par-dessus — voir playCombatClash. Le dé par défaut (id null,
+ * "dice_rune_base_magenta.png") reste gratuit et n'a pas d'entrée ici, mais
+ * utilise la même aura partagée. */
+const DICE_FX = {
+  idle: 'assets/skins_shop_dice/background_fx/dice_bg_idle_magic.png',
+  critSuccess: 'assets/skins_shop_dice/background_fx/dice_bg_crit_success.png',
+  critFail: 'assets/skins_shop_dice/background_fx/dice_bg_crit_fail.png',
+};
+const DICE_SKIN_ITEMS = [
+  {
+    id: 'dice_coeur_de_givre',
+    label: 'Cœur de Givre',
+    sprite: 'assets/skins_shop_dice/clean/dice_skin_coeur_de_givre_clean.png',
+    currency: PREMIUM_CURRENCY.key,
+    price: 10,
+  },
+  {
+    id: 'dice_couronne_de_braise',
+    label: 'Couronne de Braise',
+    sprite: 'assets/skins_shop_dice/clean/dice_skin_couronne_de_braise_clean.png',
+    currency: PREMIUM_CURRENCY.key,
+    price: 10,
+  },
+  {
+    id: 'dice_floraison_funebre',
+    label: 'Floraison Funèbre',
+    sprite: 'assets/skins_shop_dice/clean/dice_skin_floraison_funebre_clean.png',
+    currency: PREMIUM_CURRENCY.key,
+    price: 10,
+  },
+  {
+    id: 'dice_roncebloom_verdoyant',
+    label: 'Roncebloom Verdoyant',
+    sprite: 'assets/skins_shop_dice/clean/dice_skin_roncebloom_verdoyant_clean.png',
+    currency: PREMIUM_CURRENCY.key,
+    price: 10,
+  },
+  {
+    id: 'dice_sceau_de_tempete',
+    label: 'Sceau de Tempête',
+    sprite: 'assets/skins_shop_dice/clean/dice_skin_sceau_de_tempete_clean.png',
+    currency: PREMIUM_CURRENCY.key,
+    price: 10,
+  },
+  {
+    id: 'dice_voile_lunaire',
+    label: 'Voile Lunaire',
+    sprite: 'assets/skins_shop_dice/clean/dice_skin_voile_lunaire_clean.png',
+    currency: PREMIUM_CURRENCY.key,
+    price: 10,
+  },
+];
+const DICE_SKIN_BY_ID = Object.fromEntries(DICE_SKIN_ITEMS.map((item) => [item.id, item]));
+function diceSkinFor(id) {
+  return id ? (DICE_SKIN_BY_ID[id] || null) : null;
+}
 
 /* ---------- Boss de raid mondial ---------- */
 // Un point fixe et unique sur toute la carte (contrairement aux châteaux/
@@ -826,6 +924,16 @@ function hpLossReduction(p) {
   return 1 - 0.06 * p.armor.tier;
 }
 
+/* PV au réveil après une mort (raid ou siège) : le socle DEATH_HP_PCT,
+ * amélioré par Rempart (Ours) et Sève (Cerf) — ces deux talents adoucissent
+ * aussi une défaite totale, pas seulement l'usure d'une victoire. */
+function reviveHpPct(members) {
+  let pct = CONFIG.COMBAT.DEATH_HP_PCT;
+  if (members.some((p) => p.speciesClass === 'OURS_GUERRIER')) pct += CONFIG.COMBAT.OURS_REVIVE_BONUS;
+  if (members.some((p) => p.speciesClass === 'CERF_DRUIDE')) pct += CONFIG.COMBAT.CERF_REVIVE_BONUS;
+  return Math.min(0.9, pct);
+}
+
 /* Une « forme » (personnage) : tout ce qui est propre à une classe.
  * Le reste (PA, PV en %, position, inventaire) appartient au compte. */
 function newCharacter(speciesClass) {
@@ -872,16 +980,22 @@ function combatPower(p) {
   return (playerForce(p) + p.armor.tier * 8) * woundFactor * buffPowerMult(p);
 }
 
-/* Puissance d'équipe : somme des puissances + talents de groupe
- * (Nuée par participant, puis Aura — jamais cumulés). */
+/* Puissance d'équipe : somme des puissances brutes, puis bonus de RÔLE —
+ * chacun ne se cumule pas avec lui-même (deux Ours = un seul Rempart), mais
+ * s'additionne avec les AUTRES rôles présents (Paladin + Ours + Cerf, par
+ * exemple, empilent leurs trois bonus). C'est ce deuxième terme, pas la
+ * puissance brute, qui doit récompenser un groupe équilibré : un trio de
+ * Chats aligne une puissance brute supérieure (×1,3 sur l'arme chacun) mais
+ * ne touche à AUCUN bonus de rôle, quand un Chat + un Ours + un Cerf cumule
+ * +6 % (Ours) + 6 % (Cerf) malgré une puissance brute moindre. */
 function teamPowerOf(members) {
   let total = 0;
-  for (const p of members) {
-    let f = combatPower(p);
-    if (p.speciesClass === 'CORBEAU_NECROMANCIEN') f *= 1 + 0.08 * members.length;
-    total += f;
-  }
-  if (members.some((p) => p.speciesClass === 'LION_PALADIN')) total *= 1.10;
+  for (const p of members) total += combatPower(p);
+  const rb = CONFIG.COMBAT.ROLE_BONUS;
+  if (members.some((p) => p.speciesClass === 'LION_PALADIN')) total *= 1 + rb.PALADIN;
+  if (members.some((p) => p.speciesClass === 'OURS_GUERRIER')) total *= 1 + rb.OURS;
+  if (members.some((p) => p.speciesClass === 'CERF_DRUIDE')) total *= 1 + rb.CERF;
+  if (members.some((p) => p.speciesClass === 'CORBEAU_NECROMANCIEN')) total *= 1 + rb.CORBEAU_PER_MEMBER * members.length;
   return Math.round(total);
 }
 
@@ -963,14 +1077,16 @@ if (typeof module !== 'undefined' && module.exports) {
     parisHour, isWithinSiegeWindow,
     CASTLE_TERRAIN_RESOURCE, CASTLE_REINFORCE_RESOURCES, castleRepairResourceTier, CASTLE_REPAIR_HP_PER_RESOURCE,
     SIEGE_ENGINE_ITEM, SIEGE_ENGINE_RECIPES, SIEGE_ENGINE_FORCE, SIEGE_ENGINE_DAMAGE, SIEGE_ENGINES,
+    SIEGE_CAPTURE_GOLD_PER_LEVEL, RENARD_SIEGE_LOOT_BONUS,
     CASTLE_MAX_FORT_LEVEL, CASTLE_FORTIFY_COST_GOLD, CASTLE_FORTIFY_BONUS_PER_LEVEL, CASTLE_FORTIFY_RESOURCES,
     TERRAINS, TIER_COLORS, XP_LEVELS, UPGRADE_RECIPES, SPRITE_CELLS,
     RESOURCE_EMOJI, MONSTER_EMOJI, CHARACTER_FIELDS,
     PREMIUM_CURRENCY, MOONSTONE_PACKS, GOLD_PACKS, VAPID_PUBLIC_KEY,
     SKIN_SHOP_ITEMS, SKIN_BY_ID, SKIN_ASSET_REV, CLASS_SKIN_SCALE, SKIN_OFFSET_X, CLASS_BASE_SKINS,
+    DICE_FX, DICE_SKIN_ITEMS, DICE_SKIN_BY_ID, diceSkinFor,
     WORLD_BOSS, ACCESSORY_ITEMS, MOUNT_ITEMS, MOUNT_SADDLE_PROP,
     skinFor, skinAssetUrl, classSkinScale, baseSkinAsset, equipmentAsset, classAvailableToRole,
-    levelFromXp, playerForce, maxHp, hpLossReduction, stackKey, parseStackKey, resourceFamily,
+    levelFromXp, playerForce, maxHp, hpLossReduction, reviveHpPct, stackKey, parseStackKey, resourceFamily,
     newCharacter, syncActiveCharacter, applyCharacter, rollGoldLoot,
     combatPower, teamPowerOf, winChance, winThreshold, rollD100,
     CONSUMABLES, CONSUMABLE_EFFECTS, CONSUMABLE_RECIPES, BUFF_COMBATS,

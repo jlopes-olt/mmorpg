@@ -438,6 +438,12 @@ app.post('/admin/api/players/:username/mount', adminAuth, (req, res) => {
   res.json(r);
 });
 
+app.post('/admin/api/players/:username/dice', adminAuth, (req, res) => {
+  const b = req.body || {};
+  const r = game.adminGrantDiceSkin(req.adminPlayer, req.params.username, String(b.diceId || ''));
+  res.json(r);
+});
+
 app.post('/admin/api/players/:username/level', adminAuth, (req, res) => {
   const b = req.body || {};
   const r = game.adminSetLevel(req.adminPlayer, req.params.username, String(b.kind || ''), Number(b.tier));
@@ -602,9 +608,11 @@ io.on('connection', (socket) => {
   socket.on('char:switch', act((d) => game.switchCharacter(player, d.index)));
   socket.on('shop:buySkin', act((d) => game.buySkin(player, String(d.skinId))));
   socket.on('shop:buyMount', act((d) => game.buyMount(player, String(d.mountId))));
+  socket.on('shop:buyDice', act((d) => game.buyDiceSkin(player, String(d.diceId))));
   socket.on('shop:equipSkin', act((d) => game.equipSkin(player, d.skinId ? String(d.skinId) : null)));
   socket.on('accessory:equip', act((d) => game.equipAccessory(player, d.accessoryId ? String(d.accessoryId) : null)));
   socket.on('mount:equip', act((d) => game.equipMount(player, d.mountId ? String(d.mountId) : null)));
+  socket.on('dice:equip', act((d) => game.equipDiceSkin(player, d.diceId ? String(d.diceId) : null)));
   socket.on('shop:buyGoldPack', act((d) => game.buyGoldPack(player, String(d.packId || ''))));
   socket.on('shop:buyCharSlot', act(() => game.buyCharSlot(player)));
   socket.on('shop:checkoutLink', act((d) => buildCheckoutLink(player, String(d.packId || ''))));

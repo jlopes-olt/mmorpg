@@ -212,9 +212,11 @@ class RemoteServer {
   switchCharacter(index) { return this.req('char:switch', { index }); }
   buySkin(skinId) { return this.req('shop:buySkin', { skinId }); }
   buyMount(mountId) { return this.req('shop:buyMount', { mountId }); }
+  buyDiceSkin(diceId) { return this.req('shop:buyDice', { diceId }); }
   equipSkin(skinId) { return this.req('shop:equipSkin', { skinId }); }
   equipAccessory(accessoryId) { return this.req('accessory:equip', { accessoryId }); }
   equipMount(mountId) { return this.req('mount:equip', { mountId }); }
+  equipDiceSkin(diceId) { return this.req('dice:equip', { diceId }); }
   buyPaScroll() { return this.req('shop:buyPaScroll', {}); }
   buyGoldPack(packId) { return this.req('shop:buyGoldPack', { packId }); }
   buyCharSlot() { return this.req('shop:buyCharSlot', {}); }
