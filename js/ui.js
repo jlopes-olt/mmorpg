@@ -42,6 +42,7 @@ class UI {
     this.lastSeenGuildInviteKey = null;
     this.seenFriendRequestKeys = new Set();
     this.onAdminReset = null;
+    this.questsHidden = this.loadQuestsHidden();   // préférence persistée, voir toggleQuestsHidden
     this.pushSupported = false;   // calculé de façon asynchrone, voir checkPushSupport()
     this.pushSubscribed = false;
     this.checkPushSupport();
@@ -193,6 +194,7 @@ class UI {
     server.on('duelInvite', (invite) => this.showDuelInvite(invite));
     server.on('duelResult', (r) => this.showDuelResult(r));
     server.on('achievementUnlocked', (a) => this.showAchievementUnlocked(a));
+    server.on('questCompleted', (q) => this.showQuestCompleted(q));
     server.on('trade', (trade) => {
       if (trade) {
         // Le serveur rediffuse 'trade' aux DEUX joueurs dès que l'un des deux
@@ -1499,6 +1501,25 @@ showDungeonPopup(tile, onEnter) {
       banner.classList.add('hidden');
     }
 
+    // Bannières empilées (donjon/quête/parallèle) : throttlées, pas à chaque
+    // frame — voir updateStackedBanners ci-dessous pour le pourquoi (lectures
+    // offsetHeight, coûteuses en reflow synchrone sur mobile).
+    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    if (!this._lastBannerLayout || now - this._lastBannerLayout > 200) {
+      this._lastBannerLayout = now;
+      this.updateStackedBanners(me);
+    }
+  }
+
+  // Isolé d'updateHud() (appelé à chaque frame, potentiellement 60 fois/s) :
+  // ce bloc lit offsetHeight à plusieurs reprises pour empiler les bannières
+  // sans qu'elles ne se chevauchent, et une lecture de layout juste après une
+  // écriture DOM force un reflow SYNCHRONE (« layout thrashing ») — un coût
+  // négligeable une fois par frame sur desktop, mais sensible sur mobile
+  // répété 60 fois/s. Le contenu de ces bannières ne change de toute façon
+  // qu'occasionnellement (quelques fois par seconde au plus), donc un
+  // rafraîchissement toutes les 200 ms (throttle ci-dessus) est imperceptible.
+  updateStackedBanners(me) {
     const dungeonBanner = $('dungeonBanner');
     const currentMap = this.server.mapOf(this.server.currentMapId || (me.mapId || 'world'));
     if (currentMap && currentMap.kind === 'dungeon' && currentMap.dungeon) {
@@ -1527,6 +1548,44 @@ showDungeonPopup(tile, onEnter) {
       dungeonBanner.classList.add('hidden');
       dungeonBanner.classList.remove('boss-ready');
       $('dungeonBannerBossIcon').src = '';
+    }
+
+    // Bannière « quête en cours » (chaîne principale) + badge secondaire
+    // (quête parallèle débloquée, voir js/quests.js) — empilés sous le HUD
+    // et sous #dungeonBanner s'il est déjà affiché, plutôt qu'une position
+    // fixe qui les ferait se chevaucher en donjon.
+    const hudEl = $('hud');
+    const dungeonVisible = !dungeonBanner.classList.contains('hidden');
+    let stackTop = (hudEl ? hudEl.offsetHeight + 10 : 118) + (dungeonVisible ? dungeonBanner.offsetHeight + 10 : 0);
+
+    // Bannière compacte (titre + étape, 2 lignes) — le détail des ressources
+    // à récolter (have/need) vit désormais dans le journal des quêtes (voir
+    // showQuestLog), pas dans la bannière : c'était la principale source
+    // d'encombrement à l'écran. #helpBtn permet de la masquer entièrement
+    // (voir toggleQuestsHidden, câblé depuis js/main.js).
+    const questBanner = $('questBanner');
+    const current = !this.questsHidden && currentQuestFor(me);
+    if (current) {
+      const { quest, step } = current;
+      questBanner.style.top = stackTop + 'px';
+      questBanner.classList.remove('hidden');
+      $('questBannerTitle').textContent = quest.title;
+      $('questBannerStep').textContent = step.label;
+      stackTop += questBanner.offsetHeight + 10;
+    } else {
+      questBanner.style.top = '';
+      questBanner.classList.add('hidden');
+    }
+
+    const parallelBadge = $('questParallelBadge');
+    const activeParallel = this.questsHidden ? [] : activeParallelQuestsFor(me);
+    if (activeParallel.length) {
+      parallelBadge.style.top = stackTop + 'px';
+      parallelBadge.classList.remove('hidden');
+      parallelBadge.textContent = '🐉 ' + activeParallel.map((q) => q.steps[0].label).join(' · ');
+    } else {
+      parallelBadge.style.top = '';
+      parallelBadge.classList.add('hidden');
     }
   }
 
@@ -1594,9 +1653,17 @@ showDungeonPopup(tile, onEnter) {
 
   /* ---------- Guide du débutant ----------
    * Ouvert automatiquement à la toute première création de personnage
-   * (voir server.justCreated dans js/net.js, câblé depuis js/main.js), et
-   * réouvrable à tout moment via #helpBtn — même contenu dans les deux cas. */
-  showGuide() {
+   * (voir server.justCreated dans js/net.js, câblé depuis js/main.js, avec
+   * isFirstTime=true), et réouvrable à tout moment via #helpBtn (sans
+   * isFirstTime) — même contenu dans les deux cas, sauf le paragraphe
+   * d'accueil, qui n'a de sens qu'à la toute première ouverture. */
+  showGuide(isFirstTime) {
+    const welcome = isFirstTime
+      ? '<p class="guide-welcome"><b>Bienvenue sur FERALIA Online.</b> Un monde sauvage s’étend devant vous — ' +
+        'forêts profondes, plaines battues par les vents, sommets rocailleux, marécages brumeux. Explorez, ' +
+        'récoltez, forgez votre équipement, affrontez les créatures qui peuplent ces terres… et écrivez votre ' +
+        'propre légende, une quête à la fois. Suivez la bannière <b>Quête</b> en haut de l’écran pour vous guider pas à pas.</p>'
+      : '';
     const steps = [
       ['🧭', 'Explorer', 'Déplace-toi sur la carte pour dissiper le brouillard de guerre et découvrir villages, donjons et châteaux.'],
       ['🌲', 'Récolter', 'Bois, minerai, plante… récolte les ressources que tu croises pour monter ton niveau de récolte et débloquer des tiers supérieurs.'],
@@ -1617,6 +1684,7 @@ showDungeonPopup(tile, onEnter) {
     // à ce conteneur interne, qui reste toujours dans la zone couverte.
     const body =
       '<div class="guide-scroll">' +
+        welcome +
         '<div class="guide-section-title">Pour commencer</div>' +
         steps.map(stepHtml).join('') +
         '<div class="guide-section-title">Pour aller plus loin</div>' +
@@ -2635,6 +2703,9 @@ showDungeonPopup(tile, onEnter) {
       '<p class="dim small profile-hint">Unique et évolutif — chez le Forgeron de la Capitale.</p>' +
 
       '<div class="section-divider">✦</div>' +
+      this.buildQuestsSectionHtml(me) +
+
+      '<div class="section-divider">✦</div>' +
       this.buildAchievementsSectionHtml(me) +
 
       ((me.ownedAccessories || []).length ?
@@ -2666,8 +2737,10 @@ showDungeonPopup(tile, onEnter) {
         if (!r.ok) this.toast(r.error);
       });
     });
-    const achDetails = body.querySelector('.ach-details');
+    const achDetails = body.querySelector('.ach-details:not(.quest-details)');
     if (achDetails) achDetails.addEventListener('toggle', (e) => { this.achievementsOpen = e.target.open; });
+    const questDetails = body.querySelector('.quest-details');
+    if (questDetails) questDetails.addEventListener('toggle', (e) => { this.questsOpen = e.target.open; });
     body.querySelectorAll('[data-accessory]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const accessoryId = btn.dataset.accessory || null;
@@ -2844,6 +2917,118 @@ showDungeonPopup(tile, onEnter) {
   }
 
   /* ---------- Personnages multiples (formes) ---------- */
+
+  // Bribes de récompense communes aux hauts faits et aux quêtes — même
+  // format d'affichage ("120 or · 5 écailles lunaires · titre « X »").
+  rewardBits(reward) {
+    reward = reward || {};
+    const bits = [];
+    if (reward.gold) bits.push(reward.gold + ' or');
+    if (reward.moonstones) bits.push(reward.moonstones + ' ' + PREMIUM_CURRENCY.label.toLowerCase());
+    if (reward.title) bits.push('titre « ' + reward.title + ' »');
+    return bits;
+  }
+
+  /* ---------- Quêtes ---------- */
+  // Contenu de la chaîne principale + des quêtes parallèles, réutilisé à la
+  // fois par le Profil (inline) et par le popup ouvert depuis la bannière
+  // HUD (voir showQuestLog).
+  questLogHtml(me) {
+    const completed = new Set(me.completedQuests || []);
+    let reachedCurrent = false;
+    const rows = QUESTS.map((q) => {
+      const done = completed.has(q.id);
+      const isCurrent = !done && !reachedCurrent;
+      if (isCurrent) reachedCurrent = true;
+      // Détail have/need d'une étape de récolte : uniquement pour l'étape
+      // ACTIVE de la quête en cours (pas pour chaque étape déjà cochée, ni
+      // pour les quêtes futures) — c'était l'info affichée dans la bannière
+      // HUD avant sa simplification, relocalisée ici pour ne pas la perdre.
+      const stepsHtml = (done || isCurrent)
+        ? '<ul class="quest-steps">' + q.steps.map((s) => {
+            const stepOk = done || stepDone(s, me);
+            const needsHtml = (!stepOk && s.recipe)
+              ? '<ul class="quest-step-needs">' + Object.entries(s.recipe).map(([key, qty]) => {
+                  const { type, tier } = parseStackKey(key);
+                  const have = me.inventory[key] || 0;
+                  return '<li class="' + (have >= qty ? 'ok-c' : 'hp-c') + '">' + qty + '× ' + esc(resourceLabel(type, tier)) +
+                    ' <span class="dim">(' + have + '/' + qty + ')</span></li>';
+                }).join('') + '</ul>'
+              : '';
+            return '<li class="' + (stepOk ? 'ok-c' : 'dim') + '">' + (stepOk ? '✓ ' : '— ') + esc(s.label) + needsHtml + '</li>';
+          }).join('') + '</ul>'
+        : '';
+      const bits = this.rewardBits(q.reward);
+      return '<div class="ach-item' + (done ? ' unlocked' : '') + '">' +
+        '<span class="ach-status">' + (done ? '✓' : '—') + '</span>' +
+        '<span class="ach-copy"><b>' + esc(q.title) + '</b>' + stepsHtml +
+        (bits.length ? '<small>' + esc(bits.join(' · ')) + '</small>' : '') +
+        '</span></div>';
+    }).join('');
+
+    const parallelRows = PARALLEL_QUESTS.map((q) => {
+      const done = completed.has(q.id);
+      let unlocked = false;
+      try { unlocked = !!q.unlock(me); } catch (e) { /* défensif, voir stepDone */ }
+      const bits = this.rewardBits(q.reward);
+      const detail = done || unlocked
+        ? '<small>' + esc(q.steps[0].label) + '</small>'
+        : '<small class="dim">' + esc(q.unlockLabel || '') + '</small>';
+      return '<div class="ach-item' + (done ? ' unlocked' : (unlocked ? '' : ' quest-locked')) + '">' +
+        '<span class="ach-status">' + (done ? '✓' : (unlocked ? '—' : '🔒')) + '</span>' +
+        '<span class="ach-copy"><b>' + esc(q.title) + '</b>' + detail +
+        (bits.length ? '<small>' + esc(bits.join(' · ')) + '</small>' : '') +
+        '</span></div>';
+    }).join('');
+
+    return rows + '<div class="ach-cat">Quêtes parallèles</div><div class="ach-list">' + parallelRows + '</div>';
+  }
+
+  buildQuestsSectionHtml(me) {
+    const completedCount = QUESTS.filter((q) => (me.completedQuests || []).includes(q.id)).length;
+    return '<div class="profile-sec-title">Quêtes <span class="sec-count">' + completedCount + ' / ' + QUESTS.length + '</span></div>' +
+      '<details class="ach-details quest-details"' + (this.questsOpen ? ' open' : '') + '>' +
+        '<summary>Voir la chaîne de quêtes</summary>' +
+        this.questLogHtml(me) +
+      '</details>';
+  }
+
+  showQuestLog() {
+    const me = this.server.me;
+    if (!me) return;
+    // .guide-scroll (déjà utilisée par showGuide) cantonne le défilement à
+    // ce conteneur interne plutôt qu'à la carte entière — sinon le fond
+    // décoratif de .popup-card ne suit pas un contenu qui déborde de sa
+    // hauteur max et la liste des quêtes débordait de la popup.
+    const body = '<div class="guide-scroll">' + this.questLogHtml(me) + '</div>' +
+      '<p class="dim small quest-log-footer"><button id="questLogGuideBtn" class="link-btn" type="button">📖 Revoir le guide du débutant</button></p>';
+    this.popup('Quêtes', body, [{ label: 'Fermer', primary: true }], { mode: 'generic' });
+    const guideBtn = $('questLogGuideBtn');
+    if (guideBtn) guideBtn.addEventListener('click', () => this.showGuide());
+  }
+
+  showQuestCompleted(q) {
+    if (!q) return;
+    const bits = this.rewardBits(q.reward);
+    this.toast('📜 Quête terminée : ' + q.title + (bits.length ? ' (' + bits.join(' · ') + ')' : ''));
+  }
+
+  /* ---------- Visibilité de la bannière de quête (préférence persistée) ----------
+   * #helpBtn (le « ? » en bas à gauche) bascule cette préférence plutôt que
+   * d'ouvrir directement le guide — le guide reste accessible depuis le
+   * journal des quêtes (voir showQuestLog) ou en le rouvrant depuis là. */
+  questsHiddenStorageKey() {
+    return CONFIG.SAVE_KEY + '_quests_hidden';
+  }
+  loadQuestsHidden() {
+    try { return localStorage.getItem(this.questsHiddenStorageKey()) === '1'; }
+    catch (e) { return false; }
+  }
+  toggleQuestsHidden() {
+    this.questsHidden = !this.questsHidden;
+    try { localStorage.setItem(this.questsHiddenStorageKey(), this.questsHidden ? '1' : '0'); }
+    catch (e) { /* stockage indisponible (navigation privée, quota…) */ }
+  }
 
   /* ---------- Hauts faits ---------- */
   buildAchievementsSectionHtml(me) {

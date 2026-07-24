@@ -56,6 +56,17 @@ class ServerSim {
       if (typeof c.skinId === 'undefined') c.skinId = null;
     }
   }
+  // Mirroir de server/game.js questStateOf() : voir ce fichier pour le
+  // raisonnement (applyCharacter copie aveuglément CHARACTER_FIELDS, un
+  // slot créé avant l'ajout de completedQuests renverrait undefined).
+  questStateOf(p) {
+    if (!p) return;
+    ensureQuestState(p);
+    if (!Array.isArray(p.characters) || !p.characters.length) return;
+    for (const c of p.characters) {
+      if (!Array.isArray(c.completedQuests)) c.completedQuests = [];
+    }
+  }
   publicPlayer(p) {
     return {
       id: p.id,
@@ -288,6 +299,7 @@ class ServerSim {
     };
     ensureAchievementState(p);
     this.skinStateOf(p);
+    this.questStateOf(p);
     applyCharacter(p, 0);
     p.hp = maxHp(p);
     this.players.set(p.id, p);
@@ -315,6 +327,7 @@ class ServerSim {
     syncActiveCharacter(me);
     me.characters.push(newCharacter(speciesClass));
     this.skinStateOf(me);
+    this.questStateOf(me);
     this.emit('self', me);
     return { ok: true, index: me.characters.length - 1 };
   }
@@ -326,6 +339,7 @@ class ServerSim {
     if (me.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
     if (me.speciesClass !== item.speciesClass) return { ok: false, error: 'Ce skin est réservé à une autre classe.' };
     this.skinStateOf(me);
+    this.questStateOf(me);
     if (me.ownedSkins.includes(item.id)) return { ok: false, error: 'Skin déjà possédé.' };
     const walletKey = item.currency === PREMIUM_CURRENCY.key ? PREMIUM_CURRENCY.key : 'gold';
     const balance = Number(me[walletKey] || 0);
@@ -401,6 +415,7 @@ class ServerSim {
   equipSkin(skinId) {
     const me = this.me;
     this.skinStateOf(me);
+    this.questStateOf(me);
     const desired = skinId ? String(skinId) : null;
     if (!desired) {
       me.skinId = null;
@@ -608,6 +623,9 @@ class ServerSim {
         this.log('📍 ' + (arrived.content.name || 'Village') + ' découvert — téléporteur débloqué !');
       }
     }
+    // Inconditionnel : intro_move ne dépend que de la position (voir
+    // server/game.js pour le raisonnement complet).
+    for (const q of checkQuests(me)) this.emit('questCompleted', { id: q.id, title: q.title, reward: q.reward || {} });
     this.syncCurrentMap();
     return { ok: true };
   }
@@ -652,6 +670,7 @@ class ServerSim {
     this.checkLevelUp(me, 'harvest');
     me.stats.harvest[node.type] = (me.stats.harvest[node.type] || 0) + qty;
     for (const a of checkAchievements(me, ['Récolte'])) this.emit('achievementUnlocked', { id: a.id, label: a.label, category: a.category, reward: a.reward || {} });
+    for (const q of checkQuests(me)) this.emit('questCompleted', { id: q.id, title: q.title, reward: q.reward || {} });
     this.emit('self', me);
   }
 
@@ -802,6 +821,7 @@ class ServerSim {
         p.stats.kills[monster.type] = (p.stats.kills[monster.type] || 0) + 1;
         if (monster.boss) p.stats.bossKills = (p.stats.bossKills || 0) + 1;
         for (const a of checkAchievements(p, ['Combat', 'Équipement', 'Commerce'])) this.emit('achievementUnlocked', { id: a.id, label: a.label, category: a.category, reward: a.reward || {} });
+        for (const q of checkQuests(p)) this.emit('questCompleted', { id: q.id, title: q.title, reward: q.reward || {} });
       }
     }
 
@@ -891,6 +911,7 @@ class ServerSim {
     item.tier = target;
     if (slot === 'armor') me.hp = Math.min(maxHp(me), me.hp + 15);
     for (const a of checkAchievements(me, ['Équipement'])) this.emit('achievementUnlocked', { id: a.id, label: a.label, category: a.category, reward: a.reward || {} });
+    for (const q of checkQuests(me)) this.emit('questCompleted', { id: q.id, title: q.title, reward: q.reward || {} });
     this.emit('self', me);
     return { ok: true };
   }
@@ -1084,10 +1105,12 @@ class ServerSim {
     // sauvegarde : rattrape les hauts faits déjà mérités par une progression
     // antérieure à leur ajout, plutôt que d'attendre la prochaine action.
     for (const a of checkAchievements(p)) this.emit('achievementUnlocked', { id: a.id, label: a.label, category: a.category, reward: a.reward || {} });
+    for (const q of checkQuests(p)) this.emit('questCompleted', { id: q.id, title: q.title, reward: q.reward || {} });
     const away = Math.max(0, Date.now() - (data.savedAt || Date.now()));
     p.pa = Math.min(CONFIG.PA.MAX, p.pa + Math.floor(away / CONFIG.PA.REGEN_MS));
     p.hp = Math.min(maxHp(p), p.hp + Math.floor(away / CONFIG.HP.REGEN_MS));
     this.skinStateOf(p);
+    this.questStateOf(p);
     this.players.set(p.id, p);
     for (const [mapId, state] of Object.entries(data.mapStates || {})) {
       const map = this.mapOf(mapId);

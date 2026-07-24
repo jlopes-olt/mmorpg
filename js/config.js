@@ -837,10 +837,11 @@ function newCharacter(speciesClass) {
     weaponXp: 0, weaponMastery: 1,
     weapon: { tier: 0, type: gear.weapon },
     armor: { tier: 0, type: gear.armor },
+    completedQuests: [],
   };
 }
 
-const CHARACTER_FIELDS = ['speciesClass', 'skinId', 'harvestXp', 'harvestLevel', 'weaponXp', 'weaponMastery', 'weapon', 'armor'];
+const CHARACTER_FIELDS = ['speciesClass', 'skinId', 'harvestXp', 'harvestLevel', 'weaponXp', 'weaponMastery', 'weapon', 'armor', 'completedQuests'];
 
 function skinFor(id) {
   return id ? (SKIN_BY_ID[id] || null) : null;

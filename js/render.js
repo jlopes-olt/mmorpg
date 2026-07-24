@@ -204,7 +204,11 @@ function contentSpriteSize(kind, type, tier) {
 class Renderer {
   constructor(canvas, server, explored) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext('2d');
+    // alpha:false — le fond est repeint en dur à chaque frame (voir draw()),
+    // la transparence du canevas n'est donc jamais utilisée : ce mode évite
+    // au navigateur le compositing alpha à chaque frame (léger gain, mobile
+    // comme desktop).
+    this.ctx = canvas.getContext('2d', { alpha: false });
     this.server = server;
     this.explored = explored;
     // Tuiles ajoutées à `explored` par le rendu lui-même ce frame (voir
@@ -250,7 +254,12 @@ class Renderer {
   }
 
   resize() {
-    const dpr = window.devicePixelRatio || 1;
+    // Plafonné à 2 : sur mobile, devicePixelRatio non borné (3-4 sur pas mal
+    // d'Android/iPhone récents) multiplie par dpr² le nombre de pixels du
+    // canevas à re-rasteriser à CHAQUE frame — un des plus gros postes de
+    // coût sur mobile pour un rendu 2D redessiné en entier à chaque image,
+    // pour un gain de netteté marginal au-delà de 2x sur ce style de rendu.
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
     this.dpr = dpr;
     this.w = this.canvas.clientWidth;
     this.h = this.canvas.clientHeight;

@@ -9,6 +9,7 @@ const crypto = require('crypto');
 
 Object.assign(globalThis, require('../js/config.js'));
 Object.assign(globalThis, require('../js/achievements.js'));
+Object.assign(globalThis, require('../js/quests.js'));
 Object.assign(globalThis, require('../js/world.js'));
 
 const MAX_GUILD_MEMBERS = 20;
@@ -125,6 +126,20 @@ class Game {
       if (typeof c.skinId === 'undefined') c.skinId = null;
     }
   }
+  // Même problème que skinStateOf ci-dessus, pour le même genre de champ
+  // ajouté après coup à CHARACTER_FIELDS : applyCharacter() copie
+  // aveuglément c[f] vers p[f] sans filet, donc un slot de personnage créé
+  // avant l'ajout de completedQuests renverrait undefined après un
+  // changement de forme. Backfill à chaque slot, aux mêmes points d'appel
+  // que skinStateOf (register/createCharacter/chargement).
+  questStateOf(p) {
+    if (!p) return;
+    ensureQuestState(p);
+    if (!Array.isArray(p.characters) || !p.characters.length) return;
+    for (const c of p.characters) {
+      if (!Array.isArray(c.completedQuests)) c.completedQuests = [];
+    }
+  }
   memberById(id) { return this.players.get(id) || this.bots.get(id); }
   chebyshev(a, b) { return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)); }
 
@@ -149,6 +164,11 @@ class Game {
   notifyAchievements(p, list) {
     for (const a of list) {
       this.send(p.id, 'achievementUnlocked', { id: a.id, label: a.label, category: a.category, reward: a.reward || {} });
+    }
+  }
+  notifyQuests(p, list) {
+    for (const q of list) {
+      this.send(p.id, 'questCompleted', { id: q.id, title: q.title, reward: q.reward || {} });
     }
   }
   setActiveTitle(p, title) {
@@ -257,6 +277,7 @@ class Game {
     // un joueur qui a déjà 500 cases explorées ne serait crédité qu'à la
     // PROCHAINE case explorée, jamais pour les 500 déjà acquises.
     this.notifyAchievements(p, checkAchievements(p));
+    this.notifyQuests(p, checkQuests(p));
   }
 
   // Programme (à la déconnexion) l'instant réel où le Regain hors ligne
@@ -356,6 +377,7 @@ class Game {
     };
     ensureAchievementState(p);
     this.skinStateOf(p);
+    this.questStateOf(p);
     applyCharacter(p, 0);
     p.hp = maxHp(p);
     this.players.set(id, p);
@@ -590,6 +612,7 @@ class Game {
     if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
     if (p.speciesClass !== item.speciesClass) return { ok: false, error: 'Ce skin est réservé à une autre classe.' };
     this.skinStateOf(p);
+    this.questStateOf(p);
     if (p.ownedSkins.includes(item.id)) return { ok: false, error: 'Skin déjà possédé.' };
     const walletKey = item.currency === PREMIUM_CURRENCY.key ? PREMIUM_CURRENCY.key : 'gold';
     const balance = Number(p[walletKey] || 0);
@@ -668,6 +691,7 @@ class Game {
 
   equipSkin(p, skinId) {
     this.skinStateOf(p);
+    this.questStateOf(p);
     const desired = skinId ? String(skinId) : null;
     if (!desired) {
       p.skinId = null;
@@ -919,7 +943,9 @@ class Game {
     a.stats.trades = (a.stats.trades || 0) + 1;
     b.stats.trades = (b.stats.trades || 0) + 1;
     this.notifyAchievements(a, checkAchievements(a, ['Commerce']));
+    this.notifyQuests(a, checkQuests(a));
     this.notifyAchievements(b, checkAchievements(b, ['Commerce']));
+    this.notifyQuests(b, checkQuests(b));
     this.closeTrade(trade, 'Échange terminé.');
     return { ok: true, done: true };
   }
@@ -1035,7 +1061,9 @@ class Game {
     winner.stats.bestDuelStreak = Math.max(winner.stats.bestDuelStreak || 0, winner.stats.duelStreak);
     loser.stats.duelStreak = 0;
     this.notifyAchievements(winner, checkAchievements(winner, ['Duels']));
+    this.notifyQuests(winner, checkQuests(winner));
     this.notifyAchievements(loser, checkAchievements(loser, ['Duels']));
+    this.notifyQuests(loser, checkQuests(loser));
     this.send(a.id, 'duelResult', {
       opponent: b.username, won: aWins,
       chance: Math.round(chanceA * 100), yourPower: Math.round(powerA), opponentPower: Math.round(powerB),
@@ -1089,6 +1117,7 @@ class Game {
     p.guildName = name;
     p.stats.guildFounded = true;
     this.notifyAchievements(p, checkAchievements(p, ['Guilde']));
+    this.notifyQuests(p, checkQuests(p));
     this.pushSelf(p);
     this.onGuildsDirty();
     this.log('🏰 La guilde « ' + name + ' » a été fondée par ' + p.username + '.');
@@ -1135,11 +1164,13 @@ class Game {
     p.guildId = guild.id;
     p.guildName = guild.name;
     this.notifyAchievements(p, checkAchievements(p, ['Guilde']));
+    this.notifyQuests(p, checkQuests(p));
     if (guild.members.length >= MAX_GUILD_MEMBERS) {
       const leader = this.players.get(guild.leaderId);
       if (leader) {
         leader.stats.guildReachedMax = true;
         this.notifyAchievements(leader, checkAchievements(leader, ['Guilde']));
+        this.notifyQuests(leader, checkQuests(leader));
         this.pushSelf(leader);
       }
     }
@@ -1570,6 +1601,7 @@ class Game {
       a.stats.siegeParticipations = (a.stats.siegeParticipations || 0) + 1;
       if (captured) a.stats.siegeWins = (a.stats.siegeWins || 0) + 1;
       this.notifyAchievements(a, checkAchievements(a, ['Château']));
+      this.notifyQuests(a, checkQuests(a));
       this.pushSelf(a);
       this.send(a.id, 'siegeResult', {
         role: 'attacker',
@@ -1591,6 +1623,7 @@ class Game {
     for (const d of defenders) {
       d.stats.siegeParticipations = (d.stats.siegeParticipations || 0) + 1;
       this.notifyAchievements(d, checkAchievements(d, ['Château']));
+      this.notifyQuests(d, checkQuests(d));
       this.pushSelf(d);
       this.send(d.id, 'siegeResult', {
         role: 'defender',
@@ -1660,7 +1693,9 @@ class Game {
       p.friends.push(target.id);
       target.friends.push(p.id);
       this.notifyAchievements(p, checkAchievements(p, ['Social']));
+      this.notifyQuests(p, checkQuests(p));
       this.notifyAchievements(target, checkAchievements(target, ['Social']));
+      this.notifyQuests(target, checkQuests(target));
       this.pushSelf(p);
       this.pushSelf(target);
       this.toast(p, target.username + ' est maintenant votre ami.');
@@ -1693,7 +1728,9 @@ class Game {
     p.friends.push(from.id);
     from.friends.push(p.id);
     this.notifyAchievements(p, checkAchievements(p, ['Social']));
+    this.notifyQuests(p, checkQuests(p));
     this.notifyAchievements(from, checkAchievements(from, ['Social']));
+    this.notifyQuests(from, checkQuests(from));
     this.pushSelf(p);
     this.pushSelf(from);
     this.toast(from, p.username + ' a accepté votre demande d’ami.');
@@ -1936,6 +1973,12 @@ class Game {
         this.plog(p, '📍 ' + (arrived.content.name || 'Village') + ' découvert — téléporteur débloqué !');
       }
     }
+    // Inconditionnel (pas seulement dans la branche village ci-dessus) : la
+    // toute première quête (intro_move) ne dépend que de la position, un
+    // simple déplacement doit donc pouvoir la valider tout de suite plutôt
+    // que d'attendre la prochaine action qui déclencherait un check par
+    // ailleurs (récolte, combat…).
+    this.notifyQuests(p, checkQuests(p));
     return { ok: true };
   }
 
@@ -1952,6 +1995,7 @@ class Game {
     if (set.size !== before) {
       p.exploredWorld = [...set];
       this.notifyAchievements(p, checkAchievements(p, ['Exploration']));
+      this.notifyQuests(p, checkQuests(p));
     }
     return { ok: true, added: set.size - before };
   }
@@ -1990,6 +2034,7 @@ class Game {
     this.checkLevelUp(p, 'harvest');
     p.stats.harvest[node.type] = (p.stats.harvest[node.type] || 0) + qty;
     this.notifyAchievements(p, checkAchievements(p, ['Récolte']));
+    this.notifyQuests(p, checkQuests(p));
     this.pushSelf(p);
   }
 
@@ -2209,6 +2254,7 @@ class Game {
         p.stats.kills[monster.type] = (p.stats.kills[monster.type] || 0) + 1;
         if (monster.boss) p.stats.bossKills = (p.stats.bossKills || 0) + 1;
         this.notifyAchievements(p, checkAchievements(p, ['Combat', 'Équipement', 'Commerce']));
+        this.notifyQuests(p, checkQuests(p));
       }
       if (!p.bot) this.pushSelf(p);
     }
@@ -2289,6 +2335,7 @@ class Game {
     syncActiveCharacter(p);
     p.characters.push(newCharacter(speciesClass));
     this.skinStateOf(p);
+    this.questStateOf(p);
     this.pushSelf(p);
     return { ok: true, index: p.characters.length - 1 };
   }
@@ -2367,6 +2414,7 @@ class Game {
     item.tier = target;
     if (slot === 'armor') p.hp = Math.min(maxHp(p), p.hp + 15);
     this.notifyAchievements(p, checkAchievements(p, ['Équipement']));
+    this.notifyQuests(p, checkQuests(p));
     this.pushSelf(p);
     return { ok: true };
   }
@@ -2883,6 +2931,7 @@ class Game {
       // retrouve avec plus de PV affichés que son nouveau maximum.
       p.hp = Math.min(p.hp, maxHp(p));
       this.skinStateOf(p);
+      this.questStateOf(p);
       this.players.set(p.id, p);
       if (p.token) this.tokens.set(p.token, p.id);
     }

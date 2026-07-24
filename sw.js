@@ -13,7 +13,7 @@
  * Incrémenter VERSION pour forcer un rafraîchissement complet.
  * ============================================================ */
 
-const VERSION = 'wildrift-v109-combat-chat-move';
+const VERSION = 'wildrift-v114-mobile-perf';
 
 const CORE = [
   '/',

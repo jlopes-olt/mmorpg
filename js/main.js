@@ -13,7 +13,7 @@
 
 (function () {
   const remote = typeof io !== 'undefined' && location.protocol.indexOf('http') === 0;
-  const SHELL_REV = '20260724-combat-chat-move';
+  const SHELL_REV = '20260724-mobile-perf';
 
   // PWA : service worker (cache + installation sur l'écran d'accueil).
   // Échec silencieux en file:// / artifact.
@@ -404,7 +404,9 @@
   // même seuil de 12 px que la distinction tap/drag ci-dessous, pour ne rien
   // changer au comportement existant tant qu'on reste sous ce seuil.
   const recenterBtn = document.getElementById('recenterBtn');
-  document.getElementById('helpBtn').addEventListener('click', () => ui.showGuide());
+  document.getElementById('helpBtn').addEventListener('click', () => ui.toggleQuestsHidden());
+  document.getElementById('questBanner').addEventListener('click', () => ui.showQuestLog());
+  document.getElementById('questParallelBadge').addEventListener('click', () => ui.showQuestLog());
   let downPos = null;
   let lastPos = null;
   let isPanning = false;
@@ -728,7 +730,7 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
       }
       // Personnage tout juste créé (pas une reconnexion) : guide du débutant,
       // après la disparition du splash pour ne pas se superposer à l'animation.
-      if (server.justCreated) setTimeout(() => ui.showGuide(), 1200);
+      if (server.justCreated) setTimeout(() => ui.showGuide(true), 1200);
     });
     let token = null;
     try { token = localStorage.getItem(TOKEN_KEY); } catch (e) { /* ignore */ }
@@ -746,7 +748,7 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
         server.join(name, cls);
         updateExplored();
         save();
-        setTimeout(() => ui.showGuide(), 1200);
+        setTimeout(() => ui.showGuide(true), 1200);
       });
     }
   }

@@ -43,10 +43,20 @@ function rngSequence(...values) {
   return () => (i < values.length ? values[i++] : values[values.length - 1]);
 }
 
+// Les personnages « historiques » de ce fichier (alice, bob, carl…) ne
+// testent pas les quêtes (voir tout en bas pour ça) — sans ce vaccin, les
+// récompenses en or de checkQuests() (câblé aux mêmes points que
+// checkAchievements) viendraient fausser les innombrables assertions de
+// solde exact déjà écrites contre ce fichier avant l'existence des quêtes.
+function skipQuestsFor(p) {
+  p.completedQuests = QUESTS.map((q) => q.id).concat(PARALLEL_QUESTS.map((q) => q.id));
+}
+
 // --- Comptes : inscription / connexion / token ---
 let r = g.register({ username: 'Alice', password: 'secret1', speciesClass: 'LION_PALADIN', email: 'alice@test.dev' });
 assert.ok(r.ok && r.created, 'inscription');
 const alice = r.player;
+skipQuestsFor(alice);
 alice.online = true;
 
 assert.ok(!g.register({ username: 'Al', password: 'secret1', speciesClass: 'LION_PALADIN', email: 'al@test.dev' }).ok, 'nom trop court refusé');
@@ -68,6 +78,7 @@ assert.ok(!g.authToken(oldToken).ok, 'ancien token invalidé');
 r = g.register({ username: 'Bob', password: 'secret2', speciesClass: 'CERF_DRUIDE', email: 'bob@test.dev' });
 assert.ok(r.ok, 'second compte');
 const bob = r.player;
+skipQuestsFor(bob);
 bob.online = true;
 
 // --- Déplacement ---
@@ -267,6 +278,7 @@ assert.strictEqual(alice.gold, goldBeforeDeath, 'aucune perte d’or à la mort'
 let rr = g.register({ username: 'Cara', password: 'secret3', speciesClass: 'OURS_GUERRIER', email: 'cara@test.dev' });
 assert.ok(rr.ok, 'troisième compte');
 const cara = rr.player;
+skipQuestsFor(cara);
 cara.online = true;
 alice.pos = { x: boss.x - 1, y: boss.y };
 bob.pos = { x: boss.x + 1, y: boss.y };
@@ -533,6 +545,7 @@ assert.strictEqual(bob.role, 'user', 'compte suivant = user par défaut');
 const rCarl = g.register({ username: 'Carl', password: 'secret3', speciesClass: 'RENARD_VOLEUR', email: 'carl@test.dev' });
 assert.ok(rCarl.ok, 'troisième compte');
 const carl = rCarl.player;
+skipQuestsFor(carl);
 assert.strictEqual(carl.role, 'user', 'troisième compte = user');
 assert.strictEqual(carl.online, false, 'Carl reste hors ligne pour la suite de ces tests');
 
@@ -621,8 +634,10 @@ console.log('Admin : rejoindre n’importe quel joueur connecté ✔');
 const rDave = g.register({ username: 'Dave', password: 'secret4', speciesClass: 'CHAT_MAGICIEN', email: 'dave@test.dev' });
 assert.ok(rDave.ok, 'compte jetable pour le test de suppression');
 const dave = rDave.player;
+skipQuestsFor(dave);
 const rEve = g.register({ username: 'Eve', password: 'secret5', speciesClass: 'CORBEAU_NECROMANCIEN', email: 'eve@test.dev' });
 const eve = rEve.player;
+skipQuestsFor(eve);
 assert.ok(g.createGuild(dave, 'Éphémères').ok, 'Dave fonde une guilde jetable');
 const daveGuildId = dave.guildId;
 assert.ok(g.inviteToGuild(dave, 'Eve').ok && g.respondGuildInvite(eve, true).ok, 'Eve rejoint la guilde de Dave');
@@ -1085,6 +1100,7 @@ assert.ok(g.claimCastle(carl, 'PLAINE').ok, 'Carl (chef des Faucons) fonde le ch
 // toast/rapport détaillé ci-dessous ; seul un membre absent a besoin du push).
 const rDaveOff = g.register({ username: 'DaveOff', password: 'secret1', speciesClass: 'OURS_GUERRIER', email: 'daveoff@test.dev' });
 const daveOff = rDaveOff.player;
+skipQuestsFor(daveOff);
 assert.ok(g.inviteToGuild(carl, 'DaveOff').ok, 'Carl invite DaveOff dans les Faucons');
 assert.ok(g.respondGuildInvite(daveOff, true).ok, 'DaveOff rejoint les Faucons');
 daveOff.online = false;
@@ -1394,8 +1410,10 @@ console.log('Crédit Stripe (webhook) : appliqué même hors ligne ✔, compte/m
 // --- Notifications push : demande d'ami + MP, seulement si le destinataire est hors ligne ---
 const rPushE = g.register({ username: 'PushE', password: 'secret1', speciesClass: 'LION_PALADIN', email: 'pushe@test.dev' });
 const pushE = rPushE.player;
+skipQuestsFor(pushE);
 const rPushF = g.register({ username: 'PushF', password: 'secret1', speciesClass: 'CHAT_MAGICIEN', email: 'pushf@test.dev' });
 const pushF = rPushF.player;
+skipQuestsFor(pushF);
 pushE.online = true;
 pushF.online = false;
 
@@ -1540,6 +1558,7 @@ console.log('Redistribution nocturne : disposition reconstruite après redémarr
 const rOtp = g.register({ username: 'OtpTester', password: 'secret1', speciesClass: 'LION_PALADIN', email: 'otp@test.dev' });
 assert.ok(rOtp.ok, 'inscription OtpTester');
 const otpUser = rOtp.player;
+skipQuestsFor(otpUser);
 
 // Connexion normale (register()/login() restent immédiats, sans OTP intégré —
 // c'est l'appelant socket qui orchestre, voir server/index.js) puis OTP.
@@ -1608,6 +1627,147 @@ const r4 = g2.dev(rTok.player, { reset: true });
 assert.ok(r4.ok && r4.reset, 'reset de compte');
 assert.ok(!g2.authToken(rTok.player.token).ok, 'token invalidé');
 assert.ok(!g2.login({ username: 'Alice', password: 'secret1' }).ok, 'connexion impossible après reset');
+
+// --- Quêtes : chaîne guidée (js/quests.js) ---
+const rQuestor = g.register({ username: 'Questor', password: 'secret1', speciesClass: 'OURS_GUERRIER', email: 'questor@test.dev' });
+assert.ok(rQuestor.ok, 'compte de test pour les quêtes');
+const questor = rQuestor.player;
+questor.online = true;
+questor.pos = { x: 0, y: 0 }; questor.mapId = 'world';
+
+// 1) intro_move : la toute première quête, jusqu'à s'être éloigné de 5 cases
+// de la Capitale (pas exploredWorld.length : le brouillard de guerre révèle
+// déjà ~60 cases rien qu'en apparaissant à (0,0), sans le moindre mouvement).
+assert.strictEqual(currentQuestFor(questor).quest.id, 'intro_move', 'première quête de la chaîne');
+assert.deepStrictEqual(checkQuests(questor), [], 'intro_move pas encore complétée (encore à la Capitale)');
+questor.pos = { x: 5, y: 0 };
+let done = checkQuests(questor);
+assert.strictEqual(done.length, 1, 'intro_move se complète après 5 cases de mouvement réel');
+assert.strictEqual(done[0].id, 'intro_move');
+assert.strictEqual(questor.gold, 10, 'récompense intro_move créditée (10 or)');
+assert.deepStrictEqual(checkQuests(questor), [], 'intro_move ne se recomplète pas une deuxième fois');
+questor.pos = { x: 0, y: 0 };   // retour à la Capitale pour forger (upgrade() l'exige)
+
+// 2) gear_tier_1 : seule quête détaillant la récolte, 4 étapes dans l'ordre —
+// testée avec le vrai flux (upgrade()), pas une simulation, pour couvrir le
+// mécanisme que la quête est censée enseigner.
+assert.strictEqual(currentQuestFor(questor).quest.id, 'gear_tier_1', 'avance à la quête d’équipement T1');
+assert.strictEqual(currentQuestFor(questor).step.key, 'gather_weapon', 'première étape : récolter pour l’arme');
+const w1 = require('../js/config.js').UPGRADE_RECIPES.weapon[1];
+for (const [k, n] of Object.entries(w1)) questor.inventory[k] = n;
+assert.strictEqual(currentQuestFor(questor).step.key, 'craft_weapon', 'ressources d’arme réunies → étape suivante');
+assert.ok(g.upgrade(questor, 'weapon').ok, 'forge de l’arme T1');
+assert.strictEqual(currentQuestFor(questor).step.key, 'gather_armor', 'arme forgée → étape suivante (récolter l’armure)');
+const a1 = require('../js/config.js').UPGRADE_RECIPES.armor[1];
+for (const [k, n] of Object.entries(a1)) questor.inventory[k] = n;
+assert.strictEqual(currentQuestFor(questor).step.key, 'craft_armor', 'ressources d’armure réunies → dernière étape');
+assert.ok(g.upgrade(questor, 'armor').ok, 'forge de l’armure T1');
+assert.ok(questor.completedQuests.includes('gear_tier_1'), 'gear_tier_1 complétée par upgrade() lui-même (notifyQuests déjà câblé)');
+
+// 3) first_kill : se valide automatiquement si déjà acquis avant de devenir active.
+assert.strictEqual(currentQuestFor(questor).quest.id, 'first_kill');
+questor.stats.monsterKills = 1;   // « déjà tué un monstre avant » — pas une nouvelle action après coup
+done = checkQuests(questor);
+assert.strictEqual(done.length, 1, 'first_kill se valide dès le prochain checkQuests, sans nouveau kill');
+assert.strictEqual(done[0].id, 'first_kill');
+
+// 4) gear_tier_2..6 : un seul objectif (arme + armure), aucune sous-étape de récolte.
+assert.strictEqual(currentQuestFor(questor).quest.id, 'gear_tier_2');
+assert.strictEqual(currentQuestFor(questor).quest.steps.length, 1, 'gear_tier_2 : un objectif unique, pas de récolte');
+questor.weapon.tier = 2;
+assert.deepStrictEqual(checkQuests(questor), [], 'gear_tier_2 attend AUSSI l’armure');
+questor.armor.tier = 2;
+done = checkQuests(questor);
+assert.strictEqual(done[0].id, 'gear_tier_2', 'gear_tier_2 complétée une fois arme ET armure au tier');
+
+// 5) join_guild s'intercale après gear_tier_3.
+questor.weapon.tier = 3; questor.armor.tier = 3;
+checkQuests(questor);
+assert.strictEqual(currentQuestFor(questor).quest.id, 'join_guild');
+assert.ok(g.createGuild(questor, 'GuildeQuestor').ok, 'fonder une guilde valide join_guild');
+assert.ok(questor.completedQuests.includes('join_guild'));
+
+// 6) first_duel, puis fin de la chaîne à gear_tier_6.
+assert.strictEqual(currentQuestFor(questor).quest.id, 'gear_tier_4');
+questor.weapon.tier = 4; questor.armor.tier = 4;
+checkQuests(questor);
+assert.strictEqual(currentQuestFor(questor).quest.id, 'first_duel');
+questor.duels.losses = 1;   // PERDU le duel — la quête doit valider quand même (participer suffit)
+checkQuests(questor);
+assert.strictEqual(currentQuestFor(questor).quest.id, 'gear_tier_5', 'first_duel validée même en cas de défaite');
+questor.weapon.tier = 5; questor.armor.tier = 5;
+checkQuests(questor);
+assert.strictEqual(currentQuestFor(questor).quest.id, 'gear_tier_6');
+questor.weapon.tier = 6; questor.armor.tier = 6;
+checkQuests(questor);
+assert.strictEqual(currentQuestFor(questor), null, 'chaîne principale entièrement terminée');
+
+// 7) Quêtes parallèles : indépendantes de la position dans la chaîne, se
+// débloquent par seuil de maîtrise d'arme, pas par avancement de la chaîne.
+const rParallel = g.register({ username: 'QuestorParallel', password: 'secret1', speciesClass: 'OURS_GUERRIER', email: 'qp@test.dev' });
+const parallel = rParallel.player;
+parallel.online = true;
+assert.strictEqual(activeParallelQuestsFor(parallel).length, 0, 'aucune quête parallèle sous maîtrise 4');
+parallel.weaponMastery = 4;
+const active4 = activeParallelQuestsFor(parallel);
+assert.strictEqual(active4.length, 1, 'first_boss se débloque à maîtrise 4');
+assert.strictEqual(active4[0].id, 'first_boss');
+// La chaîne principale de "parallel" n'a même pas commencé (intro_move pas
+// fait) : first_boss doit pouvoir se compléter quand même, sans lien avec elle.
+assert.strictEqual(currentQuestFor(parallel).quest.id, 'intro_move', 'chaîne principale indépendante, toujours au début');
+parallel.stats.bossKills = 1;
+done = checkQuests(parallel);
+assert.ok(done.some((q) => q.id === 'first_boss'), 'first_boss se complète malgré une chaîne principale non entamée');
+assert.strictEqual(parallel.gold, 60, 'récompense first_boss créditée');
+parallel.weaponMastery = 6;
+assert.strictEqual(activeParallelQuestsFor(parallel).length, 1, 'world_boss_intro se débloque à maîtrise 6 (first_boss déjà acquise)');
+parallel.stats.worldBossKills = 1;
+done = checkQuests(parallel);
+assert.ok(done.some((q) => q.id === 'world_boss_intro'), 'world_boss_intro se complète');
+assert.ok(parallel.titles.includes('Légende en devenir'), 'titre capstone accordé');
+
+// 8) Rattrapage : un joueur déjà bien avancé (ou un octroi admin) avant même
+// le premier checkQuests complète plusieurs quêtes d'un coup, pas une par une.
+const rCatchup = g.register({ username: 'QuestorCatchup', password: 'secret1', speciesClass: 'OURS_GUERRIER', email: 'qc@test.dev' });
+const catchup = rCatchup.player;
+catchup.online = true;
+catchup.pos = { x: 5, y: 0 };
+catchup.weapon.tier = 6; catchup.armor.tier = 6;
+catchup.stats.monsterKills = 1;
+catchup.guildId = 'g_fake_for_test';
+catchup.duels.wins = 1;
+done = checkQuests(catchup);
+assert.strictEqual(done.length, QUESTS.length, 'toutes les quêtes de la chaîne principale rattrapées en un seul appel');
+assert.strictEqual(currentQuestFor(catchup), null, 'chaîne principale terminée d’un coup');
+catchup.guildId = null;   // restaure un état cohérent pour le reste du test
+
+// 9) Changer de personnage réinitialise completedQuests sans lever d'exception
+// (le slot vierge n'a pas la progression de gear de l'ancien personnage).
+assert.ok(g.createCharacter(questor, 'CERF_DRUIDE').ok, 'nouveau personnage pour Questor');
+assert.ok(g.switchCharacter(questor, 1).ok, 'bascule vers le nouveau slot');
+assert.deepStrictEqual(questor.completedQuests, [], 'nouveau slot : chaîne de quêtes repartie de zéro');
+assert.ok(g.switchCharacter(questor, 0).ok, 'retour au premier personnage');
+assert.ok(questor.completedQuests.includes('gear_tier_6'), 'progression de l’ancien slot restaurée après rebascule');
+
+// 10) Une étape dont check() lève une exception ne fait pas planter checkQuests
+// (retourne juste false pour cette étape) — filet nécessaire car les steps
+// lisent des champs dynamiques qui pourraient être malformés. Doit cibler une
+// quête réellement EN COURS (unlock=true côté parallèle, ou première étape non
+// complétée côté chaîne) : sinon le check court-circuite avant même d'être
+// appelé et le test ne prouverait rien.
+const rThrow = g.register({ username: 'QuestorThrow', password: 'secret1', speciesClass: 'OURS_GUERRIER', email: 'qt@test.dev' });
+const throwPlayer = rThrow.player;
+throwPlayer.online = true;
+assert.strictEqual(currentQuestFor(throwPlayer).quest.id, 'intro_move', 'première quête, forcément en cours pour un compte neuf');
+const introMoveQuest = QUESTS.find((q) => q.id === 'intro_move');
+const originalCheck = introMoveQuest.steps[0].check;
+introMoveQuest.steps[0].check = () => { throw new Error('check défaillant (simulation de test)'); };
+assert.doesNotThrow(() => checkQuests(throwPlayer), 'une étape qui lève une exception ne fait pas planter checkQuests');
+assert.ok(!throwPlayer.completedQuests.includes('intro_move'), 'l’étape en échec (exception) n’est pas comptée comme réussie');
+introMoveQuest.steps[0].check = originalCheck;
+assert.deepStrictEqual(checkQuests(throwPlayer), [], 'check restauré : la quête reste incomplète (0 case explorée)');
+
+console.log('Quêtes : chaîne principale ✔ (intro, équipement T1-T6, combat, guilde, duel), quêtes parallèles indépendantes ✔, rattrapage ✔, changement de personnage ✔');
 
 console.log('\ntest-game : tous les tests passent ✔');
 
