@@ -125,14 +125,24 @@ function renderStats() {
     '<div class="stat-tile classes"><span>Répartition par classe</span><div class="chips">' + (classChips || '<span class="chip">—</span>') + '</div></div>';
 }
 
+// « En ligne » plutôt qu'une date : lastSeen vaut alors ~maintenant (mis à
+// jour à chaque connexion/déconnexion, voir Game.adminPlayerList) et n'est
+// donc pas informatif tant que le compte est connecté.
+function formatLastSeen(p) {
+  if (p.online) return 'En ligne';
+  if (!p.lastSeen) return '?';
+  return new Date(p.lastSeen).toLocaleString('fr-FR');
+}
+
 function renderTable() {
   const q = $('searchInput').value.trim().toLowerCase();
-  const list = q ? players.filter((p) => p.username.toLowerCase().includes(q)) : players;
+  const list = q ? players.filter((p) => p.username.toLowerCase().includes(q) || (p.email || '').toLowerCase().includes(q)) : players;
   $('resultCount').textContent = list.length + ' / ' + players.length + ' compte(s)';
   $('playersBody').innerHTML = list.map((p) => (
     '<tr class="' + (p.role === 'admin' ? 'admin-row' : '') + '" data-username="' + esc(p.username) + '">' +
       '<td><span class="status-dot ' + (p.online ? 'on' : '') + '" title="' + (p.online ? 'En ligne' : 'Hors ligne') + '"></span></td>' +
       '<td class="name-cell">' + esc(p.username) + (p.role === 'admin' ? ' <span class="role-tag">Admin</span>' : '') + '</td>' +
+      '<td>' + esc(p.email || '—') + '</td>' +
       '<td>' + (p.role === 'admin' ? 'Admin' : 'Joueur') + '</td>' +
       '<td>' + esc(p.classLabel || '') + '</td>' +
       '<td>T' + p.harvestLevel + '</td>' +
@@ -143,10 +153,11 @@ function renderTable() {
       '<td>' + (p.premium || 0).toLocaleString('fr-FR') + '</td>' +
       '<td>' + p.charCount + ' / ' + p.charSlots + '</td>' +
       '<td>' + (p.createdAt ? new Date(p.createdAt).toLocaleDateString('fr-FR') : '?') + '</td>' +
+      '<td>' + esc(formatLastSeen(p)) + '</td>' +
     '</tr>'
   )).join('') || '';
   if (!list.length) {
-    $('playersBody').innerHTML = '<tr><td colspan="12" class="empty-state">Aucun compte ne correspond.</td></tr>';
+    $('playersBody').innerHTML = '<tr><td colspan="14" class="empty-state">Aucun compte ne correspond.</td></tr>';
   }
   $('playersBody').querySelectorAll('tr[data-username]').forEach((tr) => {
     tr.addEventListener('click', () => openPlayerPanel(tr.dataset.username));
@@ -220,10 +231,14 @@ $('panelOverlay').addEventListener('click', closePlayerPanel);
 function renderPlayerPanel(p) {
   if (!p) { closePlayerPanel(); return; }
   const dateStr = p.createdAt ? new Date(p.createdAt).toLocaleString('fr-FR') : '?';
+  // Pas de « Dernière connexion » si en ligne : lastSeen vaut alors ~maintenant
+  // (voir formatLastSeen) et le statut « En ligne » juste avant le dit déjà.
+  const lastSeenLine = p.online ? '' : (' · Dernière connexion : ' + esc(formatLastSeen(p)));
   $('playerPanelBody').innerHTML =
     '<div class="panel-head">' +
       '<h2>' + esc(p.username) + (p.role === 'admin' ? ' <span class="role-tag">Admin</span>' : '') + '</h2>' +
-      '<p class="dim"><span class="status-dot ' + (p.online ? 'on' : '') + '"></span> ' + (p.online ? 'En ligne' : 'Hors ligne') + ' · Inscrit le ' + dateStr + '</p>' +
+      '<p class="dim"><span class="status-dot ' + (p.online ? 'on' : '') + '"></span> ' + (p.online ? 'En ligne' : 'Hors ligne') + ' · Inscrit le ' + dateStr + lastSeenLine + '</p>' +
+      '<p class="dim">' + esc(p.email || 'Email inconnu') + '</p>' +
     '</div>' +
 
     '<div class="panel-section">' +

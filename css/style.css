@@ -239,6 +239,14 @@ html, body {
 #lobbyBanner .chance-badge.chance-good { color: #7ed88b; }
 #lobbyBanner .chance-badge.chance-mid { color: #f0b95c; }
 #lobbyBanner .chance-badge.chance-bad { color: #ff8d7e; }
+.threshold-die-icon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  vertical-align: -4px;
+  margin-right: 4px;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));
+}
 
 /* ---------- Or (monnaie du compte) ---------- */
 .gold-banner {
@@ -661,6 +669,41 @@ html, body {
   gap: 8px;
   background: linear-gradient(rgba(14, 18, 14, 0.6), rgba(14, 18, 14, 0.16) 72%, transparent);
   pointer-events: none;
+}
+.moving-badge {
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 12px;
+  border-radius: 999px;
+  background: rgba(20, 24, 18, 0.55);
+  border: 1px solid rgba(214, 178, 102, 0.35);
+  color: rgba(238, 230, 210, 0.88);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  animation: movingBadgeBob 0.9s ease-in-out infinite;
+}
+.moving-badge-icon { display: inline-block; animation: movingBadgeStep 0.6s ease-in-out infinite; }
+.moving-dots span {
+  opacity: 0;
+  animation: movingDotBlink 1.2s infinite;
+}
+.moving-dots span:nth-child(2) { animation-delay: 0.2s; }
+.moving-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes movingBadgeBob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1px); }
+}
+@keyframes movingBadgeStep {
+  0%, 100% { transform: translateX(0) scaleX(1); }
+  50% { transform: translateX(2px) scaleX(-1); }
+}
+@keyframes movingDotBlink {
+  0%, 20% { opacity: 0; }
+  50% { opacity: 1; }
+  100% { opacity: 0; }
 }
 .hud-panel {
   position: relative;
@@ -1779,6 +1822,8 @@ html, body {
 .msg b { color: #7a6244; }
 .msg.me b { color: #a3781f; }
 .msg.sys { color: #9a8464; font-style: italic; }
+.msg-time { font-size: 10px; color: #a8916d; margin-left: 5px; font-weight: 400; }
+.msg.sys .msg-time { margin-left: 0; margin-right: 5px; }
 .chat-row { display: flex; gap: 8px; margin-top: 10px; }
 .chat-row input {
   flex: 1;
@@ -2915,60 +2960,118 @@ html, body {
   font-size: 13px;
   text-shadow: 0 2px 10px rgba(0,0,0,0.45);
 }
-.combat-fx-swords {
-  position: relative;
-  width: 220px;
-  height: 164px;
-  margin: 12px 0 8px;
-}
-.combat-fx-sword {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 118px;
-  height: auto;
-  transform-origin: 24% 78%;
-  filter: drop-shadow(0 8px 18px rgba(0,0,0,0.55));
-  user-select: none;
-  -webkit-user-drag: none;
-}
-.combat-fx-sword.sword-left {
-  transform: translate(-108px, -40px) rotate(-36deg) scale(0.9);
-}
-.combat-fx-sword.sword-right {
-  transform: translate(-10px, -40px) scaleX(-1) rotate(-36deg) scale(0.9);
-}
-.combat-fx-flash {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: rgba(255,255,255,0);
-  transform: translate(-50%, -50%) scale(0.25);
-  box-shadow: 0 0 0 rgba(255,255,255,0);
-}
-.combat-fx-status {
-  color: rgba(232,236,241,0.72);
+.combat-fx-roller {
+  margin-top: 6px;
+  color: rgba(232,236,241,0.75);
   font-size: 12px;
-  letter-spacing: 0.04em;
+  font-style: italic;
   text-shadow: 0 2px 10px rgba(0,0,0,0.45);
 }
-.combat-fx-center.phase-impact {
+.combat-fx-dice {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 14px;
+  margin: 16px 0 10px;
+}
+.combat-die {
+  width: 124px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.combat-die-face {
+  position: relative;
+  width: 100px;
+  height: 100px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(0 10px 16px rgba(0,0,0,0.5));
+  will-change: transform;
+}
+.combat-die-art {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+.combat-die-number {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 26px;
+  font-weight: 800;
+  color: #fff8e6;
+  text-shadow: 0 2px 3px rgba(0,0,0,0.95), 0 0 10px rgba(0,0,0,0.75), 0 0 2px rgba(0,0,0,0.9);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+/* Vrai dé qui bouge : rebond (translateY, comme lâché au sol) + rotation
+   (plusieurs tours, décélérant) pendant le suspense — pas juste les chiffres
+   qui défilent dans une case immobile. Termine sur une rotation multiple de
+   360° pour retomber visuellement « à plat », sans mélange 3D du texte
+   (une vraie bascule 3D d'un texte plat rend mal — voir retour utilisateur). */
+.combat-die.spinning .combat-die-face {
+  animation: diceTumble 0.7s cubic-bezier(0.3, 0.05, 0.25, 1) 1 both;
+}
+@keyframes diceTumble {
+  0%   { transform: translateY(0)     rotate(0deg)   scale(1); }
+  8%   { transform: translateY(-26px) rotate(95deg)  scale(0.94); }
+  16%  { transform: translateY(2px)   rotate(180deg) scale(1.06); }
+  26%  { transform: translateY(-18px) rotate(270deg) scale(0.96); }
+  36%  { transform: translateY(1px)   rotate(360deg) scale(1.04); }
+  48%  { transform: translateY(-11px) rotate(470deg) scale(0.97); }
+  60%  { transform: translateY(1px)   rotate(560deg) scale(1.03); }
+  72%  { transform: translateY(-5px)  rotate(650deg) scale(0.99); }
+  86%  { transform: translateY(0)     rotate(710deg) scale(1.01); }
+  100% { transform: translateY(0)     rotate(720deg) scale(1); }
+}
+.combat-die.settled .combat-die-face {
+  animation: diceSettle 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.combat-die-threshold {
+  color: rgba(232,236,241,0.68);
+  font-size: 10.5px;
+  text-align: center;
+  text-shadow: 0 2px 8px rgba(0,0,0,0.45);
+}
+/* Réussite/échec critique : l'image du dé change (halo doré / lézardes
+   rouges déjà peints dans l'asset, voir loadCombatFxAssets) — ce CSS
+   n'ajoute qu'un pulse/secousse en complément, en suivant la silhouette
+   réelle du dé (drop-shadow, pas box-shadow qui dessinerait un rectangle). */
+.combat-die.crit-success .combat-die-face {
+  animation: diceCritGlow 0.7s ease infinite alternate;
+}
+.combat-die.crit-fail .combat-die-face {
   animation: combatCardShake 0.24s ease-in-out 2;
 }
-.combat-fx-backdrop.phase-impact .combat-fx-sword.sword-left {
-  animation: swordClashLeft 0.34s ease forwards;
+.combat-fx-status {
+  margin-top: 6px;
+  color: rgba(232,236,241,0.85);
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  text-shadow: 0 3px 14px rgba(0,0,0,0.65), 0 0 20px rgba(0,0,0,0.45);
 }
-.combat-fx-backdrop.phase-impact .combat-fx-sword.sword-right {
-  animation: swordClashRight 0.34s ease forwards;
+.combat-fx-backdrop.victory.phase-resolve .combat-fx-status {
+  color: #ffd873;
+  animation: statusReveal 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
-.combat-fx-backdrop.phase-impact .combat-fx-flash {
-  animation: clashFlash 0.34s ease forwards;
+.combat-fx-backdrop.defeat.phase-resolve .combat-fx-status {
+  color: #ff6b6b;
+  animation: statusReveal 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
-.combat-fx-backdrop.victory.phase-resolve .combat-fx-status { color: #f4cd6e; }
-.combat-fx-backdrop.defeat.phase-resolve .combat-fx-status { color: #ff9b9b; }
+@keyframes statusReveal {
+  0% { transform: scale(0.6); opacity: 0.4; }
+  60% { transform: scale(1.14); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
 
 .harvest-fx-backdrop {
   position: absolute;
@@ -3131,34 +3234,15 @@ html, body {
   text-shadow: 0 2px 10px rgba(0,0,0,0.45);
 }
 
-@keyframes swordClashLeft {
-  0% { transform: translate(-108px, -40px) rotate(-36deg) scale(0.9); }
-  65% { transform: translate(-52px, -26px) rotate(-7deg) scale(1); }
-  100% { transform: translate(-70px, -30px) rotate(-16deg) scale(0.96); }
+@keyframes diceSettle {
+  0% { transform: scale(1.28); }
+  60% { transform: scale(0.94); }
+  100% { transform: scale(1); }
 }
 
-@keyframes swordClashRight {
-  0% { transform: translate(-10px, -40px) scaleX(-1) rotate(-36deg) scale(0.9); }
-  65% { transform: translate(-62px, -26px) scaleX(-1) rotate(-7deg) scale(1); }
-  100% { transform: translate(-44px, -30px) scaleX(-1) rotate(-16deg) scale(0.96); }
-}
-
-@keyframes clashFlash {
-  0% {
-    background: rgba(255,255,255,0);
-    transform: translate(-50%, -50%) scale(0.2);
-    box-shadow: 0 0 0 rgba(255,255,255,0);
-  }
-  45% {
-    background: rgba(255,245,220,0.95);
-    transform: translate(-50%, -50%) scale(1.7);
-    box-shadow: 0 0 24px rgba(255,214,130,0.7);
-  }
-  100% {
-    background: rgba(255,245,220,0);
-    transform: translate(-50%, -50%) scale(2.4);
-    box-shadow: 0 0 0 rgba(255,214,130,0);
-  }
+@keyframes diceCritGlow {
+  0% { filter: drop-shadow(0 10px 16px rgba(0,0,0,0.5)) drop-shadow(0 0 8px rgba(255, 214, 130, 0.65)); }
+  100% { filter: drop-shadow(0 10px 16px rgba(0,0,0,0.5)) drop-shadow(0 0 20px rgba(255, 214, 130, 1)); }
 }
 
 @keyframes combatCardShake {

@@ -13,7 +13,7 @@
 
 (function () {
   const remote = typeof io !== 'undefined' && location.protocol.indexOf('http') === 0;
-  const SHELL_REV = '20260723-achievements-per-biome';
+  const SHELL_REV = '20260724-combat-chat-move';
 
   // PWA : service worker (cache + installation sur l'écran d'accueil).
   // Échec silencieux en file:// / artifact.
@@ -340,6 +340,11 @@
       if (raid) {
         const dist = server.chebyshev(me.pos, tile);
         if (dist > CONFIG.JOIN_RADIUS) {
+          // Sans ce toast, cliquer une case trop lointaine se comportait
+          // exactement comme un clic normal (déplacement silencieux) — rien
+          // n'indiquait qu'un lobby limité dans le temps tournait là-bas.
+          const secsLeft = Math.max(0, Math.ceil((raid.endsAt - server.now) / 1000));
+          ui.toast('⚔ Combat en cours là-bas (' + secsLeft + ' s) — approchez-vous pour le rejoindre.');
           walkTo(tx, ty);
           return;
         }
@@ -348,8 +353,8 @@
         const regainOk = me.pa >= CONFIG.COSTS.RAID;
         ui.confirmAction({
           title: 'Rejoindre le raid ' + ml + ' ?',
-          bodyHtml: '<p>' + raid.participants.length + ' participant(s) — ' +
-            ui.chanceHtml(nowChance) + ' de victoire, <b>≈ ' + Math.round(withMeChance * 100) + ' %</b> avec vous.</p>' +
+          bodyHtml: '<p>' + raid.participants.length + ' participant(s) — jet nécessaire ' +
+            ui.thresholdHtml(nowChance) + ' actuellement, <b>≈ ' + winThreshold(withMeChance) + '+</b> avec vous.</p>' +
             '<p class="dim">Résolution dans ' + Math.max(0, Math.ceil((raid.endsAt - server.now) / 1000)) + ' s.</p>' +
             (regainOk ? '<p class="ok-c small">✨ Regain disponible : XP doublée en cas de victoire !</p>' : ''),
           okLabel: 'Rejoindre',
@@ -373,7 +378,7 @@
       const soloRegainOk = me.pa >= CONFIG.COSTS.RAID;
       ui.confirmAction({
         title: 'Lancer Raid ' + ml + ' ?',
-        bodyHtml: '<p>Seul, vous avez ' + ui.chanceHtml(soloChance) + ' de chances de victoire.</p>' +
+        bodyHtml: '<p>Seul, jet nécessaire ' + ui.thresholdHtml(soloChance) + ' pour l’emporter.</p>' +
           '<p class="dim hp-c">⚠ Une défaite est mortelle : retour à la Capitale.</p>' +
           '<p class="dim">Le lobby reste ouvert 30 s — chaque allié qui rejoint fait grimper vos chances (visibles en direct dans la bannière).</p>' +
           (soloRegainOk ? '<p class="ok-c small">✨ Regain disponible : XP doublée en cas de victoire !</p>' : ''),
@@ -463,18 +468,30 @@
     // Sur sa propre case, un repère (château, village…) rivalise avec la
     // présence d'autres joueurs — sinon un château défendu ne serait jamais
     // cliquable (le clic tomberait toujours sur le popup du défenseur posté
-    // dessus). Si les deux s'appliquent, on laisse choisir plutôt que de
-    // trancher silencieusement (voir le popup de choix ci-dessous).
+    // dessus). Même conflit sur une case de monstre : un ou plusieurs joueurs
+    // s'y tiennent quasiment toujours (raid déjà en cours, ou simplement en
+    // train de s'y regrouper avant d'en lancer un), donc rejoindre/lancer le
+    // raid en cliquant cette case tombait systématiquement sur le popup
+    // d'interaction (ou le sélecteur de joueurs) sans jamais atteindre
+    // handleTap — qui gère pourtant le rejoint ET la création de lobby. Dans
+    // tous les cas, on laisse choisir plutôt que de trancher silencieusement
+    // (voir le popup ci-dessous).
     const tappedTile = renderer.screenToTile(localX, localY);
+    renderer.showTapMarker(tappedTile.x, tappedTile.y);
     const ownTileContent = server.tiles.get(tileKey(tappedTile.x, tappedTile.y));
     const onOwnLandmark = server.me.pos.x === tappedTile.x && server.me.pos.y === tappedTile.y &&
       ownTileContent && ownTileContent.content &&
       ['castle', 'village', 'capital', 'dungeon', 'portal'].includes(ownTileContent.content.kind);
+    const raidOnTappedTile = server.raids.get(raidKey(server.currentMapId || (server.me && server.me.mapId) || 'world', tappedTile.x, tappedTile.y));
+    const monsterOnTappedTile = !raidOnTappedTile && ownTileContent && ownTileContent.content && ownTileContent.content.kind === 'monster';
+    const hasCompetingAction = onOwnLandmark || raidOnTappedTile || monsterOnTappedTile;
     const playersOnTappedTile = renderer.pickPlayersAtScreen(localX, localY).filter((p) => p.id !== server.me.id);
 
-    if (onOwnLandmark && playersOnTappedTile.length > 0) {
+    if (hasCompetingAction && playersOnTappedTile.length > 0) {
       const landmarkLabels = { castle: '🏰 Château', village: '🏘 Village', capital: '⚒ Capitale', dungeon: '🕳 Donjon', portal: '🌀 Portail' };
-      const landmarkLabel = landmarkLabels[ownTileContent.content.kind] || 'Repère';
+      const actionLabel = raidOnTappedTile ? '⚔ Rejoindre le raid' :
+        monsterOnTappedTile ? '⚔ Créer Lobby' :
+        (landmarkLabels[ownTileContent.content.kind] || 'Repère');
       ui.popup(
         'Que faire ici ?',
         '<p class="dim small">' + playersOnTappedTile.length + ' autre' + (playersOnTappedTile.length > 1 ? 's aventuriers partagent' : ' aventurier partage') + ' cette case.</p>',
@@ -487,14 +504,14 @@
               else ui.showPlayerPicker(playersOnTappedTile, { tile: tappedTile });
             },
           },
-          { label: landmarkLabel, primary: true, cb: () => handleTap(tappedTile.x, tappedTile.y) },
+          { label: actionLabel, primary: true, cb: () => handleTap(tappedTile.x, tappedTile.y) },
         ],
         { mode: 'generic' }
       );
       return;
     }
 
-    const players = onOwnLandmark ? [] : playersOnTappedTile;
+    const players = hasCompetingAction ? [] : playersOnTappedTile;
     if (players.length === 1) {
       ui.showPlayerInteraction(players[0]);
       return;
@@ -643,7 +660,7 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
         });
       }
 
-      ui.updateHud();
+      ui.updateHud(moveQueue.length > 0);
       renderer.draw(dt);
       if (renderer.justExplored.length) {
         const onWorld = (server.currentMapId || 'world') === 'world';

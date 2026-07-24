@@ -89,7 +89,7 @@ class ServerSim {
     });
   }
 
-  log(text, type) { this.emit('chat', { from: null, text, type: type || 'event' }); }
+  log(text, type) { this.emit('chat', { from: null, text, type: type || 'event', ts: Date.now() }); }
   toast(text) { this.emit('toast', { text }); }
   // Miroir de server/game.js consumeRegainBonus() : voir ce fichier pour le
   // détail du raisonnement (Regain = bonus d'XP, plus un gate d'action).
@@ -174,6 +174,8 @@ class ServerSim {
   confirmTrade(accept) { return { ok: false, error: 'Échanges disponibles en multijoueur réel.' }; }
   cancelTrade() { return { ok: false, error: 'Aucun échange actif.' }; }
 
+  duelPreview(targetId) { return { ok: false, error: 'Duels disponibles en multijoueur réel.' }; }
+
   requestDuel(targetId) {
     const target = this.players.get(String(targetId));
     const me = this.me;
@@ -200,6 +202,7 @@ class ServerSim {
   reinforceCastle(terrain) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
   repairCastle(terrain, gold) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
   fortifyCastle(terrain) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
+  assaultCastlePreview(terrain) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
   assaultCastle(terrain) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
   craftSiegeEngine(tier) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
   deploySiegeEngine(key, tier) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
@@ -576,7 +579,11 @@ class ServerSim {
     }
 
     this.pendingReplies = this.pendingReplies.filter((r) => {
-      if (this.now >= r.at) { this.emit('chat', r.msg); return false; }
+      if (this.now >= r.at) {
+        r.msg.ts = Date.now();   // horodatage au moment réel de l'envoi, pas de la planification
+        this.emit('chat', r.msg);
+        return false;
+      }
       return true;
     });
   }
@@ -721,9 +728,16 @@ class ServerSim {
     const monster = tile.content;
     const members = raid.participants.map((id) => this.players.get(id)).filter(Boolean);
     const force = this.teamForce(raid);
-    // Combat probabiliste : le sort en décide, à hauteur des puissances
+    // Combat probabiliste : le sort en décide, à hauteur des puissances —
+    // même jet de dé + attribution aléatoire qu'en mode connecté (voir
+    // Game.resolveRaid côté serveur).
     const chance = winChance(force, raid.monsterForce);
-    const victory = this.rng() < chance;
+    const threshold = winThreshold(chance);
+    const roll = rollD100(this.rng);
+    const victory = roll >= threshold;
+    const critical = roll === 1 ? 'fail' : (roll === 100 ? 'success' : null);
+    const rollerPool = members.filter((p) => !p.bot).length ? members.filter((p) => !p.bot) : members;
+    const roller = rollerPool[Math.floor(this.rng() * rollerPool.length)];
     const druid = victory && members.some((p) => p.speciesClass === 'CERF_DRUIDE');
     const rampart = members.some((p) => p.speciesClass === 'OURS_GUERRIER');
     let myHpLoss = 0, myXp = 0, myGold = 0, myFood = null, myBoosted = false, myDied = false;
@@ -811,6 +825,10 @@ class ServerSim {
       victory,
       died: !victory || myDied,
       chance,
+      roll,
+      threshold,
+      critical,
+      rollerUsername: roller ? roller.username : null,
       label: raid.label,
       monsterType: monster.type,
       tier: raid.tier,
@@ -962,7 +980,7 @@ class ServerSim {
       return { ok: false, error: (channel === 'guild' ? 'Guildes' : 'Messages privés') + ' disponibles en multijoueur réel.' };
     }
     const me = this.me;
-    this.emit('chat', { from: me.username, text, type: 'chat', channel: 'general', self: true });
+    this.emit('chat', { from: me.username, text, type: 'chat', channel: 'general', self: true, ts: Date.now() });
     if (Math.random() < 0.5) {
       const bots = [...this.players.values()].filter((p) => p.bot);
       const bot = bots[Math.floor(Math.random() * bots.length)];

@@ -13,7 +13,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="stylesheet" href="css/style.css?v=20260723-achievements-per-biome">
+  <link rel="stylesheet" href="css/style.css?v=20260724-combat-chat-move">
 </head>
 <body>
   <div id="desktopLayout">
@@ -73,6 +73,10 @@
           <div class="hud-meta pa-next" id="paNext"></div>
         </div>
         <div class="bar pa"><div class="bar-fill" id="paFill"></div><span class="bar-text" id="paText"></span></div>
+      </div>
+      <div id="movingBadge" class="moving-badge hidden">
+        <span class="moving-badge-icon">🚶</span>
+        <span class="moving-badge-text">En déplacement<span class="moving-dots"><span>.</span><span>.</span><span>.</span></span></span>
       </div>
       <div id="installBanner" class="hidden">
         <img id="installBannerIcon" src="assets/icons/icon-192.png" alt="">
@@ -181,13 +185,13 @@
   <!-- Fourni par le backend Node ; échoue silencieusement en local pur
        (file:// / artifact) et le jeu bascule alors en simulation solo. -->
   <script src="/socket.io/socket.io.js"></script>
-  <script src="js/config.js?v=20260723-achievements-per-biome"></script>
-  <script src="js/achievements.js?v=20260723-achievements-per-biome"></script>
-  <script src="js/world.js?v=20260723-achievements-per-biome"></script>
-  <script src="js/server.js?v=20260723-achievements-per-biome"></script>
-  <script src="js/net.js?v=20260723-achievements-per-biome"></script>
-  <script src="js/render.js?v=20260723-achievements-per-biome"></script>
-  <script src="js/ui.js?v=20260723-achievements-per-biome"></script>
-  <script src="js/main.js?v=20260723-achievements-per-biome"></script>
+  <script src="js/config.js?v=20260724-combat-chat-move"></script>
+  <script src="js/achievements.js?v=20260724-combat-chat-move"></script>
+  <script src="js/world.js?v=20260724-combat-chat-move"></script>
+  <script src="js/server.js?v=20260724-combat-chat-move"></script>
+  <script src="js/net.js?v=20260724-combat-chat-move"></script>
+  <script src="js/render.js?v=20260724-combat-chat-move"></script>
+  <script src="js/ui.js?v=20260724-combat-chat-move"></script>
+  <script src="js/main.js?v=20260724-combat-chat-move"></script>
 </body>
 </html>

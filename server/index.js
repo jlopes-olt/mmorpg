@@ -629,6 +629,7 @@ io.on('connection', (socket) => {
   socket.on('trade:offer', act((d) => game.updateTradeOffer(player, d.offer || {})));
   socket.on('trade:confirm', act((d) => game.confirmTrade(player, d.accept !== false)));
   socket.on('trade:cancel', act(() => game.cancelTrade(player)));
+  socket.on('duel:preview', act((d) => game.duelPreview(player, String(d.targetId))));
   socket.on('duel:request', act((d) => game.requestDuel(player, String(d.targetId))));
   socket.on('duel:respond', act((d) => game.respondDuelInvite(player, String(d.fromId), !!d.accept)));
   socket.on('admin:tier', act((d) => game.setAdminTier(player, String(d.kind), Number(d.tier))));
@@ -690,6 +691,7 @@ io.on('connection', (socket) => {
   socket.on('castle:reinforce', act((d) => game.reinforceCastle(player, String(d.terrain))));
   socket.on('castle:repair', act((d) => game.repairCastle(player, String(d.terrain), Number(d.gold))));
   socket.on('castle:fortify', act((d) => game.fortifyCastle(player, String(d.terrain))));
+  socket.on('castle:assaultPreview', act((d) => game.siegePreview(player, String(d.terrain))));
   socket.on('castle:assault', act((d) => game.createSiege(player, String(d.terrain))));
   socket.on('castle:craftEngine', act((d) => game.craftSiegeEngine(player, Number(d.tier))));
   socket.on('siege:deployEngine', act((d) => game.deploySiegeEngine(player, String(d.key), Number(d.tier))));

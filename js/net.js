@@ -228,6 +228,7 @@ class RemoteServer {
   updateTradeOffer(offer) { return this.req('trade:offer', { offer }); }
   confirmTrade(accept) { return this.req('trade:confirm', { accept }); }
   cancelTrade() { return this.req('trade:cancel', {}); }
+  duelPreview(targetId) { return this.req('duel:preview', { targetId }); }
   requestDuel(targetId) { return this.req('duel:request', { targetId }); }
   respondDuelInvite(fromId, accept) { return this.req('duel:respond', { fromId, accept }); }
   setAdminTier(kind, tier) { return this.req('admin:tier', { kind, tier }); }
@@ -261,6 +262,7 @@ class RemoteServer {
   reinforceCastle(terrain) { return this.req('castle:reinforce', { terrain }); }
   repairCastle(terrain, gold) { return this.req('castle:repair', { terrain, gold }); }
   fortifyCastle(terrain) { return this.req('castle:fortify', { terrain }); }
+  assaultCastlePreview(terrain) { return this.req('castle:assaultPreview', { terrain }); }
   assaultCastle(terrain) { return this.req('castle:assault', { terrain }); }
   craftSiegeEngine(tier) { return this.req('castle:craftEngine', { tier }); }
   deploySiegeEngine(key, tier) { return this.req('siege:deployEngine', { key, tier }); }

@@ -14,6 +14,7 @@ const CONFIG = {
 
   VIEW_RADIUS: 4,      // rayon de vision (brouillard de guerre)
   JOIN_RADIUS: 6,      // distance max pour rejoindre un lobby de raid
+  RAID_ALERT_RADIUS: 15, // rayon d'alerte « combat à proximité » à l'ouverture d'un lobby
   SAFE_RADIUS: 3,      // zone sans monstre autour de la Capitale
 
   // Glisser pour explorer la caméra loin du héros (tape une case révélée
@@ -62,6 +63,12 @@ const CONFIG = {
     WOUND_FLOOR: 0.4,
     DEATH_HP_PCT: 0.25,     // PV au réveil à la Capitale après une mort
     DRUID_HEAL_PCT: 0.15,   // Sève : % des PV max rendus après une victoire
+    // Usure d'une victoire : multiplicateur appliqué à la perte de PV de base
+    // (voir resolveRaid) selon la marge du jet — gagner de justesse (marge
+    // proche de 0) laisse un combat éprouvant, gagner largement (jet loin
+    // au-dessus du seuil, critique compris) laisse presque indemne.
+    HP_LOSS_MARGIN_MIN: 0.4,   // victoire écrasante (marge maximale)
+    HP_LOSS_MARGIN_MAX: 1.8,   // victoire arrachée (marge nulle, jet == seuil)
   },
 
   // Chance qu'un monstre vaincu lâche un ingrédient de cuisine de son tier
@@ -885,6 +892,21 @@ function winChance(teamPower, monsterForce) {
   return Math.min(CONFIG.COMBAT.MAX_CHANCE, Math.max(CONFIG.COMBAT.MIN_CHANCE, p));
 }
 
+/* Jet de dé (d100) équivalent à la comparaison probabiliste ci-dessus,
+ * habillé en vrai jet pour l'animation de combat : on tire un nombre 1-100
+ * et on le compare à un SEUIL « tu gagnes sur un N+ » plutôt que de comparer
+ * une probabilité brute à un nombre 0-1 — même résultat statistique, mais
+ * un nombre affichable. winChance() étant déjà bornée [2 %, 98 %], le seuil
+ * reste toujours dans [3, 99] : il y a donc toujours au moins 1/100 de
+ * chance de chaque issue (le clamp ci-dessous n'est qu'un filet de sécurité
+ * si cette borne venait à changer). */
+function winThreshold(chance) {
+  return Math.max(1, Math.min(100, 101 - Math.round(chance * 100)));
+}
+function rollD100(rng) {
+  return 1 + Math.floor((rng || Math.random)() * 100);
+}
+
 /* Or lâché par un monstre vaincu (par participant humain).
  * T1 ≈ 7-9, T3 ≈ 15-21, T5 ≈ 23-33, T6 ≈ 27-39 — le Chapardeur
  * du Renard (×1,5) s'applique aussi à l'or. */
@@ -949,7 +971,7 @@ if (typeof module !== 'undefined' && module.exports) {
     skinFor, skinAssetUrl, classSkinScale, baseSkinAsset, equipmentAsset, classAvailableToRole,
     levelFromXp, playerForce, maxHp, hpLossReduction, stackKey, parseStackKey, resourceFamily,
     newCharacter, syncActiveCharacter, applyCharacter, rollGoldLoot,
-    combatPower, teamPowerOf, winChance,
+    combatPower, teamPowerOf, winChance, winThreshold, rollD100,
     CONSUMABLES, CONSUMABLE_EFFECTS, CONSUMABLE_RECIPES, BUFF_COMBATS,
     consumableDesc, buffPowerMult, buffLossReduction, foodDropFor, resourceLabel, monsterFor,
   };

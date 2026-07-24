@@ -934,6 +934,38 @@ class Game {
   }
 
   /* ---------- Duels amicaux (aucune perte de PV, ni d'or) ---------- */
+  // Chance CANONIQUE d'un duel entre deux joueurs, indépendante de qui défie
+  // qui. winChance(A,B) n'est PAS garantie symétrique par inversion
+  // (winChance(A,B) ≠ 1 − winChance(B,A) en général : c'est une sigmoïde du
+  // RATIO brut des puissances, pas de son logarithme — seul ce dernier
+  // garantirait la symétrie). Or raids/sièges l'appellent toujours dans un
+  // seul sens (équipe vs monstre/défense), donc cette asymétrie n'avait
+  // jamais posé problème avant les duels, où N'IMPORTE LEQUEL des deux
+  // joueurs peut être le premier argument selon qui clique sur « Défier ».
+  // Sans ce figeage, la MÊME paire de joueurs obtenait des chances (et donc
+  // un jet nécessaire) différentes selon qui initiait le duel. On fige donc
+  // un ordre stable (id le plus petit en premier) et on dérive la chance de
+  // chacun par complément — chance et résolution deviennent alors identiques
+  // quel que soit le sens de l'appel.
+  duelChanceOf(player, other) {
+    const [x, y] = player.id < other.id ? [player, other] : [other, player];
+    const chanceX = winChance(combatPower(x), combatPower(y));
+    return player.id === x.id ? chanceX : 1 - chanceX;
+  }
+
+  // Aperçu AVANT d'envoyer un défi — lecture seule (ne crée aucune
+  // invitation) : renvoie les chances brutes (comme partout ailleurs dans le
+  // jeu), le client les passe telles quelles à thresholdHtml() pour afficher
+  // « gagne sur N+ » avant de s'engager (voir aussi yourChance/opponentChance
+  // inclus dans l'évènement duelInvite lui-même, pour l'aperçu côté invité).
+  duelPreview(p, targetId) {
+    const target = this.players.get(String(targetId));
+    if (!target || target.bot) return { ok: false, error: 'Joueur introuvable.' };
+    if (target.id === p.id) return { ok: false, error: 'Impossible de se défier soi-même.' };
+    const chance = this.duelChanceOf(p, target);
+    return { ok: true, opponent: target.username, yourChance: chance, opponentChance: 1 - chance };
+  }
+
   requestDuel(p, targetId) {
     const target = this.players.get(String(targetId));
     if (!target || target.bot) return { ok: false, error: 'Joueur introuvable.' };
@@ -941,8 +973,18 @@ class Game {
     if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
     if (target.status !== 'IDLE') return { ok: false, error: 'Ce joueur est occupé.' };
     if (!this.playerNear(p, target, 1)) return { ok: false, error: 'Vous devez être au contact pour défier.' };
+    // Chances vues par l'INVITÉ (sa propre chance de gagner s'il accepte) —
+    // affichées dans le popup de défi avant qu'il ne décide. Calculée dans le
+    // MÊME sens que duelPreview/resolveDuel (chance du challenger p, puis
+    // complément) plutôt qu'un second appel indépendant, pour rester cohérent
+    // avec l'aperçu déjà vu par le challenger.
+    const chanceChallenger = this.duelChanceOf(p, target);
     this.duelInvites.set(target.id, { fromId: p.id, toId: target.id, at: this.now });
-    this.send(target.id, 'duelInvite', { fromPlayer: this.publicPlayer(p) });
+    this.send(target.id, 'duelInvite', {
+      fromPlayer: this.publicPlayer(p),
+      yourChance: 1 - chanceChallenger,
+      opponentChance: chanceChallenger,
+    });
     this.toast(p, 'Défi envoyé à ' + target.username + '.');
     return { ok: true };
   }
@@ -964,11 +1006,27 @@ class Game {
   }
 
   /* Amical : pas de PV perdus, pas d'or en jeu — seul le palmarès évolue. */
+  // Issue COLLECTIVE d'un affrontement à deux (comme un raid ou un siège) :
+  // un seul jet a du sens, pas un par duelliste — deux dés indépendants
+  // faussaient le pourcentage annoncé (la comparaison par marge favorisait
+  // le favori bien plus que la chance affichée ne le laissait supposer).
+  // Un seul tirage détermine donc l'issue, attribué à l'un des deux
+  // duellistes tiré au sort pour l'affichage (« X lance le dé »), exactement
+  // comme resolveRaid/resolveSiege. Chaque camp reçoit néanmoins son propre
+  // jet/seuil affichés (miroir 101−jet / 102−seuil pour le perdant du tirage)
+  // afin que « gagne sur N+ » reste cohérent de son point de vue — même
+  // technique que showSiegeResult côté client, mais calculée ici côté serveur.
   resolveDuel(a, b) {
     const powerA = combatPower(a);
     const powerB = combatPower(b);
-    const chance = winChance(powerA, powerB);
-    const aWins = this.rng() < chance;
+    const chanceA = this.duelChanceOf(a, b);
+    const chanceB = 1 - chanceA;
+    const thresholdA = winThreshold(chanceA);
+    const thresholdB = Math.max(1, Math.min(100, 102 - thresholdA));
+    const roll = rollD100(this.rng);
+    const aWins = roll >= thresholdA;
+    const critOf = (r) => (r === 1 ? 'fail' : (r === 100 ? 'success' : null));
+    const roller = this.rng() < 0.5 ? a : b;
     const winner = aWins ? a : b;
     const loser = aWins ? b : a;
     winner.duels.wins += 1;
@@ -980,11 +1038,13 @@ class Game {
     this.notifyAchievements(loser, checkAchievements(loser, ['Duels']));
     this.send(a.id, 'duelResult', {
       opponent: b.username, won: aWins,
-      chance: Math.round(chance * 100), yourPower: Math.round(powerA), opponentPower: Math.round(powerB),
+      chance: Math.round(chanceA * 100), yourPower: Math.round(powerA), opponentPower: Math.round(powerB),
+      roll, threshold: thresholdA, critical: critOf(roll), rollerUsername: roller.username,
     });
     this.send(b.id, 'duelResult', {
       opponent: a.username, won: !aWins,
-      chance: Math.round((1 - chance) * 100), yourPower: Math.round(powerB), opponentPower: Math.round(powerA),
+      chance: Math.round(chanceB * 100), yourPower: Math.round(powerB), opponentPower: Math.round(powerA),
+      roll: 101 - roll, threshold: thresholdB, critical: critOf(101 - roll), rollerUsername: roller.username,
     });
     this.log('⚔️ ' + winner.username + ' bat ' + loser.username + ' en duel amical.');
     this.pushSelf(a);
@@ -1310,6 +1370,27 @@ class Game {
     return { ok: true, fortLevel: c.fortLevel };
   }
 
+  // Aperçu du seuil AVANT de lancer un siège (assaut solo, sans engin encore
+  // déployé — le vrai jet à la résolution tiendra compte des alliés/engins
+  // qui rejoignent le lobby entre-temps) : lecture seule, ne crée aucun
+  // lobby. Sert à afficher « gagne sur N+ » dans le popup du château avant
+  // de s'engager, symétrique à l'affichage déjà présent une fois le siège lancé.
+  siegePreview(p, terrain) {
+    if (!CASTLE_TERRAINS.includes(terrain)) return { ok: false, error: 'Zone invalide.' };
+    if (!p.guildId) return { ok: false, error: 'Vous devez être dans une guilde.' };
+    const c = this.castleOf(terrain);
+    if (!c.ownerGuildId) return { ok: false, error: 'Ce château n’appartient à personne.' };
+    if (c.ownerGuildId === p.guildId) return { ok: false, error: 'C’est le château de votre guilde.' };
+    const tile = this.castleTileFor(terrain);
+    const defenders = [...this.players.values()].filter((m) =>
+      !m.bot && m.guildId === c.ownerGuildId && (m.mapId || 'world') === 'world' &&
+      tile && m.pos.x === tile.x && m.pos.y === tile.y
+    );
+    const defense = this.castleDefenseForce(c) + teamPowerOf(defenders);
+    const force = teamPowerOf([p]);
+    return { ok: true, chance: winChance(force, defense) };
+  }
+
   /* Lance (ou rejoint) un siège : un lobby de 30 s s'ouvre, comme pour un raid
    * de monstre — les autres membres de la guilde assaillante ont le temps
    * de venir grossir les rangs avant la résolution (voir resolveSiege). */
@@ -1438,8 +1519,16 @@ class Game {
     const engineDamage = engines.reduce((sum, e) => sum + (SIEGE_ENGINE_DAMAGE[e.tier] || 0), 0);
 
     const force = teamPowerOf(attackers) + engineForce;
+    // Issue COLLECTIVE (assaillants ET défenseurs partagent la même issue) :
+    // un seul jet, attribué à un participant tiré au sort (attaquant ou
+    // défenseur présent) pour l'affichage — même principe qu'un raid.
     const chance = winChance(force, defense);
-    const victory = this.rng() < chance;
+    const threshold = winThreshold(chance);
+    const roll = rollD100(this.rng);
+    const victory = roll >= threshold;
+    const critical = roll === 1 ? 'fail' : (roll === 100 ? 'success' : null);
+    const rollerPool = attackers.concat(defenders);
+    const roller = rollerPool.length ? rollerPool[Math.floor(this.rng() * rollerPool.length)] : null;
     let captured = false;
 
     if (!victory) {
@@ -1485,6 +1574,7 @@ class Game {
       this.send(a.id, 'siegeResult', {
         role: 'attacker',
         victory, captured, chance,
+        roll, threshold, critical, rollerUsername: roller ? roller.username : null,
         terrain: raid.terrain,
         label: raid.label,
         teamForce: Math.round(force),
@@ -1505,6 +1595,7 @@ class Game {
       this.send(d.id, 'siegeResult', {
         role: 'defender',
         victory, captured, chance,
+        roll, threshold, critical, rollerUsername: roller ? roller.username : null,
         terrain: raid.terrain,
         label: raid.label,
         teamForce: Math.round(force),
@@ -1683,7 +1774,7 @@ class Game {
         if (m.channel === 'whisper') return m.fromId === p.id || m.toId === p.id;
         return true;
       })
-      .map((m) => ({ from: m.from, to: m.to, text: m.text, type: m.type, channel: m.channel }));
+      .map((m) => ({ from: m.from, to: m.to, text: m.text, type: m.type, channel: m.channel, ts: m.ts }));
   }
 
   raidsPayload() {
@@ -1815,7 +1906,11 @@ class Game {
     }
 
     this.pendingReplies = this.pendingReplies.filter((r) => {
-      if (this.now >= r.at) { this.broadcast('chat', r.msg); return false; }
+      if (this.now >= r.at) {
+        r.msg.ts = Date.now();   // horodatage au moment réel de l'envoi, pas de la planification
+        this.broadcast('chat', r.msg);
+        return false;
+      }
       return true;
     });
   }
@@ -1926,6 +2021,19 @@ class Game {
       leaderId: p.id,
       endsAt: this.now + CONFIG.LOBBY_MS,
     });
+    // Alerte de proximité : un lobby de raid n'a aucune autre signalisation
+    // (contrairement à un siège, toujours visible sur la mini-carte + toast
+    // global) — sans ça, un allié à quelques cases ne sait même pas qu'un
+    // combat vient de s'ouvrir et le lobby se referme (30 s) avant qu'il ne
+    // le remarque par hasard sur son écran. Ciblé (pas un worldNotify global :
+    // les raids sont bien trop fréquents pour ça) aux joueurs à portée sur la
+    // MÊME carte/instance.
+    for (const other of this.players.values()) {
+      if (other.bot || other.id === p.id || !other.online) continue;
+      if (other.mapId !== p.mapId) continue;
+      if (this.chebyshev(other.pos, tile) > CONFIG.RAID_ALERT_RADIUS) continue;
+      this.toast(other, '⚔ ' + p.username + ' affronte ' + monster.label + ' T' + monster.tier + ' à proximité — rejoignez le combat !');
+    }
     return { ok: true };
   }
 
@@ -1983,9 +2091,18 @@ class Game {
     const members = raid.participants.map((id) => this.memberById(id)).filter(Boolean);
     const humans = members.filter((p) => !p.bot);
     const force = this.teamForce(raid);
-    // Combat probabiliste : le sort en décide, à hauteur des puissances
+    // Combat probabiliste : le sort en décide, à hauteur des puissances.
+    // Issue COLLECTIVE (tout le groupe gagne ou perd ensemble, butin
+    // partagé) : un seul jet a du sens, pas un par participant — mais on
+    // l'attribue à un participant tiré au sort pour que chacun voie « X
+    // lance le dé pour le groupe » plutôt qu'un jet anonyme.
     const chance = winChance(force, raid.monsterForce);
-    const victory = this.rng() < chance;
+    const threshold = winThreshold(chance);
+    const roll = rollD100(this.rng);
+    const victory = roll >= threshold;
+    const critical = roll === 1 ? 'fail' : (roll === 100 ? 'success' : null);
+    const rollerPool = humans.length ? humans : members;
+    const roller = rollerPool[Math.floor(this.rng() * rollerPool.length)];
     const druid = victory && members.some((p) => p.speciesClass === 'CERF_DRUIDE');
     const rampart = members.some((p) => p.speciesClass === 'OURS_GUERRIER');
 
@@ -2014,7 +2131,14 @@ class Game {
       // sauver d'une blessure autrement fatale. Gagner le combat ne protège
       // plus d'une mort par blessure : une victoire trop coûteuse en PV reste
       // mortelle (même traitement qu'une défaite — rapatriement, PV réduits).
-      let loss = 4 + monster.tier * 3;
+      // La marge du jet (roll − seuil) module cette usure : une victoire
+      // arrachée de justesse laisse le groupe bien plus marqué qu'un combat
+      // remporté haut la main — un montant fixe par tier ne racontait pas
+      // la différence entre un combat à l'arraché et un massacre sans contact.
+      const marginRatio = Math.max(0, Math.min(1, (roll - threshold) / Math.max(1, 100 - threshold)));
+      const marginMult = CONFIG.COMBAT.HP_LOSS_MARGIN_MAX -
+        (CONFIG.COMBAT.HP_LOSS_MARGIN_MAX - CONFIG.COMBAT.HP_LOSS_MARGIN_MIN) * marginRatio;
+      let loss = (4 + monster.tier * 3) * marginMult;
       loss *= hpLossReduction(p);
       if (rampart) loss *= 0.7;
       loss *= buffLossReduction(p);
@@ -2119,7 +2243,7 @@ class Game {
     }
     this.log('⚔ Raid ' + raid.label + ' T' + raid.tier + ' : ' +
       (victory ? 'VICTOIRE' : 'DEFAITE — l’équipe a péri') +
-      ' (' + Math.round(chance * 100) + ' % de chances, équipe ' + force + ' vs ' + raid.monsterForce + ')');
+      ' (jet ' + roll + ' vs seuil ' + threshold + ', ' + Math.round(chance * 100) + ' % de chances, équipe ' + force + ' vs ' + raid.monsterForce + ')');
 
     for (const p of humans) {
       const rw = rewards.get(p.id);
@@ -2127,6 +2251,10 @@ class Game {
         victory,
         died: !victory || diedById.has(p.id),
         chance,
+        roll,
+        threshold,
+        critical,
+        rollerUsername: roller ? roller.username : null,
         label: raid.label,
         monsterType: monster.type,
         tier: raid.tier,
@@ -2598,11 +2726,15 @@ class Game {
     text = String(text || '').trim().slice(0, 120);
     if (!text) return { ok: false, error: 'Message vide.' };
     channel = (channel === 'guild' || channel === 'whisper') ? channel : 'general';
+    // Horodatage réel (Date.now()), pas this.now : ce dernier n'est qu'un
+    // compteur relatif au démarrage du serveur (accéléré par SPEED en dev),
+    // impropre à afficher une heure/date véritable dans le chat.
+    const ts = Date.now();
 
     if (channel === 'guild') {
       const guild = this.guildOf(p);
       if (!guild) return { ok: false, error: 'Vous n’êtes pas dans une guilde.' };
-      const payload = { from: p.username, text, type: 'chat', channel: 'guild' };
+      const payload = { from: p.username, text, type: 'chat', channel: 'guild', ts };
       this.recordChat({ ...payload, fromId: p.id, guildId: guild.id });
       for (const id of guild.members) {
         const m = this.players.get(id);
@@ -2616,7 +2748,7 @@ class Game {
       if (!target || target.bot) return { ok: false, error: 'Joueur introuvable.' };
       if (target.id === p.id) return { ok: false, error: 'Impossible de vous écrire à vous-même.' };
       if (!p.friends.includes(target.id)) return { ok: false, error: 'Les messages privés sont réservés à vos amis.' };
-      const payload = { from: p.username, to: target.username, text, type: 'chat', channel: 'whisper' };
+      const payload = { from: p.username, to: target.username, text, type: 'chat', channel: 'whisper', ts };
       this.recordChat({ ...payload, fromId: p.id, toId: target.id });
       this.send(p.id, 'chat', payload);
       if (target.online) this.send(target.id, 'chat', payload);
@@ -2624,7 +2756,7 @@ class Game {
       return { ok: true, offline: !target.online };
     }
 
-    const generalPayload = { from: p.username, text, type: 'chat', channel: 'general' };
+    const generalPayload = { from: p.username, text, type: 'chat', channel: 'general', ts };
     this.recordChat({ ...generalPayload, fromId: p.id });
     this.broadcast('chat', generalPayload);
     if (Math.random() < 0.5) {

@@ -31,6 +31,18 @@ g.sendPush = (id, title, body) => pushed.push({ id, title, body });
 // testé séparément plus bas, en la réactivant ponctuellement.
 g.isSiegeWindowOpen = () => true;
 
+// Jets de dé déterministes : resolveRaid()/resolveSiege() consomment un
+// this.rng() pour le jet de victoire PUIS un autre pour le tirage au sort du
+// « lanceur de dé » affiché (voir Game.resolveRaid) ; resolveDuel() en
+// consomme un par duelliste (jet propre à chacun, voir Game.resolveDuel).
+// Une simple constante ne suffit donc plus toujours à forcer un résultat
+// (ex. victoire ET récolte d'un objet à chance fixe dans le même combat) —
+// rngSequence fournit une valeur par appel, en répétant la dernière au-delà.
+function rngSequence(...values) {
+  let i = 0;
+  return () => (i < values.length ? values[i++] : values[values.length - 1]);
+}
+
 // --- Comptes : inscription / connexion / token ---
 let r = g.register({ username: 'Alice', password: 'secret1', speciesClass: 'LION_PALADIN', email: 'alice@test.dev' });
 assert.ok(r.ok && r.created, 'inscription');
@@ -124,7 +136,18 @@ bob.pos = { x: mon.x + 1, y: mon.y };
 alice.pa = 50; bob.pa = 50;
 for (const b of g.bots.values()) { b.pos = { x: mon.x + 2, y: mon.y + 2 }; b.home = b.pos; }
 
+sent.length = 0;
 assert.ok(g.createRaid(alice, mon.x, mon.y).ok, 'lobby créé');
+// Alerte de proximité : seule façon de savoir qu'un combat vient de s'ouvrir
+// avant que le lobby (30 s) ne se referme sans qu'on ne l'ait remarqué —
+// voir Game.createRaid. Bob est adjacent au monstre : il doit être alerté ;
+// les bots (jamais dans this.players, voir la génération des bots) ne
+// peuvent de toute façon pas en recevoir.
+const proximityToasts = sent.filter((m) => m.ev === 'toast');
+assert.strictEqual(proximityToasts.length, 1, 'un seul joueur proche alerté (Bob)');
+assert.strictEqual(proximityToasts[0].id, bob.id, 'Bob est le destinataire du toast de proximité');
+assert.ok(/affronte/.test(proximityToasts[0].data.text), 'le toast mentionne le combat en cours');
+
 assert.ok(g.joinRaid(bob, tileKeyOf(mon)).ok, 'Bob rejoint');
 g.tick(5000);   // le temps que les bots rejoignent
 
@@ -134,7 +157,7 @@ assert.ok(raid, 'lobby encore ouvert (30 s non écoulées)');
 assert.ok(raid.participants.length >= 2, 'participants présents : ' + raid.participants.length);
 
 assert.ok(!g.startRaidNow(bob, key).ok, 'seul le chef peut lancer');
-g.rng = () => 0;   // victoire forcée pour tester les récompenses
+g.rng = () => 0.999;   // victoire forcée (jet 100) pour tester les récompenses
 assert.ok(g.startRaidNow(alice, key).ok, 'lancement immédiat par le chef');
 g.tick(300);
 g.rng = Math.random;
@@ -143,6 +166,16 @@ assert.ok(!g.raids.has(key), 'raid résolu');
 const results = sent.filter((m) => m.ev === 'result');
 assert.strictEqual(results.length, 2, 'résultat envoyé aux deux humains');
 assert.ok(results[0].data.victory, 'victoire attendue');
+// Jet de dé (d100) : le jet forcé au maximum (100) doit dépasser le seuil,
+// être signalé comme réussite critique, et le lanceur affiché doit être un
+// des deux participants humains — même jet et même lanceur envoyés aux deux
+// (issue collective, voir Game.resolveRaid).
+assert.strictEqual(results[0].data.roll, 100, 'jet forcé au maximum reflété dans le rapport');
+assert.ok(results[0].data.threshold >= 1 && results[0].data.threshold <= 100, 'seuil dans [1,100]');
+assert.ok(results[0].data.roll >= results[0].data.threshold, 'jet ≥ seuil ⇒ victoire');
+assert.strictEqual(results[0].data.critical, 'success', 'jet 100 = réussite critique');
+assert.ok(['Alice', 'Bob'].includes(results[0].data.rollerUsername), 'lanceur tiré au sort parmi les humains');
+assert.strictEqual(results[0].data.rollerUsername, results[1].data.rollerUsername, 'même lanceur affiché aux deux (issue collective)');
 console.log('Raid T2 : équipe ' + results[0].data.teamForce + ' vs ' + results[0].data.monsterForce +
   ' (' + results[0].data.participants.length + ' participants)');
 assert.strictEqual(alice.status, 'IDLE');
@@ -209,14 +242,14 @@ for (const t of g.tiles.values()) {
       Math.max(Math.abs(t.x + 45), Math.abs(t.y + 45)) > 12) { boss = t; break; }
 }
 
-// 1) Défaite forcée (rng → 0,999) : MORT, retour Capitale, or intact
+// 1) Défaite forcée (jet 1, sous n'importe quel seuil) : MORT, retour Capitale, or intact
 alice.pos = { x: boss.x - 1, y: boss.y };
 bob.pos = { x: boss.x + 1, y: boss.y };
 alice.pa = 50; bob.pa = 50;
 alice.hp = 100; bob.hp = 100;
 const goldBeforeDeath = alice.gold;
 sent.length = 0;
-g.rng = () => 0.999;
+g.rng = () => 0;
 assert.ok(g.createRaid(alice, boss.x, boss.y).ok, 'lobby T5 créé');
 assert.ok(g.joinRaid(bob, boss.x + ',' + boss.y).ok, 'Bob rejoint le T5');
 assert.ok(g.startRaidNow(alice, boss.x + ',' + boss.y).ok);
@@ -230,7 +263,7 @@ assert.strictEqual(alice.mapId, 'world', 'mort → carte monde');
 assert.strictEqual(alice.hp, Math.ceil(maxHp(alice) * CONFIG.COMBAT.DEATH_HP_PCT), 'réveil à 25 % des PV');
 assert.strictEqual(alice.gold, goldBeforeDeath, 'aucune perte d’or à la mort');
 
-// 2) Victoire forcée (rng → 0) : Rempart d'équipe + Sève en % des PV max
+// 2) Victoire forcée (jet 100, au-dessus de n'importe quel seuil) : Rempart d'équipe + Sève en % des PV max
 let rr = g.register({ username: 'Cara', password: 'secret3', speciesClass: 'OURS_GUERRIER', email: 'cara@test.dev' });
 assert.ok(rr.ok, 'troisième compte');
 const cara = rr.player;
@@ -241,7 +274,7 @@ cara.pos = { x: boss.x, y: boss.y + 1 };
 cara.pa = 50; alice.pa = 50; bob.pa = 50;
 alice.hp = 50; bob.hp = 50; cara.hp = 50;
 sent.length = 0;
-g.rng = () => 0;
+g.rng = () => 0.999;
 assert.ok(g.createRaid(alice, boss.x, boss.y).ok, 'second lobby T5');
 assert.ok(g.joinRaid(bob, boss.x + ',' + boss.y).ok);
 assert.ok(g.joinRaid(cara, boss.x + ',' + boss.y).ok);
@@ -250,19 +283,24 @@ g.tick(300);
 res = sent.filter((m) => m.ev === 'result').map((m) => m.data);
 assert.strictEqual(res.length, 3, 'résultats envoyés aux trois');
 assert.ok(res[0].victory, 'victoire forcée');
-assert.strictEqual(res[0].hpLoss, 13, 'Rempart : usure réduite de 30 % (19 → 13)');
+// Jet 100 == marge maximale → multiplicateur de marge au plancher
+// (HP_LOSS_MARGIN_MIN = 0.4), Rempart réduit encore de 30 % :
+// 19 × 0.4 × 0.7 = 5.32 → 5.
+assert.strictEqual(res[0].hpLoss, 5, 'Rempart + marge maximale : usure réduite (19 → 5)');
 const aliceHeal = Math.round(maxHp(alice) * CONFIG.COMBAT.DRUID_HEAL_PCT);
 const caraHeal = Math.round(maxHp(cara) * CONFIG.COMBAT.DRUID_HEAL_PCT);
-assert.strictEqual(alice.hp, 50 - 13 + aliceHeal, 'Sève : +15 % des PV max après victoire');
-assert.strictEqual(cara.hp, 50 - 13 + caraHeal, 'Rempart + Sève profitent aussi à l’Ours');
+assert.strictEqual(alice.hp, 50 - 5 + aliceHeal, 'Sève : +15 % des PV max après victoire');
+assert.strictEqual(cara.hp, 50 - 5 + caraHeal, 'Rempart + Sève profitent aussi à l’Ours');
 
-// 3) Victoire mortelle (rng → 0, sans Bob/Sève) : une usure trop lourde tue
-// malgré la victoire — plus de plancher à 1 PV.
+// 3) Victoire mortelle (rng toujours à 0.999, sans Bob/Sève) : une usure
+// trop lourde tue malgré la victoire — plus de plancher à 1 PV. Perte
+// attendue (marge maximale, Rempart actif via Cara) : 5 PV (voir plus haut) —
+// PV d'Alice fixés en dessous pour rester létaux même avec la perte réduite.
 boss.content.inactiveUntil = 0;
 alice.pos = { x: boss.x - 1, y: boss.y };
 cara.pos = { x: boss.x + 1, y: boss.y };
 alice.pa = 50; cara.pa = 50;
-alice.hp = 10; cara.hp = 100;
+alice.hp = 4; cara.hp = 100;
 const goldBeforeLethalVictory = alice.gold;
 sent.length = 0;
 assert.ok(g.createRaid(alice, boss.x, boss.y).ok, 'troisième lobby T5 (sans Bob)');
@@ -296,6 +334,45 @@ assert.ok(res[0].victory && !res[0].died, 'Sève évite la mort malgré une bles
 assert.ok(alice.hp > 0, 'Alice survit grâce à la Sève');
 g.rng = Math.random;
 console.log('Combat : mort en défaite ✔, Sève % ✔, Rempart ✔, victoire mortelle ✔, Sève sauve d’une blessure fatale ✔');
+
+// --- Usure proportionnelle à la marge du jet (pas un montant fixe par tier) ---
+// Même joueur, même monstre : un jet tout juste au seuil (marge nulle, la
+// victoire la plus juste possible) doit coûter le maximum de PV, un jet à
+// 100 (marge maximale) le minimum — vérifié en forçant les deux jets plutôt
+// que de supposer la formule correcte.
+{
+  let t1mob = null;
+  for (const t of g.tiles.values()) {
+    if (t.content && t.content.kind === 'monster' && t.content.tier === 1) { t1mob = t; break; }
+  }
+  const soloThreshold = winThreshold(winChance(teamPowerOf([alice]), t1mob.content.force));
+
+  alice.pos = { x: t1mob.x - 1, y: t1mob.y };
+  alice.pa = 50; alice.hp = maxHp(alice);
+  sent.length = 0;
+  g.rng = () => Math.max(0, (soloThreshold - 1) / 100);   // jet == seuil (marge nulle)
+  assert.ok(g.createRaid(alice, t1mob.x, t1mob.y).ok, 'lobby T1 (marge nulle)');
+  assert.ok(g.startRaidNow(alice, tileKeyOf(t1mob)).ok);
+  g.tick(300);
+  const narrowResult = sent.filter((m) => m.ev === 'result')[0].data;
+  assert.ok(narrowResult.victory, 'jet == seuil reste une victoire');
+  const narrowLoss = narrowResult.hpLoss;
+
+  t1mob.content.inactiveUntil = 0;
+  alice.pos = { x: t1mob.x - 1, y: t1mob.y };
+  alice.pa = 50; alice.hp = maxHp(alice);
+  sent.length = 0;
+  g.rng = () => 0.999;   // jet 100 (marge maximale)
+  assert.ok(g.createRaid(alice, t1mob.x, t1mob.y).ok, 'lobby T1 (marge maximale)');
+  assert.ok(g.startRaidNow(alice, tileKeyOf(t1mob)).ok);
+  g.tick(300);
+  const wideLoss = sent.filter((m) => m.ev === 'result')[0].data.hpLoss;
+
+  assert.ok(narrowLoss > wideLoss,
+    'une victoire arrachée (marge nulle, ' + narrowLoss + ' PV) coûte plus qu’une victoire écrasante (marge maximale, ' + wideLoss + ' PV)');
+  g.rng = Math.random;
+  console.log('Usure de victoire proportionnelle à la marge du jet : ' + narrowLoss + ' PV de justesse vs ' + wideLoss + ' PV en écrasant ✔');
+}
 
 // --- Ancres de la courbe de probabilité ---
 assert.ok(Math.abs(winChance(26, 26) - 0.71) < 0.02, 'parité (T0 vs T1) ≈ 70 %');
@@ -437,7 +514,7 @@ alice.pos = { x: mob.x - 1, y: mob.y };
 alice.pa = 50;
 alice.hp = maxHp(alice);
 sent.length = 0;
-g.rng = () => 0;   // victoire ET drop garantis
+g.rng = rngSequence(0.999, 0, 0);   // jet de victoire (100) puis tirage du lanceur/drop garantis (0)
 assert.ok(g.createRaid(alice, mob.x, mob.y).ok, 'raid cuisine');
 assert.ok(g.startRaidNow(alice, mob.x + ',' + mob.y).ok);
 g.tick(300);
@@ -583,6 +660,53 @@ assert.ok(g.requestDuel(bob, carl.id).ok, 'défi envoyé');
 const duelInvites = sent.filter((m) => m.ev === 'duelInvite');
 assert.strictEqual(duelInvites.length, 1, 'invitation reçue');
 assert.strictEqual(duelInvites[0].id, carl.id, 'invitation adressée à Carl');
+// L'invitation embarque la chance vue par l'INVITÉ(E) (Carl), pour afficher
+// le jet nécessaire avant même d'accepter ou de refuser (voir showDuelInvite).
+assert.strictEqual(typeof duelInvites[0].data.yourChance, 'number', 'invitation : chance de l’invité(e) incluse');
+assert.ok(Math.abs(duelInvites[0].data.yourChance + duelInvites[0].data.opponentChance - 1) < 1e-9,
+  'invitation : chances complémentaires (invité(e) + adversaire = 1)');
+
+// --- Aperçu AVANT l'envoi d'un défi (duelPreview, lecture seule) ---
+// Une invitation réelle (bob → carl, ci-dessus) est déjà en attente à ce
+// stade : on vérifie que duelPreview ne la modifie ni n'en ajoute d'autre,
+// plutôt que de supposer duelInvites vide.
+const duelInvitesSizeBefore = g.duelInvites.size;
+const duelInviteForCarlBefore = g.duelInvites.get(carl.id);
+const preview1 = g.duelPreview(bob, carl.id);
+assert.ok(preview1.ok && preview1.opponent === 'Carl', 'aperçu de duel accepté, adversaire identifié');
+assert.strictEqual(typeof preview1.yourChance, 'number', 'aperçu : chance du challenger incluse');
+assert.ok(Math.abs(preview1.yourChance + preview1.opponentChance - 1) < 1e-9, 'aperçu : chances complémentaires');
+// Cohérence croisée : la chance de Bob vue dans SON propre aperçu (avant
+// envoi) doit être EXACTEMENT celle que Carl voit comme « chance adverse »
+// dans l'invitation déjà reçue — pas juste chacune complémentaire en
+// interne. winChance() n'étant pas garantie symétrique (winChance(A,B) ≠
+// 1 − winChance(B,A) en général), un bug déjà rencontré ici faisait que
+// requestDuel recalculait la chance de l'invité(e) via un second appel à
+// winChance() aux arguments inversés au lieu de réutiliser le complément
+// de la chance du challenger — les deux popups affichaient alors des jets
+// nécessaires incohérents pour le même duel.
+assert.ok(Math.abs(preview1.yourChance - duelInvites[0].data.opponentChance) < 1e-9,
+  'cohérence : chance du challenger (aperçu) === chance adverse vue par l’invité(e) (invitation)');
+assert.ok(!g.duelPreview(bob, bob.id).ok, 'aperçu refusé : impossible de se prévisualiser soi-même');
+assert.ok(!g.duelPreview(bob, 'bot0').ok, 'aperçu refusé : impossible de prévisualiser un défi à un bot');
+assert.ok(!g.duelPreview(bob, 'p_personne').ok, 'aperçu refusé : joueur introuvable');
+assert.strictEqual(g.duelInvites.size, duelInvitesSizeBefore, 'duelPreview ne crée aucune invitation (lecture seule)');
+assert.deepStrictEqual(g.duelInvites.get(carl.id), duelInviteForCarlBefore, 'duelPreview laisse l’invitation existante intacte');
+
+// Indépendance vis-à-vis de qui défie qui : winChance() n'étant pas garantie
+// symétrique par inversion (winChance(A,B) ≠ 1 − winChance(B,A) en général —
+// sigmoïde du ratio brut des puissances, pas de son logarithme), un calcul
+// naïf ferait dépendre l'issue réelle du MÊME duel (Bob 25 contre Carl X)
+// de qui clique sur « Défier » en premier. duelChanceOf() fige un ordre
+// stable : la chance de Bob contre Carl doit être identique, que ce soit
+// Bob qui prévisualise un défi à Carl, ou Carl qui prévisualise un défi à
+// Bob (aperçu symétrique, pas juste complémentaire en interne).
+const previewBobToCarl = g.duelPreview(bob, carl.id);
+const previewCarlToBob = g.duelPreview(carl, bob.id);
+assert.ok(Math.abs(previewBobToCarl.yourChance - previewCarlToBob.opponentChance) < 1e-9,
+  'la chance de Bob contre Carl ne dépend pas de qui initie le duel');
+assert.ok(Math.abs(previewCarlToBob.yourChance - previewBobToCarl.opponentChance) < 1e-9,
+  'la chance de Carl contre Bob ne dépend pas de qui initie le duel');
 
 // Refus : pas de résolution, aucun résultat envoyé
 sent.length = 0;
@@ -595,7 +719,13 @@ const bobHpBefore = bob.hp, carlHpBefore = carl.hp;
 const bobWinsBefore = bob.duels.wins, carlLossesBefore = carl.duels.losses;
 sent.length = 0;
 assert.ok(g.requestDuel(bob, carl.id).ok, 'second défi envoyé');
-g.rng = () => 0;   // Bob l'emporte à coup sûr
+// resolveDuel tire désormais UN SEUL jet partagé (issue collective, comme un
+// raid/siège — voir Game.resolveDuel) plutôt qu'un jet indépendant par
+// duelliste : deux dés indépendants faussaient le pourcentage annoncé (la
+// comparaison par marge favorisait le favori bien plus que la chance
+// affichée ne le laissait supposer). rng() est consommé deux fois : le jet
+// (forcé au maximum, 100) puis le tirage au sort du « lanceur de dé ».
+g.rng = rngSequence(0.999, 0);   // jet 100 (Bob l'emporte à coup sûr), Bob tiré comme lanceur
 assert.ok(g.respondDuelInvite(carl, bob.id, true).ok, 'duel accepté');
 g.rng = Math.random;
 
@@ -605,6 +735,18 @@ const bobResult = duelResults.find((m) => m.id === bob.id).data;
 const carlResult = duelResults.find((m) => m.id === carl.id).data;
 assert.ok(bobResult.won && !carlResult.won, 'Bob remporte le duel forcé');
 assert.strictEqual(bobResult.opponent, 'Carl', 'adversaire de Bob correctement identifié');
+// Un seul jet réel (100, forcé), mais chaque duelliste voit son propre
+// jet/seuil affiché en miroir (101 − jet / 102 − seuil pour Carl) plutôt que
+// le même jet brut des deux côtés — cohérent avec showSiegeResult qui fait
+// déjà ce miroir côté client pour l'attaquant/défenseur d'un siège.
+assert.strictEqual(bobResult.roll, 100, 'jet forcé au maximum (vu par Bob)');
+assert.strictEqual(bobResult.critical, 'success', 'jet 100 = réussite critique pour Bob');
+assert.strictEqual(carlResult.roll, 1, 'jet miroir (101 − 100) vu par Carl');
+assert.strictEqual(carlResult.critical, 'fail', 'jet 1 = échec critique pour Carl (miroir de la réussite de Bob)');
+assert.strictEqual(carlResult.roll, 101 - bobResult.roll, 'jet de Carl = miroir exact du jet de Bob (101 − jet)');
+assert.strictEqual(carlResult.threshold, 102 - bobResult.threshold, 'seuil de Carl = miroir exact du seuil de Bob (102 − seuil)');
+assert.strictEqual(bobResult.rollerUsername, carlResult.rollerUsername, 'le même lanceur de dé est rapporté aux deux duellistes');
+assert.ok(['Bob', 'Carl'].includes(bobResult.rollerUsername), 'le lanceur de dé est bien l’un des deux duellistes');
 assert.strictEqual(carlResult.opponent, 'Bob', 'adversaire de Carl correctement identifié');
 assert.strictEqual(bob.duels.wins, bobWinsBefore + 1, 'victoire comptabilisée');
 assert.strictEqual(carl.duels.losses, carlLossesBefore + 1, 'défaite comptabilisée');
@@ -730,6 +872,12 @@ assert.ok(g.say(carl, 'Assaut à 20h', 'guild').ok, 'message de guilde envoyé')
 const guildMsgs = sent.filter((m) => m.ev === 'chat' && m.data.channel === 'guild');
 assert.ok(guildMsgs.some((m) => m.id === bob.id), 'Bob (membre en ligne) reçoit le message de guilde');
 assert.ok(!guildMsgs.some((m) => m.id === alice.id), 'Alice (hors guilde) ne reçoit rien');
+// Horodatage RÉEL (Date.now()), pas this.now (compteur de jeu relatif,
+// accéléré par SPEED en dev) — sinon impossible d'afficher une heure/date
+// véritable dans le chat (voir Game.say).
+const guildMsgData = guildMsgs.find((m) => m.id === bob.id).data;
+assert.strictEqual(typeof guildMsgData.ts, 'number', 'horodatage réel inclus dans le message de guilde');
+assert.ok(Math.abs(guildMsgData.ts - Date.now()) < 5000, 'horodatage proche de l’heure réelle');
 
 sent.length = 0;
 assert.ok(!g.say(alice, 'x', 'whisper', 'Bob').ok, 'MP refusé entre non-amis');
@@ -752,6 +900,7 @@ console.log('Canaux : guilde restreinte aux membres ✔, MP réservés aux amis 
 const bobHistory = g.chatHistoryFor(bob);
 assert.strictEqual(bobHistory.length, 1, 'Bob (membre des Faucons, sans MP) ne revoit que le message de guilde');
 assert.strictEqual(bobHistory[0].channel, 'guild', 'entrée bien de type guilde');
+assert.strictEqual(typeof bobHistory[0].ts, 'number', 'l’historique conserve aussi l’horodatage réel');
 
 const aliceHistory = g.chatHistoryFor(alice);
 assert.strictEqual(aliceHistory.length, 2, 'Alice (hors guilde) ne revoit que ses deux MP avec Carl');
@@ -826,6 +975,23 @@ alice.pos = { x: foretCastleTile.x, y: foretCastleTile.y };
 
 assert.ok(!g.createSiege(bob, 'FORET').ok, 'impossible d’assiéger le château de sa propre guilde');
 
+// --- Aperçu du jet nécessaire AVANT de lancer un siège (siegePreview, lecture
+// seule) : même calcul de défense que resolveSiege (garnison + défenseurs
+// présents), sans créer de lobby — Alice seule (aucun engin) contre la
+// garnison des Faucons.
+const siegePreview1 = g.siegePreview(alice, 'FORET');
+assert.ok(siegePreview1.ok, 'aperçu de siège accepté');
+assert.strictEqual(typeof siegePreview1.chance, 'number', 'aperçu de siège : chance numérique');
+assert.ok(siegePreview1.chance > 0 && siegePreview1.chance < 1, 'aperçu de siège : chance bornée entre 0 et 1');
+assert.ok(!g.siegePreview(bob, 'FORET').ok, 'aperçu refusé : château de sa propre guilde');
+assert.ok(!g.siegePreview(alice, 'PLAINE').ok, 'aperçu refusé : château non revendiqué');
+assert.ok(!g.siegePreview(alice, 'ZONE_INVALIDE').ok, 'aperçu refusé : terrain invalide');
+const aliceGuildBackup = alice.guildId;
+alice.guildId = null;
+assert.ok(!g.siegePreview(alice, 'FORET').ok, 'aperçu refusé : hors de toute guilde');
+alice.guildId = aliceGuildBackup;
+assert.ok(!g.raids.has('siege:FORET'), 'siegePreview ne crée aucun lobby (lecture seule)');
+
 const siegeKey = 'siege:FORET';
 alice.pa = 50; alice.hp = maxHp(alice);
 assert.ok(g.createSiege(alice, 'FORET').ok, 'lobby de siège créé');
@@ -835,7 +1001,7 @@ assert.ok(g.raids.has(siegeKey), 'le lobby de siège existe dans this.raids');
 assert.ok(!g.joinRaid(bob, siegeKey).ok, 'un membre de la guilde défenseuse ne peut pas rejoindre le siège adverse');
 assert.ok(!g.startRaidNow(bob, siegeKey).ok, 'seule la meneuse du siège peut le lancer');
 
-g.rng = () => 0.999;   // assaut repoussé à coup sûr
+g.rng = () => 0;   // assaut repoussé à coup sûr (jet 1)
 const beforeFailHp = g.castleOf('FORET').hp;
 sent.length = 0;
 assert.ok(g.startRaidNow(alice, siegeKey).ok, 'la meneuse lance l’assaut');
@@ -869,7 +1035,7 @@ assert.ok(!outOfWindow.ok, 'siège refusé hors de la fenêtre de vulnérabilit�
 assert.ok(/assiégeable/i.test(outOfWindow.error), 'message explicite sur la fenêtre horaire');
 g.isSiegeWindowOpen = () => true;
 
-g.rng = () => 0;   // assaut réussi à coup sûr
+g.rng = () => 0.999;   // assaut réussi à coup sûr (jet 100)
 const beforeHitHp = g.castleOf('FORET').hp;
 sent.length = 0;
 assert.ok(g.createSiege(alice, 'FORET').ok, 'second lobby de siège créé (cooldown expiré)');
@@ -878,6 +1044,12 @@ g.tick(300);
 siegeResults = sent.filter((m) => m.ev === 'siegeResult').map((m) => m.data);
 assert.ok(siegeResults[0].victory && !siegeResults[0].captured, 'assaut réussi mais château pas encore pris');
 assert.strictEqual(g.castleOf('FORET').hp, beforeHitHp - CASTLE_DAMAGE_PER_ASSAULT, 'PS réduits du montant par assaut');
+// Jet de dé (issue collective, comme un raid) : jet forcé au max, réussite
+// critique, lanceur tiré au sort parmi les participants (ici, Alice seule
+// sur la tuile, aucun défenseur présent).
+assert.strictEqual(siegeResults[0].roll, 100, 'jet de siège forcé au maximum');
+assert.strictEqual(siegeResults[0].critical, 'success', 'jet 100 = réussite critique');
+assert.strictEqual(siegeResults[0].rollerUsername, 'Alice', 'seule assaillante présente : lanceur = Alice');
 assert.ok(!g.createSiege(alice, 'FORET').ok, 'cooldown de nouveau actif après ce second siège');
 
 // Assauts répétés (lobby → lancement → résolution) jusqu'à la capture complète
@@ -929,7 +1101,7 @@ assert.ok(siegeAlerts.some((m) => m.id === bob.id) && siegeAlerts.some((m) => m.
   'les deux membres en ligne des Faucons sont alertés de l’assaut, présents ou non');
 
 const garrisonAlone = g.castleDefenseForce(g.castleOf('PLAINE'));
-g.rng = () => 0.999;   // assaut repoussé à coup sûr (issue forcée, seule la puissance de défense nous intéresse ici)
+g.rng = () => 0;   // assaut repoussé à coup sûr, jet 1 (issue forcée, seule la puissance de défense nous intéresse ici)
 sent.length = 0;
 pushed.length = 0;
 assert.ok(g.startRaidNow(alice, plaineSiegeKey).ok);
@@ -1013,7 +1185,7 @@ console.log('Engins de siège : 1 par personne maximum ✔, force ajoutée au ca
 // Résolution perdue : les dégâts d'engin s'appliquent quand même, mais ne peuvent
 // jamais, à eux seuls, faire tomber le château (plancher à 1 PS).
 g.castleOf('MONTAGNE').hp = SIEGE_ENGINE_DAMAGE[1];
-g.rng = () => 0.999;   // assaut repoussé à coup sûr
+g.rng = () => 0;   // assaut repoussé à coup sûr (jet 1)
 sent.length = 0;
 assert.ok(g.startRaidNow(alice, montagneSiegeKey).ok);
 g.tick(300);
@@ -1034,7 +1206,7 @@ g.castleOf('MONTAGNE').nextSiegeAt = 0;   // cooldown déjà couvert par le test
 assert.ok(g.createSiege(alice, 'MONTAGNE').ok, 'second lobby de siège');
 assert.ok(g.deploySiegeEngine(alice, montagneSiegeKey, 1).ok, 'engin redéployé pour ce nouveau siège');
 g.castleOf('MONTAGNE').hp = CASTLE_DAMAGE_PER_ASSAULT + SIEGE_ENGINE_DAMAGE[1];   // pile de quoi tomber à 0
-g.rng = () => 0;   // assaut réussi à coup sûr
+g.rng = () => 0.999;   // assaut réussi à coup sûr (jet 100)
 sent.length = 0;
 assert.ok(g.startRaidNow(alice, montagneSiegeKey).ok);
 g.tick(300);
@@ -1057,7 +1229,7 @@ alice.pa = 50; alice.hp = maxHp(alice); alice.status = 'IDLE';
 const savedRandom = Math.random;
 Math.random = () => 0;   // rollGoldLoot déterministe (minimum de la fourchette)
 sent.length = 0;
-g.rng = () => 0;   // victoire garantie
+g.rng = () => 0.999;   // victoire garantie (jet 100)
 assert.ok(g.createRaid(alice, foretMob.x, foretMob.y).ok, 'raid forêt pour vérifier le bonus de zone');
 assert.ok(g.startRaidNow(alice, foretMob.x + ',' + foretMob.y).ok);
 g.tick(300);
@@ -1111,7 +1283,7 @@ alice.pos = { x: boostMob.x - 1, y: boostMob.y };
 alice.pa = 50; alice.hp = maxHp(alice); alice.status = 'IDLE';
 let weaponXpBefore = alice.weaponXp;
 sent.length = 0;
-g.rng = () => 0;   // victoire garantie
+g.rng = () => 0.999;   // victoire garantie (jet 100)
 assert.ok(g.createRaid(alice, boostMob.x, boostMob.y).ok, 'raid toujours accepté avec du Regain');
 assert.ok(g.startRaidNow(alice, boostMob.x + ',' + boostMob.y).ok);
 g.tick(300);

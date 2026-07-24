@@ -1024,6 +1024,43 @@ class Renderer {
       const slot = this.playerOffset(index, ordered.length, p.id === me.id);
       this.drawPlayer(p, p.id === me.id, slot, ordered.length);
     }
+
+    // Retour visuel de tap/clic : contour losange qui s'étend et s'estompe
+    // sur la case tapée, pour qu'un clic ait toujours une réponse immédiate
+    // à l'écran même quand il n'ouvre ni popup ni déplacement (ex. terrain
+    // vide déjà connu, ou case hors de portée).
+    if (this.tapMarker) {
+      const elapsed = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - this.tapMarker.at;
+      const DURATION = 480;
+      if (elapsed > DURATION) {
+        this.tapMarker = null;
+      } else {
+        const t = elapsed / DURATION;
+        const tcx = this.isoX(this.tapMarker.x, this.tapMarker.y) - this.cam.x + this.w / 2;
+        const tcy = this.isoY(this.tapMarker.x, this.tapMarker.y) - this.cam.y + this.h / 2;
+        const scale = 0.7 + 0.35 * t;
+        const hw = (TILE_W / 2) * scale, hh = (TILE_H / 2) * scale;
+        ctx.save();
+        ctx.globalAlpha = 1 - t;
+        ctx.strokeStyle = '#ffe9b8';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(tcx, tcy - hh);
+        ctx.lineTo(tcx + hw, tcy);
+        ctx.lineTo(tcx, tcy + hh);
+        ctx.lineTo(tcx - hw, tcy);
+        ctx.closePath();
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+
+  // Enregistre un tap/clic sur (x, y) pour l'anneau de retour visuel dessiné
+  // par draw() ci-dessus — appelé depuis main.js à chaque clic résolu en une
+  // case (indépendamment de l'action qui en résulte : popup, déplacement...).
+  showTapMarker(x, y) {
+    this.tapMarker = { x, y, at: (typeof performance !== 'undefined' ? performance.now() : Date.now()) };
   }
 
   drawContent(tile, cx, cy, visible) {
@@ -1743,6 +1780,23 @@ if (c.kind === 'dungeon') {
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
+      return;
+    }
+
+    if (kind === 'raid') {
+      // Lobby de raid actif : pulse plus rapide qu'un boss endormi (urgence
+      // du délai de 30 s) pour attirer l'œil vers un combat encore joignable
+      // — seule signalisation existante d'un raid en dehors de l'anneau
+      // pulsant dessiné directement sur la tuile (visible seulement si elle
+      // est déjà à l'écran).
+      const pulse = 1 + Math.sin(performance.now() / 140) * 0.25;
+      ctx.fillStyle = '#e2543c';
+      ctx.strokeStyle = 'rgba(20,24,29,0.9)';
+      ctx.lineWidth = 1.25;
+      ctx.beginPath();
+      ctx.arc(x, y, size * 0.9 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
     }
   }
 
@@ -1808,6 +1862,20 @@ if (c.kind === 'dungeon') {
         // sinon impossible à localiser sans l'avoir déjà croisé par hasard.
         markers.push({ kind: 'worldboss', x: toPx(tile.x) + scale / 2, y: toPx(tile.y) + scale / 2 });
       }
+    }
+
+    // Lobbies de raid actifs sur la carte actuelle : this.server.raids
+    // contient TOUS les lobbies toutes cartes/instances confondues (voir
+    // Game.raidsPayload côté serveur), donc filtrer par mapId est
+    // indispensable pour ne pas afficher, par ex., le raid d'un donjon privé
+    // d'un autre joueur. Les sièges sont exclus : déjà signalés par le repère
+    // de château ci-dessus. Visible même en dehors du brouillard exploré —
+    // sinon un combat sur une case jamais visitée resterait introuvable.
+    const currentMapId = this.server.currentMapId || (this.server.me && this.server.me.mapId) || 'world';
+    for (const raid of this.server.raids.values()) {
+      if (raid.siege || raid.mapId !== currentMapId) continue;
+      const [rx, ry] = raid.tileKey.split(',').map(Number);
+      markers.push({ kind: 'raid', x: toPx(rx) + scale / 2, y: toPx(ry) + scale / 2 });
     }
 
     for (const marker of markers) {

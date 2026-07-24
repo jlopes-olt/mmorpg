@@ -45,7 +45,7 @@ class UI {
     this.pushSupported = false;   // calculé de façon asynchrone, voir checkPushSupport()
     this.pushSubscribed = false;
     this.checkPushSupport();
-    this.combatSwordSrc = 'assets/combat_sword.png';
+    this.diceSrc = { base: '', critSuccess: '', critFail: '' };
     this.modalAssetSrc = {
       frame: 'assets/modal_frame_raw.png',
       buttonSecondary: 'assets/modal_button_secondary_raw.png',
@@ -318,15 +318,37 @@ class UI {
     if (this.openSheet === 'profile') this.showSheet('profile');
   }
 
-  /* ---------- % de victoire : classes de couleur + rendu ---------- */
+  /* ---------- Chances de victoire : toujours en valeur de dé, jamais en % ---------- */
   chanceClass(chance) {
     if (chance >= 0.75) return 'chance-good';
     if (chance >= 0.4) return 'chance-mid';
     return 'chance-bad';
   }
 
-  chanceHtml(chance) {
-    return '<b class="' + this.chanceClass(chance) + '">' + Math.round(chance * 100) + ' %</b>';
+  /* Prévision AVANT résolution (ex. compte à rebours de lobby de raid/siège) :
+   * dérive le seuil « gagne sur N+ » de la probabilité déjà calculée, sans
+   * inventer de jet fictif — le vrai jet n'existe qu'après résolution
+   * (voir diceResultHtml ci-dessous). */
+  thresholdHtml(chance) {
+    return this.diceIconHtml() + '<b class="' + this.chanceClass(chance) + '">' + winThreshold(chance) + '+</b>';
+  }
+
+  /* Petite icône de dé (même asset que l'animation de combat) accolée à
+   * chaque affichage de seuil, avant même le début du combat — pour que le
+   * jet nécessaire soit visuellement identifiable au premier coup d'œil. */
+  diceIconHtml() {
+    return this.diceSrc.base ? '<img class="threshold-die-icon" src="' + this.diceSrc.base + '" alt="">' : '';
+  }
+
+  /* Résultat du jet de dé APRÈS résolution (contrairement à thresholdHtml, qui
+   * n'affiche qu'une prévision avant que les dés soient lancés) : le seuil
+   * affiché est celui réellement comparé au jet côté serveur. */
+  diceResultHtml(roll, threshold, critical) {
+    if (typeof roll !== 'number' || typeof threshold !== 'number') return '';
+    const success = roll >= threshold;
+    const cls = success ? 'chance-good' : 'chance-bad';
+    const critTag = critical === 'success' ? ' ⭐ critique' : (critical === 'fail' ? ' 💀 critique' : '');
+    return this.diceIconHtml() + '<b class="' + cls + '">' + roll + '</b> (seuil ' + threshold + '+)' + critTag;
   }
 
   terrainLabel(terrain) {
@@ -538,13 +560,27 @@ showDungeonPopup(tile, onEnter) {
         this.castleFortifyCardHtml(c, resType);
     }
 
+    // Aperçu du jet nécessaire AVANT de lancer un siège (aucun siège actif à
+    // attaquer pour l'instant) — symétrique au « jet nécessaire » déjà affiché
+    // une fois un siège en cours plus bas. Une fois un siège lancé, le
+    // siegeHtml existant prend le relais avec le vrai jet nécessaire collectif.
+    let siegePreviewHtml = '';
+    if (me.guildId && c.ownerGuildId && !c.isOwnGuild && !activeSiege) {
+      const preview = await Promise.resolve(this.server.assaultCastlePreview(terrain));
+      if (this.popupMode !== 'castle') return;   // fermé entre-temps
+      if (preview && preview.ok) {
+        siegePreviewHtml = '<p class="dim small">Assaut solo (avant renforts) : jet nécessaire ' +
+          this.thresholdHtml(preview.chance) + ' pour l’emporter.</p>';
+      }
+    }
+
     const secsLeftSiege = activeSiege ? Math.max(0, Math.ceil((activeSiege.endsAt - this.server.now) / 1000)) : 0;
-    const siegeHtml = !activeSiege ? '' : c.isOwnGuild
-      ? '<p class="hp-c small"><b>🛡 Vous êtes assiégés !</b> ' + activeSiege.participants.length + ' assaillant(s) — ' +
-        this.chanceHtml(1 - this.server.raidChance(activeSiege)) + ' de chances de tenir — résolution dans ' + secsLeftSiege + ' s. ' +
+    const siegeHtml = !activeSiege ? siegePreviewHtml : c.isOwnGuild
+      ? '<p class="hp-c small"><b>🛡 Vous êtes assiégés !</b> ' + activeSiege.participants.length + ' assaillant(s) — jet nécessaire ' +
+        this.thresholdHtml(1 - this.server.raidChance(activeSiege)) + ' pour tenir — résolution dans ' + secsLeftSiege + ' s. ' +
         'Restez sur la tuile du château pour renforcer la défense.</p>'
       : '<p class="dim small">' + (alreadyInSiege ? 'Vous participez au siège en cours' : 'Siège en cours') + ' — ' +
-        activeSiege.participants.length + ' assaillant(s) — ' + this.chanceHtml(this.server.raidChance(activeSiege)) + ' de victoire — résolution dans ' +
+        activeSiege.participants.length + ' assaillant(s) — jet nécessaire ' + this.thresholdHtml(this.server.raidChance(activeSiege)) + ' pour l’emporter — résolution dans ' +
         secsLeftSiege + ' s.</p>';
 
     const actions = [{ label: 'Fermer' }];
@@ -808,9 +844,28 @@ showDungeonPopup(tile, onEnter) {
       duelBtn.className = 'btn';
       duelBtn.textContent = '⚔ Défier en duel';
       duelBtn.addEventListener('click', async () => {
-        const r = await Promise.resolve(this.server.requestDuel(player.id));
-        if (!r.ok) this.toast(r.error);
-        else this.closePopup();
+        // Aperçu du seuil AVANT d'envoyer le défi (lecture seule côté
+        // serveur, aucune invitation créée) — pour décider en connaissance
+        // de cause plutôt que de découvrir ses chances après coup.
+        const preview = await Promise.resolve(this.server.duelPreview(player.id));
+        if (!preview.ok) { this.toast(preview.error); return; }
+        this.confirmAction({
+          title: 'Défier ' + esc(player.username) + ' ?',
+          bodyHtml:
+            // Un seul jet est réellement tiré à la résolution (voir
+            // Game.resolveDuel) : un seul seuil affiché ici aussi, de VOTRE
+            // point de vue — pas deux jets séparés qui n'existent pas.
+            '<p><span class="battle-label">Jet nécessaire</span> ' + this.thresholdHtml(preview.yourChance) + '</p>' +
+            '<p class="dim small">Duel amical : aucune perte de PV ni d’or.</p>',
+          okLabel: 'Envoyer le défi',
+          tone: 'combat',
+          kicker: 'Duel amical',
+          cb: async () => {
+            const r = await Promise.resolve(this.server.requestDuel(player.id));
+            if (!r.ok) this.toast(r.error);
+            else this.closePopup();
+          },
+        });
       });
       row.appendChild(duelBtn);
     }
@@ -873,6 +928,11 @@ showDungeonPopup(tile, onEnter) {
       'Défi en duel',
       this.playerSummaryHtml(from) +
       '<p>' + esc(from.username) + ' vous défie en duel amical.</p>' +
+      // Un seul jet est réellement tiré à la résolution (voir Game.resolveDuel) :
+      // un seul seuil affiché ici aussi, de VOTRE point de vue.
+      (typeof invite.yourChance === 'number'
+        ? '<p><span class="battle-label">Jet nécessaire</span> ' + this.thresholdHtml(invite.yourChance) + '</p>'
+        : '') +
       '<p class="dim small">Aucune perte de PV ni d’or — seul le palmarès évolue.</p>',
       [
         {
@@ -894,11 +954,16 @@ showDungeonPopup(tile, onEnter) {
     );
   }
 
-  showDuelResult(r) {
+  async showDuelResult(r) {
     if (!r) return;
+    await this.playCombatClash({ ...r, victory: r.won, label: 'Duel', opponent: r.opponent });
     this.popup(
       r.won ? '⚔ Victoire en duel !' : '⚔ Défaite en duel',
-      '<p>Face à <b>' + esc(r.opponent) + '</b> — ' + r.chance + ' % de chances de victoire.</p>' +
+      '<p>Face à <b>' + esc(r.opponent) + '</b>.</p>' +
+      (typeof r.roll === 'number'
+        ? '<p><span class="battle-label">Jet</span> ' + this.diceResultHtml(r.roll, r.threshold, r.critical) +
+          (r.rollerUsername ? ' — lancé par ' + esc(r.rollerUsername) : '') + '.</p>'
+        : '') +
       '<p class="dim small">Puissance : ' + r.yourPower + ' contre ' + r.opponentPower + '.</p>' +
       '<p class="dim small">Duel amical : aucune perte de PV ni d’or.</p>',
       [{ label: 'Fermer', primary: true }]
@@ -1372,9 +1437,10 @@ showDungeonPopup(tile, onEnter) {
   }
 
   /* ---------- HUD (appelé à chaque frame) ---------- */
-  updateHud() {
+  updateHud(isMoving) {
     const me = this.server.me;
     if (!me) return;
+    $('movingBadge').classList.toggle('hidden', !isMoving);
     const mhp = maxHp(me);
     $('hpFill').style.width = (100 * me.hp / mhp) + '%';
     $('hpText').textContent = me.hp + ' / ' + mhp + ' PV';
@@ -1404,14 +1470,14 @@ showDungeonPopup(tile, onEnter) {
       buffBadge.classList.add('hidden');
     }
 
-    // Bannière de lobby : compte à rebours + % de victoire en direct
+    // Bannière de lobby : compte à rebours + jet nécessaire en direct
     const banner = $('lobbyBanner');
     if (me.status === 'LOBBY_COMBAT' && me.raidKey) {
       const raid = this.server.raids.get(me.raidKey);
       if (raid) {
         banner.classList.remove('hidden');
         const chance = this.server.raidChance(raid);
-        const pct = Math.round(chance * 100);
+        const threshold = winThreshold(chance);
         const secsLeft = Math.max(0, Math.ceil((raid.endsAt - this.server.now) / 1000));
         const engineCount = (raid.engines || []).length;
         $('lobbyText').textContent = raid.siege
@@ -1420,7 +1486,7 @@ showDungeonPopup(tile, onEnter) {
           : '⚔ Raid ' + raid.label + ' T' + raid.tier + ' — résolution dans ' + secsLeft + ' s — ' + raid.participants.length + ' participant(s)';
         const chanceEl = $('lobbyChance');
         chanceEl.classList.remove('hidden');
-        chanceEl.textContent = pct + ' % de victoire';
+        chanceEl.innerHTML = this.diceIconHtml() + 'Jet ' + threshold + '+';
         chanceEl.className = 'chance-badge ' + this.chanceClass(chance);
         $('lobbyStart').classList.toggle('hidden', raid.leaderId !== me.id);
 
@@ -1560,11 +1626,16 @@ showDungeonPopup(tile, onEnter) {
   }
 
   loadCombatFxAssets() {
-    const img = new Image();
-    img.onload = () => {
-      this.combatSwordSrc = this.removeChromaToDataUrl(img);
+    const diceSources = {
+      base: 'assets/dice_rune_base_magenta.png',
+      critSuccess: 'assets/dice_rune_crit_success_magenta.png',
+      critFail: 'assets/dice_rune_crit_fail_magenta.png',
     };
-    img.src = 'assets/combat_sword.png';
+    Object.entries(diceSources).forEach(([key, src]) => {
+      const img = new Image();
+      img.onload = () => { this.diceSrc[key] = this.removeChromaToDataUrl(img); };
+      img.src = src;
+    });
 
     Object.entries(this.modalAssetSrc).forEach(([key, src]) => {
       const asset = new Image();
@@ -1799,16 +1870,31 @@ showDungeonPopup(tile, onEnter) {
     );
   }
 
+  // À la mort (rapatriement forcé à la Capitale), une caméra glissée loin du
+  // héros n'a plus de sens sur sa nouvelle position — on la reverrouille sur
+  // lui, comme le fait déjà un vrai changement de carte (voir server.on('map')
+  // dans js/main.js, qui ne se déclenche PAS ici : la mort en plein monde
+  // ouvert rapatrie vers 'world' sans changer de carte si on y était déjà).
+  recenterCameraOnSelf() {
+    if (this.renderer) this.renderer.camPanned = false;
+    const btn = document.getElementById('recenterBtn');
+    if (btn) btn.classList.add('hidden');
+  }
+
   /* ---------- Résultat de raid ---------- */
   async showResult(r) {
+    if (!r.victory || r.died) this.recenterCameraOnSelf();
     await this.playCombatClash(r);
     const monsterSrc = this.getMonsterTargetSrc({ type: r.monsterType, tier: r.tier });
     const lines = [
       '<div class="vs battle-vs"><span>Équipe <b>' + r.teamForce + '</b></span><span class="vs-x">contre</span><span><b>' + r.monsterForce + '</b> ' + esc(r.label) + ' T' + r.tier + '</span></div>',
       '<p><span class="battle-label">Participants</span> ' + r.participants.map(esc).join(', ') + '</p>',
     ];
-    if (typeof r.chance === 'number') {
-      lines.push('<p><span class="battle-label">Chances</span> ' + this.chanceHtml(r.chance) + ' de victoire — le sort a ' + (r.victory ? 'souri' : 'tranché') + '.</p>');
+    if (typeof r.roll === 'number') {
+      lines.push('<p><span class="battle-label">Jet</span> ' + this.diceResultHtml(r.roll, r.threshold, r.critical) +
+        (r.rollerUsername ? ' — lancé par ' + esc(r.rollerUsername) : '') + '.</p>');
+    } else if (typeof r.chance === 'number') {
+      lines.push('<p><span class="battle-label">Jet nécessaire</span> ' + this.thresholdHtml(r.chance) + ' — le sort a ' + (r.victory ? 'souri' : 'tranché') + '.</p>');
     }
     if (r.victory) {
       lines.push('<p><span class="battle-label">PV perdus</span> <b class="hp-c">−' + r.hpLoss + '</b>' +
@@ -1872,7 +1958,22 @@ showDungeonPopup(tile, onEnter) {
     }
     const isDefender = r.role === 'defender';
     const won = isDefender ? !r.victory : r.victory;   // du point de vue du joueur qui reçoit ce rapport
-    await this.playCombatClash({ victory: won, label: r.label });
+    if (!isDefender && !won) this.recenterCameraOnSelf();   // assaut repoussé = rapatriement, comme une mort
+    // Un seul jet est réellement tiré (issue collective assaillants+défenseurs,
+    // voir Game.resolveSiege) mais chaque camp doit voir « gagne sur N+ » de
+    // SON propre point de vue : le défenseur gagne quand l'assaillant rate,
+    // donc son jet/seuil/critique affichés sont le miroir des vrais (101−x) —
+    // un jet 100 (critique assaillant) devient un jet 1 (critique défenseur).
+    const diceRoll = typeof r.roll === 'number' ? (isDefender ? 101 - r.roll : r.roll) : null;
+    const diceThreshold = typeof r.threshold === 'number' ? (isDefender ? 102 - r.threshold : r.threshold) : null;
+    const diceCritical = isDefender
+      ? (r.critical === 'success' ? 'fail' : (r.critical === 'fail' ? 'success' : null))
+      : r.critical;
+    await this.playCombatClash({
+      victory: won, label: r.label,
+      roll: diceRoll, threshold: diceThreshold, critical: diceCritical,
+      rollerUsername: r.rollerUsername,
+    });
     const lines = [
       '<div class="vs battle-vs"><span>' + esc(r.attackerGuildName) + ' <b>' + r.teamForce + '</b></span>' +
         '<span class="vs-x">contre</span><span><b>' + r.defenseForce + '</b> ' + esc(r.defenderGuildName) + '</span></div>',
@@ -1886,8 +1987,13 @@ showDungeonPopup(tile, onEnter) {
       lines.push('<p class="dim small">⚙ ' + r.engineCount + ' engin(s) de siège : +' + r.engineForce + ' force' +
         (r.engineDamage ? ', +' + r.engineDamage + ' PS garantis' : '') + '</p>');
     }
-    lines.push('<p><span class="battle-label">Chances</span> ' + this.chanceHtml(isDefender ? 1 - r.chance : r.chance) +
-      ' de victoire — le sort a ' + (won ? 'souri' : 'tranché') + '.</p>');
+    if (diceRoll !== null) {
+      lines.push('<p><span class="battle-label">Jet</span> ' + this.diceResultHtml(diceRoll, diceThreshold, diceCritical) +
+        (r.rollerUsername ? ' — lancé par ' + esc(r.rollerUsername) : '') + '.</p>');
+    } else {
+      lines.push('<p><span class="battle-label">Jet nécessaire</span> ' + this.thresholdHtml(isDefender ? 1 - r.chance : r.chance) +
+        ' — le sort a ' + (won ? 'souri' : 'tranché') + '.</p>');
+    }
     if (!won) {
       lines.push(isDefender
         ? '<p class="hp-c"><b>🏰 Château perdu.</b> ' + esc(r.label) + ' appartient désormais à ' + esc(r.attackerGuildName) + '.</p>'
@@ -1910,33 +2016,84 @@ showDungeonPopup(tile, onEnter) {
     );
   }
 
+  // Animation de combat = un vrai jet de dé (d100), cohérent avec l'algo de
+  // victoire (winThreshold/rollD100, voir js/config.js) : le seuil affiché
+  // EST celui utilisé côté serveur, pas une simple mise en scène. Duel,
+  // raid ou siège : l'issue est TOUJOURS collective (un seul jet a du sens,
+  // voir Game.resolveDuel/resolveRaid/resolveSiege), attribué à un
+  // participant tiré au sort pour l'affichage (rollerUsername) — un seul
+  // dé, montré à tout le monde.
   playCombatClash(r) {
     return new Promise((resolve) => {
       const wrap = $('combatFx');
+      const hasDice = typeof r.roll === 'number' && typeof r.threshold === 'number';
+
+      const diceHtml = hasDice ?
+        '<div class="combat-die spinning">' +
+          '<div class="combat-die-face">' +
+            (this.diceSrc.base ? '<img class="combat-die-art" src="' + this.diceSrc.base + '" alt="">' : '') +
+            '<span class="combat-die-number">?</span>' +
+          '</div>' +
+          '<div class="combat-die-threshold">Gagne sur ' + r.threshold + '+</div>' +
+        '</div>' : '';
+      const rollerHtml = (hasDice && r.rollerUsername)
+        ? '<div class="combat-fx-roller">' + esc(r.rollerUsername) + (r.opponent ? ' lance le dé du duel' : ' lance le dé pour le groupe') + '</div>'
+        : '';
+
       wrap.innerHTML =
         '<div class="combat-fx-backdrop ' + (r.victory ? 'victory' : 'defeat') + '">' +
           '<div class="combat-fx-center">' +
             '<div class="combat-fx-title">Affrontement</div>' +
-            '<div class="combat-fx-subtitle">' + esc(r.label) + (r.tier ? ' T' + r.tier : '') + '</div>' +
-            '<div class="combat-fx-swords" aria-hidden="true">' +
-              '<img class="combat-fx-sword sword-left" src="' + this.combatSwordSrc + '" alt="">' +
-              '<span class="combat-fx-flash"></span>' +
-              '<img class="combat-fx-sword sword-right" src="' + this.combatSwordSrc + '" alt="">' +
-            '</div>' +
-            '<div class="combat-fx-status">' + (r.victory ? 'Victoire…' : 'Défaite…') + '</div>' +
+            '<div class="combat-fx-subtitle">' + esc(r.label || '') + (r.tier ? ' T' + r.tier : '') + '</div>' +
+            rollerHtml +
+            (hasDice ? '<div class="combat-fx-dice">' + diceHtml + '</div>' : '') +
+            '<div class="combat-fx-status">' + (hasDice ? '…' : (r.victory ? 'Victoire…' : 'Défaite…')) + '</div>' +
           '</div>' +
         '</div>';
       wrap.className = '';
 
       const backdrop = wrap.firstElementChild;
-      const center = backdrop.querySelector('.combat-fx-center');
-      setTimeout(() => backdrop.classList.add('phase-impact'), 120);
-      setTimeout(() => center.classList.add('phase-impact'), 120);
-      setTimeout(() => backdrop.classList.add('phase-resolve'), 520);
+      if (!hasDice) {
+        // Filet de sécurité si jamais un appelant ne fournit pas de jet —
+        // affiche juste l'issue, sans animation de dé.
+        setTimeout(() => backdrop.classList.add('phase-resolve'), 400);
+        setTimeout(() => { this.closeCombatFx(); resolve(); }, 900);
+        return;
+      }
+
+      const dieEl = backdrop.querySelector('.combat-die');
+      const numberEl = dieEl.querySelector('.combat-die-number');
+      const artEl = dieEl.querySelector('.combat-die-art');
+      const status = backdrop.querySelector('.combat-fx-status');
+
+      // Suspense : le dé affiche des chiffres aléatoires en boucle avant de
+      // révéler le vrai jet — le nombre affiché à l'arrêt est TOUJOURS le
+      // jet réel envoyé par le serveur, jamais un habillage indépendant.
+      const SPIN_MS = 700;
+      const spinStart = Date.now();
+      const spinTimer = setInterval(() => {
+        numberEl.textContent = String(1 + Math.floor(Math.random() * 100));
+        if (Date.now() - spinStart >= SPIN_MS) {
+          clearInterval(spinTimer);
+          numberEl.textContent = String(r.roll);
+          dieEl.classList.remove('spinning');
+          dieEl.classList.add('settled');
+          if (r.critical === 'success') {
+            dieEl.classList.add('crit-success');
+            if (artEl && this.diceSrc.critSuccess) artEl.src = this.diceSrc.critSuccess;
+          } else if (r.critical === 'fail') {
+            dieEl.classList.add('crit-fail');
+            if (artEl && this.diceSrc.critFail) artEl.src = this.diceSrc.critFail;
+          }
+          status.textContent = r.victory ? 'Victoire…' : 'Défaite…';
+        }
+      }, 60);
+
+      setTimeout(() => backdrop.classList.add('phase-resolve'), SPIN_MS + 380);
       setTimeout(() => {
         this.closeCombatFx();
         resolve();
-      }, 980);
+      }, SPIN_MS + 850);
     });
   }
 
@@ -3556,6 +3713,22 @@ showDungeonPopup(tile, onEnter) {
     });
   }
 
+  // Heure seule si le message date d'aujourd'hui, sinon date + heure —
+  // ts est un horodatage réel (Date.now(), voir Game.say), pas this.now
+  // (compteur de jeu relatif, accéléré par SPEED en dev).
+  formatChatTime(ts) {
+    if (!ts) return '';
+    const d = new Date(ts);
+    const now = new Date();
+    const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    if (sameDay) return hh + ':' + mm;
+    const dd = String(d.getDate()).padStart(2, '0');
+    const MM = String(d.getMonth() + 1).padStart(2, '0');
+    return dd + '/' + MM + ' ' + hh + ':' + mm;
+  }
+
   renderFeed() {
     const el = $('feed');
     if (!el) return;
@@ -3573,10 +3746,11 @@ showDungeonPopup(tile, onEnter) {
       return true;
     });
     el.innerHTML = relevant.map((m) => {
+      const timeHtml = m.ts ? '<span class="msg-time">' + this.formatChatTime(m.ts) + '</span>' : '';
       if (m.type === 'chat') {
-        return '<div class="msg' + (m.self ? ' me' : '') + '"><b>' + esc(m.from) + '</b> ' + esc(m.text) + '</div>';
+        return '<div class="msg' + (m.self ? ' me' : '') + '"><b>' + esc(m.from) + '</b>' + timeHtml + ' ' + esc(m.text) + '</div>';
       }
-      return '<div class="msg sys">' + esc(m.text) + '</div>';
+      return '<div class="msg sys">' + timeHtml + esc(m.text) + '</div>';
     }).join('');
     el.scrollTop = wasNearBottom ? el.scrollHeight : prevScrollTop;
   }
