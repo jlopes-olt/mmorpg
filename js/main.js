@@ -13,7 +13,7 @@
 
 (function () {
   const remote = typeof io !== 'undefined' && location.protocol.indexOf('http') === 0;
-  const SHELL_REV = '20260724-dice-icon-fix';
+  const SHELL_REV = '20260726-portal-dungeon-door';
 
   // PWA : service worker (cache + installation sur l'écran d'accueil).
   // Échec silencieux en file:// / artifact.
@@ -277,12 +277,23 @@
       return;
     }
 
+    if (c && c.kind === 'parcel') {
+      if (me.pos.x === tx && me.pos.y === ty) ui.showParcelPopup(tile);
+      else walkTo(tx, ty);
+      return;
+    }
+
     if (c && c.kind === 'portal') {
       if (me.pos.x === tx && me.pos.y === ty) {
+        // Portail générique (sortie de donjon, aller/retour quartier
+        // résidentiel…) : le libellé vient du contenu (c.label), pas d'un
+        // texte figé — sinon "Quitter le donjon ?" s'afficherait aussi en
+        // entrant dans le quartier résidentiel depuis la Capitale.
+        const label = c.label || 'Portail';
         ui.confirmAction({
-          title: 'Quitter le donjon ?',
-          bodyHtml: '<p>Voulez-vous emprunter le portail de sortie ?</p>',
-          okLabel: 'Sortir',
+          title: esc(label) + ' ?',
+          bodyHtml: '<p>Emprunter ce portail ?</p>',
+          okLabel: 'Emprunter',
           cb: async () => {
             const r = await Promise.resolve(server.usePortal());
             if (!r.ok) ui.toast(r.error);
@@ -567,6 +578,15 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
       for (const k of ((server.me && server.me.exploredWorld) || [])) explored.add(k);
     }
     updateExplored();
+    // Quartier résidentiel : les parcelles occupées ne sont jamais poussées
+    // (comme les châteaux) — on les récupère en un coup à chaque entrée dans
+    // le quartier, pour que toutes les maisons déjà réclamées s'affichent
+    // dès l'arrivée, pas seulement celle qu'on finit par cliquer.
+    if (server.currentMapId === HOUSING_MAP_ID) {
+      Promise.resolve(server.housingInfo()).then((res) => {
+        if (res && res.ok) renderer.setHousingInfo(res.list);
+      });
+    }
   });
 
   /* ---------- Panneau DEV ---------- */

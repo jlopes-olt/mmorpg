@@ -82,12 +82,14 @@ class Game {
     this.duelInvites = new Map();
     this.guilds = new Map();
     this.castles = new Map();   // terrain -> { terrain, ownerGuildId, hp, hpMax, level }
+    this.houses = new Map();    // parcelId -> { parcelId, ownerId, ownerUsername, modelId, furniture }
     this.chatLog = [];   // historique borné : reprend vie à la reconnexion (coordination async)
     this.pendingReplies = [];
     this.send = () => {};
     this.broadcast = () => {};
     this.onDirty = () => {};
     this.onGuildsDirty = () => {};
+    this.onHousingDirty = () => {};
     this.onChatDirty = () => {};
     // Suppression de compte (admin) : câblé dans index.js pour effacer la
     // ligne SQLite (store.deleteAccount) et couper la socket live éventuelle
@@ -116,11 +118,14 @@ class Game {
     if (!p) return;
     if (!Array.isArray(p.ownedSkins)) p.ownedSkins = [];
     if (!Array.isArray(p.ownedAccessories)) p.ownedAccessories = [];
+    if (!Array.isArray(p.ownedArtifacts)) p.ownedArtifacts = [];
     if (!Array.isArray(p.ownedMounts)) p.ownedMounts = [];
     if (!Array.isArray(p.ownedDice)) p.ownedDice = [];
     if (typeof p.accessoryId === 'undefined') p.accessoryId = null;
+    if (typeof p.artifactId === 'undefined') p.artifactId = null;
     if (typeof p.mountId === 'undefined') p.mountId = null;
     if (typeof p.diceId === 'undefined') p.diceId = null;
+    if (typeof p.parcelId === 'undefined') p.parcelId = null;
     if (typeof p[PREMIUM_CURRENCY.key] !== 'number') p[PREMIUM_CURRENCY.key] = 0;
     if (typeof p.skinId === 'undefined') p.skinId = null;
     if (!Array.isArray(p.characters) || !p.characters.length) return;
@@ -352,10 +357,13 @@ class Game {
       ownedSkins: [],
       ownedAccessories: [],
       accessoryId: null,
+      ownedArtifacts: [],
+      artifactId: null,
       ownedMounts: [],
       mountId: null,
       ownedDice: [],
       diceId: null,
+      parcelId: null,
       status: 'IDLE',
       harvestKey: null, harvestEndsAt: 0,
       raidKey: null,
@@ -587,6 +595,42 @@ class Game {
     return { alive: this.worldBossAlive, nextSpawnAt: this.worldBossNextSpawnAt, pos: WORLD_BOSS.pos, label: WORLD_BOSS.label };
   }
 
+  grantArtifactFragment(p, artifactId, qty) {
+    const item = artifactFor(artifactId);
+    const amount = Math.max(0, Math.floor(Number(qty) || 0));
+    if (!item || !amount) return null;
+    if (p.ownedArtifacts.includes(item.id)) {
+      return { item, gained: 0, assembled: false, alreadyOwned: true, count: item.fragmentsRequired, required: item.fragmentsRequired };
+    }
+    const key = item.fragmentKey;
+    const after = Number(p.inventory[key] || 0) + amount;
+    p.inventory[key] = after;
+    let assembled = false;
+    if (after >= item.fragmentsRequired) {
+      p.inventory[key] = after - item.fragmentsRequired;
+      if (p.inventory[key] <= 0) delete p.inventory[key];
+      p.ownedArtifacts.push(item.id);
+      if (!p.artifactId) p.artifactId = item.id;
+      assembled = true;
+      this.toast(p, '✨ Artefact reconstitue : ' + item.label + ' !');
+    }
+    const count = assembled ? item.fragmentsRequired : Number(p.inventory[key] || 0);
+    return { item, gained: amount, assembled, alreadyOwned: false, count, required: item.fragmentsRequired };
+  }
+
+  artifactIdForMonster(monster) {
+    if (!monster) return null;
+    if (monster.worldBoss) return 'artifact_dragon_scale';
+    if (!monster.boss) return null;
+    const byBossType = {
+      BOSS_PLAINE: 'artifact_steppe_claw',
+      BOSS_FORET: 'artifact_forest_sap',
+      BOSS_MARECAGE: 'artifact_bog_heart',
+      BOSS_MONTAGNE: 'artifact_peak_core',
+    };
+    return byBossType[monster.type] || null;
+  }
+
   publicPlayer(p) {
     return {
       id: p.id,
@@ -604,6 +648,7 @@ class Game {
       armorType: p.armor ? p.armor.type : '',
       skinId: p.skinId || null,
       accessoryId: p.accessoryId || null,
+      artifactId: p.artifactId || null,
       mountId: p.mountId || null,
       activeTitle: p.activeTitle || null,
       guildName: p.guildName || null,
@@ -745,6 +790,25 @@ class Game {
     return { ok: true };
   }
 
+  equipArtifact(p, artifactId) {
+    const desired = artifactId ? String(artifactId) : null;
+    if (!desired) {
+      p.artifactId = null;
+      p.hp = Math.min(p.hp, maxHp(p));
+      this.pushSelf(p);
+      return { ok: true };
+    }
+    if (!ARTIFACT_ITEMS[desired]) return { ok: false, error: 'Artefact inconnu.' };
+    if (!p.ownedArtifacts.includes(desired)) return { ok: false, error: 'Vous ne possedez pas cet artefact.' };
+    p.artifactId = desired;
+    // Un artefact "armor" plus faible que le précédent peut réduire PV max —
+    // même filet que le changement de tier d'armure (applyGearTier), pour ne
+    // jamais afficher PV courants > PV max.
+    p.hp = Math.min(p.hp, maxHp(p));
+    this.pushSelf(p);
+    return { ok: true };
+  }
+
   equipMount(p, mountId) {
     const desired = mountId ? String(mountId) : null;
     if (!desired) {
@@ -771,6 +835,60 @@ class Game {
     p.diceId = desired;
     this.pushSelf(p);
     return { ok: true };
+  }
+
+  /* ---------- Quartier résidentiel ---------- */
+  houseOf(parcelId) {
+    if (!this.houses.has(parcelId)) {
+      this.houses.set(parcelId, { parcelId, ownerId: null, ownerUsername: null, modelId: null, furniture: [] });
+    }
+    return this.houses.get(parcelId);
+  }
+
+  // Retrouve la tuile de la carte du quartier portant cet id de parcelle —
+  // valide qu'un id réclamé par un client existe réellement (défense en
+  // profondeur) avant d'accepter un achat.
+  parcelTileFor(parcelId) {
+    const map = this.mapOf(HOUSING_MAP_ID);
+    if (!map) return null;
+    for (const tile of map.tiles.values()) {
+      if (tile.content && tile.content.kind === 'parcel' && tile.content.id === parcelId) return tile;
+    }
+    return null;
+  }
+
+  // Une seule maison par COMPTE (comme une monture), pas par personnage —
+  // la décoration ne doit pas se diluer sur 7 classes différentes.
+  claimParcel(p, parcelId, modelId) {
+    if (p.parcelId) return { ok: false, error: 'Vous possédez déjà une maison.' };
+    const tile = this.parcelTileFor(String(parcelId || ''));
+    if (!tile) return { ok: false, error: 'Parcelle introuvable.' };
+    const house = this.houseOf(tile.content.id);
+    if (house.ownerId) return { ok: false, error: 'Cette parcelle est déjà occupée.' };
+    const model = houseModelFor(String(modelId || ''));
+    if (!model) return { ok: false, error: 'Modèle de maison invalide.' };
+    const walletKey = model.currency === PREMIUM_CURRENCY.key ? PREMIUM_CURRENCY.key : 'gold';
+    const balance = Number(p[walletKey] || 0);
+    if (balance < model.price) {
+      return { ok: false, error: walletKey === 'gold' ? 'Pas assez d’or.' : ('Pas assez de ' + PREMIUM_CURRENCY.label.toLowerCase() + '.') };
+    }
+    p[walletKey] = balance - model.price;
+    house.ownerId = p.id;
+    house.ownerUsername = p.username;
+    house.modelId = model.id;
+    p.parcelId = tile.content.id;
+    this.pushSelf(p);
+    this.onHousingDirty();
+    return { ok: true, parcelId: tile.content.id };
+  }
+
+  // Jamais poussé automatiquement (comme castlesInfo) : demandé par le
+  // client à l'entrée dans le quartier, pour que toutes les maisons déjà
+  // occupées s'affichent d'un coup à qui s'y promène.
+  housingInfo() {
+    return [...this.houses.values()]
+      .filter((h) => h.ownerId)
+      .map((h) => ({ parcelId: h.parcelId, ownerUsername: h.ownerUsername, modelId: h.modelId }));
   }
 
   publicPlayers() {
@@ -2270,6 +2388,9 @@ class Game {
           p.inventory[food] = (p.inventory[food] || 0) + 1;
         }
         let bonus = null;
+        let artifactReward = null;
+        const artifactId = this.artifactIdForMonster(monster);
+        if (artifactId) artifactReward = this.grantArtifactFragment(p, artifactId, 1);
         if (monster.worldBoss) {
           const bonusGold = WORLD_BOSS.goldMin + Math.floor(this.rng() * (WORLD_BOSS.goldMax - WORLD_BOSS.goldMin + 1));
           p.gold += bonusGold;
@@ -2297,7 +2418,7 @@ class Game {
           p.stats.worldBossKills = (p.stats.worldBossKills || 0) + 1;
           bonus = { gold: bonusGold, xp: bonusXp, moonstones, accessory, mount };
         }
-        rewards.set(p.id, { gold, xp, food, worldBossBonus: bonus, boosted });
+        rewards.set(p.id, { gold, xp, food, worldBossBonus: bonus, artifact: artifactReward, boosted });
         this.checkLevelUp(p, 'weapon');
         p.stats.monsterKills = (p.stats.monsterKills || 0) + 1;
         p.stats.kills[monster.type] = (p.stats.kills[monster.type] || 0) + 1;
@@ -2359,6 +2480,7 @@ class Game {
         participants: members.map((m) => m.username),
         gold: rw ? rw.gold : 0,
         food: rw ? rw.food : null,
+        artifact: rw ? rw.artifact : null,
         hpLoss: lossById.get(p.id) || 0,
         xp: rw ? rw.xp : 0,
         regainBoosted: rw ? !!rw.boosted : false,
@@ -2678,6 +2800,9 @@ class Game {
       mountId: p.mountId || null,
       ownedDice: p.ownedDice || [],
       diceId: p.diceId || null,
+      ownedArtifacts: p.ownedArtifacts || [],
+      artifactId: p.artifactId || null,
+      parcelId: p.parcelId || null,
     })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   }
 
@@ -2821,6 +2946,53 @@ class Game {
     return { ok: true };
   }
 
+  adminGrantArtifactFragment(admin, username, artifactId, qty) {
+    if (!admin || admin.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
+    const target = this.adminFindTarget(username);
+    if (!target) return { ok: false, error: 'Joueur introuvable.' };
+    const item = artifactFor(artifactId);
+    if (!item) return { ok: false, error: 'Artefact inconnu.' };
+    const n = Math.max(1, Math.min(99, Math.floor(Number(qty)) || 1));
+    this.grantArtifactFragment(target, item.id, n);
+    this.pushSelf(target);
+    return { ok: true };
+  }
+
+  // Attribue directement l'artefact assemblé (pas les fragments) — support/
+  // tests, pour éviter d'avoir à recompter les fragments manquants à la main.
+  adminGrantArtifact(admin, username, artifactId) {
+    if (!admin || admin.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
+    const target = this.adminFindTarget(username);
+    if (!target) return { ok: false, error: 'Joueur introuvable.' };
+    const item = artifactFor(artifactId);
+    if (!item) return { ok: false, error: 'Artefact inconnu.' };
+    if (!target.ownedArtifacts.includes(item.id)) target.ownedArtifacts.push(item.id);
+    if (!target.artifactId) target.artifactId = item.id;
+    this.pushSelf(target);
+    return { ok: true };
+  }
+
+  // Libère la parcelle actuelle d'un joueur (support/modération — ex. bug
+  // corrigé après coup, joueur qui veut changer de façade) : la parcelle
+  // redevient "à vendre", aucun remboursement de l'or déjà dépensé.
+  adminResetHouse(admin, username) {
+    if (!admin || admin.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
+    const target = this.adminFindTarget(username);
+    if (!target) return { ok: false, error: 'Joueur introuvable.' };
+    if (!target.parcelId) return { ok: false, error: 'Ce joueur ne possède pas de maison.' };
+    const house = this.houses.get(target.parcelId);
+    if (house) {
+      house.ownerId = null;
+      house.ownerUsername = null;
+      house.modelId = null;
+      house.furniture = [];
+    }
+    target.parcelId = null;
+    this.pushSelf(target);
+    this.onHousingDirty();
+    return { ok: true };
+  }
+
   adminSetLevel(admin, username, kind, tier) {
     if (!admin || admin.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
     const target = this.adminFindTarget(username);
@@ -2934,6 +3106,7 @@ class Game {
       credentials,
       guilds: [...this.guilds.values()],
       castles: [...this.castles.values()],
+      houses: [...this.houses.values()],
       chatLog: this.chatLog,
       mapDiffs: this.mapDiffs(),
       mapStates: this.mapStates(),
@@ -3022,6 +3195,9 @@ class Game {
     }
     for (const c of data.castles || []) {
       if (c && c.terrain) this.castles.set(c.terrain, c);
+    }
+    for (const h of data.houses || []) {
+      if (h && h.parcelId) this.houses.set(h.parcelId, h);
     }
     if (Array.isArray(data.chatLog)) this.chatLog = data.chatLog.slice(-CHAT_LOG_MAX);
     // Migration d'une base existante sans rôles : le compte le plus ancien

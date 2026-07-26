@@ -183,6 +183,18 @@ function diceOptions() {
     .map((item) => '<option value="dice:' + item.id + '">' + item.label + '</option>').join('');
 }
 
+function artifactFragmentOptions() {
+  return ARTIFACT_ORDER
+    .map((id) => ARTIFACT_ITEMS[id])
+    .map((item) => '<option value="artifactFragment:' + item.id + '">' + item.fragmentLabel + '</option>').join('');
+}
+
+function artifactOptions() {
+  return ARTIFACT_ORDER
+    .map((id) => ARTIFACT_ITEMS[id])
+    .map((item) => '<option value="artifact:' + item.id + '">' + item.label + ' (complet)</option>').join('');
+}
+
 function grantFormHtml() {
   const resourceOptions = Object.keys(RESOURCES)
     .map((t) => '<option value="item:' + t + '">' + RESOURCES[t].label + '</option>').join('');
@@ -209,6 +221,8 @@ function grantFormHtml() {
           '<optgroup label="Accessoires cosmétiques (rares)">' + accessoryOptions() + '</optgroup>' +
           '<optgroup label="Montures (rares)">' + mountOptions() + '</optgroup>' +
           '<optgroup label="Dés cosmétiques">' + diceOptions() + '</optgroup>' +
+          '<optgroup label="Fragments d’artefact">' + artifactFragmentOptions() + '</optgroup>' +
+          '<optgroup label="Artefacts (rares)">' + artifactOptions() + '</optgroup>' +
         '</select>' +
         '<select id="grantTier">' + tierOptions + '</select>' +
         '<input id="grantQty" type="number" min="1" max="999" value="1">' +
@@ -261,6 +275,9 @@ function renderPlayerPanel(p) {
         '<div><span>Accessoire</span> <b>' + esc((ACCESSORY_ITEMS[p.accessoryId] || {}).label || '—') + '</b></div>' +
         '<div><span>Monture</span> <b>' + esc((MOUNT_ITEMS[p.mountId] || {}).label || '—') + '</b></div>' +
         '<div><span>Dé</span> <b>' + esc((DICE_SKIN_BY_ID[p.diceId] || {}).label || 'Par défaut') + '</b></div>' +
+        '<div><span>Artefact équipé</span> <b>' + esc((ARTIFACT_ITEMS[p.artifactId] || {}).label || '—') + '</b></div>' +
+        '<div><span>Artefacts possédés</span> <b>' + ((p.ownedArtifacts || []).length) + ' / ' + ARTIFACT_ORDER.length + '</b></div>' +
+        '<div><span>Maison</span> <b>' + (p.parcelId ? esc(p.parcelId) : '—') + '</b></div>' +
       '</div>' +
     '</div>' +
 
@@ -269,6 +286,7 @@ function renderPlayerPanel(p) {
       '<div class="panel-row-actions">' +
         '<button class="btn" id="roleToggleBtn">' + (p.role === 'admin' ? 'Rétrograder utilisateur' : 'Promouvoir admin') + '</button>' +
         '<button class="btn" id="grantSlotBtn"' + (p.charSlots >= MAX_CHAR_SLOTS ? ' disabled' : '') + '>+1 emplacement perso</button>' +
+        '<button class="btn" id="resetHouseBtn"' + (p.parcelId ? '' : ' disabled') + '>Libérer la parcelle</button>' +
       '</div>' +
     '</div>' +
 
@@ -295,6 +313,15 @@ function renderPlayerPanel(p) {
     toast(r.ok ? '+1 emplacement de personnage.' : (r.error || 'Erreur.'), !r.ok);
     if (r.ok) loadAll();
   });
+  const resetHouseBtn = $('resetHouseBtn');
+  if (resetHouseBtn) {
+    resetHouseBtn.addEventListener('click', async () => {
+      if (!confirm('Libérer la parcelle de « ' + p.username + ' » ? Elle redeviendra disponible à l’achat (sans remboursement de l’or dépensé).')) return;
+      const r = await api('POST', '/players/' + encodeURIComponent(p.username) + '/house/reset');
+      toast(r.ok ? 'Parcelle libérée.' : (r.error || 'Erreur.'), !r.ok);
+      if (r.ok) loadAll();
+    });
+  }
   $('deleteAccountBtn').addEventListener('click', async () => {
     if (!confirm('Supprimer définitivement le compte « ' + p.username + ' » ? Cette action est irréversible.')) return;
     const r = await api('POST', '/players/' + encodeURIComponent(p.username) + '/delete');
@@ -318,6 +345,8 @@ function renderPlayerPanel(p) {
     else if (what.indexOf('accessory:') === 0) r = await api('POST', '/players/' + u + '/accessory', { accessoryId: what.slice(10) });
     else if (what.indexOf('mount:') === 0) r = await api('POST', '/players/' + u + '/mount', { mountId: what.slice(6) });
     else if (what.indexOf('dice:') === 0) r = await api('POST', '/players/' + u + '/dice', { diceId: what.slice(5) });
+    else if (what.indexOf('artifactFragment:') === 0) r = await api('POST', '/players/' + u + '/artifact-fragment', { artifactId: what.slice('artifactFragment:'.length), qty });
+    else if (what.indexOf('artifact:') === 0) r = await api('POST', '/players/' + u + '/artifact', { artifactId: what.slice('artifact:'.length) });
     toast((r && r.ok) ? 'Attribution effectuée.' : ((r && r.error) || 'Erreur serveur.'), !(r && r.ok));
     if (r && r.ok) loadAll();
   });

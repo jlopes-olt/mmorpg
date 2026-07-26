@@ -8,7 +8,7 @@ const assert = require('assert');
 const { Game, CHAT_LOG_MAX } = require('./game.js');
 const {
   CONFIG, CLASSES, MAX_CHAR_SLOTS, MAX_PLAYER_CHAR_SLOTS, CHAR_SLOT_COST_MOONSTONES, MONSTER_FORCE, playerForce, maxHp,
-  combatPower, teamPowerOf, winChance, BUFF_COMBATS, reviveHpPct,
+  combatPower, maxPower, teamPowerOf, winChance, BUFF_COMBATS, reviveHpPct,
   CASTLE_TERRAINS, CASTLE_BASE_HP, CASTLE_HP_PER_LEVEL, CASTLE_MAX_LEVEL,
   CASTLE_CLAIM_COST_GOLD, CASTLE_REINFORCE_COST_GOLD, CASTLE_REPAIR_GOLD_PER_HP,
   CASTLE_DAMAGE_PER_ASSAULT, CASTLE_ZONE_GOLD_BONUS,
@@ -17,6 +17,9 @@ const {
   PREMIUM_CURRENCY, GOLD_PACKS,
   MOUNT_ITEMS, SIEGE_CAPTURE_GOLD_PER_LEVEL, RENARD_SIEGE_LOOT_BONUS,
   DICE_SKIN_ITEMS, DICE_SKIN_BY_ID,
+  ARTIFACT_ITEMS, ARTIFACT_ORDER,
+  HOUSING_MAP_ID, HOUSE_MODELS, HOUSE_MODEL_BY_ID, housingParcelId,
+  HOUSING_GRID_COORDS, HOUSING_PORTAL_WORLD_POS, HOUSING_PLAZA_POS,
 } = require('../js/config.js');
 const { ACHIEVEMENTS } = require('../js/achievements.js');
 
@@ -1423,6 +1426,140 @@ assert.ok(!g.equipDiceSkin(alice, 'dice_inconnu').ok, 'dé inconnu refusé à l�
 assert.ok(g.equipDiceSkin(alice, 'dice_voile_lunaire').ok && alice.diceId === 'dice_voile_lunaire', 'dé possédé équipé');
 assert.ok(g.equipDiceSkin(alice, null).ok && !alice.diceId, 'retour au dé par défaut possible');
 console.log('Dés cosmétiques : boutique Écailles Lunaires ✔, possession/équipement indépendants de la classe ✔');
+
+// --- Quartier résidentiel : carte fixe, portails, parcelles, une maison par compte ---
+const housingMap = g.maps.get(HOUSING_MAP_ID);
+assert.ok(housingMap, 'carte du quartier générée au démarrage');
+const parcelTiles = [...housingMap.tiles.values()].filter((t) => t.content && t.content.kind === 'parcel');
+assert.strictEqual(parcelTiles.length, HOUSING_GRID_COORDS.length * HOUSING_GRID_COORDS.length, 'grille complète de parcelles');
+// Régression : isWalkable() a une liste blanche de types de contenu franchissables
+// (château, portail, ressource…) — 'parcel' en était absent, rendant chaque
+// parcelle visible mais IMPOSSIBLE à atteindre à pied (move() refusait avec
+// "Case bloquée"), donc jamais achetable en pratique malgré un achat qui
+// fonctionnait très bien une fois "téléporté" dessus en test.
+for (const t of parcelTiles) {
+  assert.ok(isWalkable(housingMap.tiles, t.x, t.y), 'parcelle praticable à pied (' + t.content.id + ')');
+}
+// Chebyshev >= 5 entre deux parcelles quelconques : aucune maison ne peut
+// visuellement en chevaucher une autre (voir le design retenu).
+for (const a of parcelTiles) {
+  for (const b of parcelTiles) {
+    if (a === b) continue;
+    assert.ok(Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) >= 5, 'parcelles jamais trop proches (' + a.content.id + '/' + b.content.id + ')');
+  }
+}
+const plazaTile = housingMap.tiles.get(tileKey(HOUSING_PLAZA_POS.x, HOUSING_PLAZA_POS.y));
+assert.ok(plazaTile.content && plazaTile.content.kind === 'portal' && plazaTile.content.targetMapId === 'world', 'portail de retour à la Capitale sur la place');
+const worldPortalTile = g.maps.get('world').tiles.get(tileKey(HOUSING_PORTAL_WORLD_POS.x, HOUSING_PORTAL_WORLD_POS.y));
+assert.ok(worldPortalTile.content && worldPortalTile.content.kind === 'portal' && worldPortalTile.content.targetMapId === HOUSING_MAP_ID, 'portail vers le quartier près de la Capitale');
+
+const parcelA = housingParcelId(0, 0);
+const parcelB = housingParcelId(1, 0);
+const model = HOUSE_MODELS[0];
+assert.ok(!g.claimParcel(alice, 'parcelle_inconnue', model.id).ok, 'parcelle inconnue refusée');
+alice.gold = model.price - 1;
+assert.ok(!g.claimParcel(alice, parcelA, model.id).ok, 'achat refusé sans assez d’or');
+assert.ok(!alice.parcelId, 'aucune parcelle attribuée après un refus');
+alice.gold = model.price + 50;
+const claimRes = g.claimParcel(alice, parcelA, model.id);
+assert.ok(claimRes.ok, 'parcelle achetée avec assez d’or');
+assert.strictEqual(alice.gold, 50, 'prix débité exactement');
+assert.strictEqual(alice.parcelId, parcelA, 'parcelle attribuée au compte');
+assert.strictEqual(g.houses.get(parcelA).ownerId, alice.id, 'propriétaire enregistré côté maison');
+assert.ok(!g.claimParcel(bob, parcelA, model.id).ok, 'parcelle déjà occupée refusée à un autre joueur');
+bob.gold = model.price + 50;
+assert.ok(!g.claimParcel(alice, parcelB, model.id).ok, 'une seule maison par compte : deuxième achat refusé');
+const bobClaim = g.claimParcel(bob, parcelB, model.id);
+assert.ok(bobClaim.ok, 'un autre joueur peut acheter une parcelle différente');
+const housingList = g.housingInfo();
+assert.ok(housingList.some((h) => h.parcelId === parcelA && h.ownerUsername === 'Alice' && h.modelId === model.id), 'maison d’Alice listée');
+assert.ok(housingList.some((h) => h.parcelId === parcelB && h.ownerUsername === 'Bob'), 'maison de Bob listée');
+assert.strictEqual(housingList.length, 2, 'seules les parcelles réclamées apparaissent');
+
+// Persistance : sérialisation/rechargement (comme les châteaux).
+const housingSnapshot = g.serialize();
+const reloaded = new Game(CONFIG.WORLD.SEED, null);
+reloaded.send = () => {};
+reloaded.broadcast = () => {};
+reloaded.load(housingSnapshot);
+assert.strictEqual(reloaded.houses.get(parcelA).ownerUsername, 'Alice', 'maison restaurée après rechargement');
+assert.strictEqual(reloaded.players.get(alice.id).parcelId, parcelA, 'parcelId du joueur restauré après rechargement');
+
+// Support/modération : libérer la parcelle d'un joueur bloqué (une seule
+// maison par compte, voir plus haut) — Alice est admin (premier compte créé).
+assert.ok(!g.adminResetHouse(bob, 'Alice').ok, 'reset refusé à un non-admin');
+assert.ok(!g.adminResetHouse(alice, 'Compte_Inconnu').ok, 'reset refusé sur un joueur introuvable');
+const resetRes = g.adminResetHouse(alice, 'Alice');
+assert.ok(resetRes.ok, 'admin libère la parcelle d’Alice');
+assert.ok(!alice.parcelId, 'parcelId d’Alice effacé');
+assert.ok(!g.houses.get(parcelA).ownerId, 'maison marquée libre côté serveur');
+assert.ok(!g.housingInfo().some((h) => h.parcelId === parcelA), 'parcelle disparaît de la liste publique');
+assert.ok(!g.adminResetHouse(alice, 'Alice').ok, 'reset refusé si déjà sans maison');
+alice.gold = model.price + 10;
+const reclaim = g.claimParcel(alice, parcelA, model.id);
+assert.ok(reclaim.ok, 'Alice peut racheter une parcelle après le reset');
+console.log('Quartier résidentiel : grille espacée ✔, portails aller/retour ✔, une maison par compte ✔, persistance ✔, reset admin ✔');
+
+// --- Admin : attribution de fragments d'artefact / d'artefacts complets ---
+{
+  const artifactId = ARTIFACT_ORDER[0];
+  const item = ARTIFACT_ITEMS[artifactId];
+  assert.ok(!g.adminGrantArtifactFragment(bob, 'Alice', artifactId, 1).ok, 'fragment refusé à un non-admin');
+  assert.ok(!g.adminGrantArtifactFragment(alice, 'Compte_Inconnu', artifactId, 1).ok, 'fragment refusé sur un joueur introuvable');
+  assert.ok(!g.adminGrantArtifactFragment(alice, 'Alice', 'artefact_inconnu', 1).ok, 'fragment refusé pour un artefact inconnu');
+  const before = Number(bob.inventory[item.fragmentKey] || 0);
+  const partial = item.fragmentsRequired - before - 1;
+  if (partial > 0) {
+    assert.ok(g.adminGrantArtifactFragment(alice, 'Bob', artifactId, partial).ok, 'fragments attribués un par un');
+    assert.strictEqual(Number(bob.inventory[item.fragmentKey] || 0), before + partial, 'quantité de fragments exacte, pas encore assemblé');
+    assert.ok(!bob.ownedArtifacts.includes(item.id), 'artefact pas encore assemblé avant d’avoir le compte requis');
+  }
+  assert.ok(g.adminGrantArtifactFragment(alice, 'Bob', artifactId, 99).ok, 'dernier(s) fragment(s) attribué(s) (quantité plafonnée à 99)');
+  assert.ok(bob.ownedArtifacts.includes(item.id), 'artefact assemblé automatiquement une fois le seuil atteint');
+
+  assert.ok(!g.adminGrantArtifact(bob, 'Alice', artifactId).ok, 'artefact complet refusé à un non-admin');
+  assert.ok(!g.adminGrantArtifact(alice, 'Compte_Inconnu', artifactId).ok, 'artefact complet refusé sur un joueur introuvable');
+  assert.ok(!g.adminGrantArtifact(alice, 'Alice', 'artefact_inconnu').ok, 'artefact complet refusé pour un id inconnu');
+  assert.ok(!alice.ownedArtifacts.includes(artifactId), 'Alice ne possède pas encore cet artefact');
+  const grantFull = g.adminGrantArtifact(alice, 'Alice', artifactId);
+  assert.ok(grantFull.ok, 'artefact complet attribué directement, sans passer par les fragments');
+  assert.ok(alice.ownedArtifacts.includes(artifactId), 'artefact ajouté à la collection d’Alice');
+  assert.strictEqual(alice.artifactId, artifactId, 'artefact reçu équipé automatiquement (aucun autre équipé)');
+  console.log('Admin : attribution de fragments d’artefact ✔, artefact complet direct ✔');
+}
+
+// --- Stat "armor" d'un artefact : ajoute des PV max (visibles dans le
+// profil comme la puissance), n'affecte jamais la puissance de combat. ---
+{
+  const rFinn = g.register({ username: 'Finn', password: 'secret9', speciesClass: 'RENARD_VOLEUR', email: 'finn@test.dev' });
+  const finn = rFinn.player;
+  const bogHeart = ARTIFACT_ITEMS.artifact_bog_heart; // { power: 0, armor: 18 }
+  finn.hp = maxHp(finn); // pleine vie des deux côtés : isole la formule de la puissance de tout effet de blessure (woundFactor)
+  const hpBefore = maxHp(finn);
+  const powerBefore = combatPower(finn);
+  assert.ok(g.adminGrantArtifact(alice, 'Finn', bogHeart.id).ok, 'artefact "armor" attribué pour le test');
+  finn.hp = maxHp(finn);
+  assert.strictEqual(maxHp(finn), hpBefore + bogHeart.stats.armor, 'PV max augmentés exactement du bonus "armor" de l’artefact');
+  assert.strictEqual(combatPower(finn), powerBefore, 'la puissance de combat n’est pas affectée par le bonus "armor" (0 de puissance sur cet artefact)');
+  // Retirer l'artefact ne doit jamais laisser des PV courants > PV max affichés.
+  finn.hp = maxHp(finn);
+  assert.ok(g.equipArtifact(finn, null).ok, 'artefact retiré');
+  assert.ok(finn.hp <= maxHp(finn), 'PV courants jamais supérieurs aux PV max après le retrait de l’artefact');
+  console.log('Artefacts : bonus "armor" ajoute des PV max ✔, sans effet sur la puissance ✔, PV bornés au retrait ✔');
+
+  // maxPower() (affiché au profil comme "Puissance") doit refléter l'ajout
+  // d'un artefact intégralement, même blessé — contrairement à combatPower(),
+  // volontairement réduit par le facteur de blessure pour les vraies batailles.
+  const dragonScale = ARTIFACT_ITEMS.artifact_dragon_scale; // { power: 20, armor: 20 }
+  finn.artifactId = null;
+  finn.hp = Math.max(1, Math.round(maxHp(finn) * 0.5)); // blessé à 50 %
+  const maxPowerBefore = maxPower(finn);
+  const combatPowerBefore = combatPower(finn);
+  assert.ok(g.adminGrantArtifact(alice, 'Finn', dragonScale.id).ok, 'écaille du dragon attribuée, joueur blessé');
+  assert.strictEqual(maxPower(finn), maxPowerBefore + dragonScale.stats.power, 'maxPower augmente exactement du bonus de puissance de l’artefact, peu importe l’état de santé');
+  assert.ok(combatPower(finn) - combatPowerBefore < dragonScale.stats.power, 'combatPower (réelle, utilisée en bataille) reste réduite par la blessure, contrairement à maxPower');
+  console.log('Puissance affichée au profil (maxPower) : ajout intégral d’un artefact même blessé ✔, combatPower réelle toujours réduite par la blessure ✔');
+}
 
 // --- Crédit Stripe (webhook) : appliqué même hors ligne, comptes/montants invalides refusés ---
 alice.online = false;

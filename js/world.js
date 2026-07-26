@@ -192,6 +192,14 @@ function generateWorldMap(seed) {
 
       if (x === 0 && y === 0) {
         content = { kind: 'capital' };
+      } else if (x === HOUSING_PORTAL_WORLD_POS.x && y === HOUSING_PORTAL_WORLD_POS.y) {
+        // Portail fixe vers le quartier résidentiel, à 2 cases de la Capitale
+        // (assez d'écart pour ne pas chevaucher visuellement son sprite, qui
+        // déborde largement sa propre case). Jamais recouvert par la
+        // redistribution nocturne : applyWildLayer ne touche que les cases
+        // vides ou ressource/monstre (voir isWild) — un contenu 'portal' est
+        // ignoré quelle que soit sa distance à l'origine.
+        content = { kind: 'portal', label: 'Quartier résidentiel', targetMapId: HOUSING_MAP_ID, targetPos: { ...HOUSING_ENTRY_POS } };
       } else if (x === WORLD_BOSS.pos.x && y === WORLD_BOSS.pos.y) {
         // Repaire du boss de raid mondial : point fixe unique, pas un par
         // biome comme les châteaux — l'état vivant/endormi se pilote côté
@@ -385,7 +393,11 @@ function generateDungeonMap(seed, terrain, mapId, worldX, worldY) {
 
       if (floor) {
         if (x === 0 && y === 0) {
-          content = { kind: 'portal', label: 'Sortie du donjon', targetMapId: 'world', targetPos: { x: worldX, y: worldY } };
+          // terrain porté sur le contenu (pas seulement sur la carte) pour
+          // que le rendu choisisse le bon sprite de porte de donjon (voir
+          // WORLD_ICON_FILES.dungeon dans render.js) sans dépendre d'un
+          // lookup supplémentaire côté client.
+          content = { kind: 'portal', label: 'Sortie du donjon', targetMapId: 'world', targetPos: { x: worldX, y: worldY }, terrain };
         } else if (y <= min + 4 && Math.abs(x) <= 2) {
           bossSpot = { x, y };
         } else {
@@ -474,9 +486,50 @@ function generateDungeonMap(seed, terrain, mapId, worldX, worldY) {
   };
 }
 
+/* Quartier résidentiel : carte FIXE (pas de procédural, contrairement au
+ * monde/donjons) — une grille de parcelles espacées de 5 cases (voir
+ * HOUSING_GRID_COORDS), séparées par des rues, avec un portail de retour au
+ * centre (la place). Générée une seule fois comme un donjon, jamais rejouée
+ * par la redistribution nocturne (elle ne fait même pas partie du monde
+ * ouvert — voir applyWildLayer, qui ne s'applique qu'à `world.tiles`). */
+function generateHousingDistrictMap(seed) {
+  const min = -15, max = 15;
+  const tiles = attachBounds(new Map(), min, max, HOUSING_MAP_ID);
+  const parcelKeyToIndex = new Map();
+  for (let row = 0; row < HOUSING_GRID_COORDS.length; row++) {
+    for (let col = 0; col < HOUSING_GRID_COORDS.length; col++) {
+      parcelKeyToIndex.set(tileKey(HOUSING_GRID_COORDS[col], HOUSING_GRID_COORDS[row]), { col, row });
+    }
+  }
+
+  for (let y = min; y <= max; y++) {
+    for (let x = min; x <= max; x++) {
+      const key = tileKey(x, y);
+      let content = null;
+      if (x === HOUSING_PLAZA_POS.x && y === HOUSING_PLAZA_POS.y) {
+        content = { kind: 'portal', label: 'Retour à la Capitale', targetMapId: 'world', targetPos: { ...HOUSING_PORTAL_WORLD_POS } };
+      } else if (parcelKeyToIndex.has(key)) {
+        const { col, row } = parcelKeyToIndex.get(key);
+        content = { kind: 'parcel', id: housingParcelId(col, row), x, y };
+      }
+      tiles.set(key, { x, y, terrain: 'PAVE', content, blocked: false });
+    }
+  }
+
+  return {
+    id: HOUSING_MAP_ID,
+    kind: 'housing',
+    terrain: 'PAVE',
+    min, max,
+    entry: { ...HOUSING_ENTRY_POS },
+    tiles,
+  };
+}
+
 function generateGameMaps(seed) {
   const world = generateWorldMap(seed);
   const maps = new Map([[world.id, world]]);
+  maps.set(HOUSING_MAP_ID, generateHousingDistrictMap(seed));
 
   for (const tile of world.tiles.values()) {
     if (!tile.content || tile.content.kind !== 'dungeon' || !tile.content.mapId) continue;
@@ -508,14 +561,19 @@ function isWalkable(tiles, x, y) {
     || t.content.kind === 'portal'
     || t.content.kind === 'resource'
     || t.content.kind === 'monster'
-    || t.content.kind === 'castle';
+    || t.content.kind === 'castle'
+    // Parcelle du quartier résidentiel : comme un château, on doit pouvoir
+    // marcher dessus pour interagir (acheter, visiter) — sans cette entrée,
+    // isWalkable() la traitait comme bloquée et move() refusait d'y entrer
+    // (« Case bloquée »), rendant toute parcelle visible mais inaccessible.
+    || t.content.kind === 'parcel';
 }
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     mulberry32, hash2, tileKey, raidKey, tierAtDistance, terrainAt, resourceTypeAt,
     villageNameFor, dungeonBossFor, dungeonResourceFor,
-    generateWorld, generateWorldMap, generateDungeonMap, generateGameMaps,
+    generateWorld, generateWorldMap, generateDungeonMap, generateGameMaps, generateHousingDistrictMap,
     inBounds, isWalkable, boundsOf, attachBounds, applyWildLayer,
   };
 }

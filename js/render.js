@@ -53,6 +53,13 @@ const TERRAIN_TILE_FILES = {
     'assets/terrain_generated/montagne_07.png', 'assets/terrain_generated/montagne_08.png',
     'assets/terrain_generated/montagne_09.png', 'assets/terrain_generated/montagne_10.png',
   ],
+  PAVE: [
+    'assets/terrain_generated/pave_01.png', 'assets/terrain_generated/pave_02.png',
+    'assets/terrain_generated/pave_03.png', 'assets/terrain_generated/pave_04.png',
+    'assets/terrain_generated/pave_05.png', 'assets/terrain_generated/pave_06.png',
+    'assets/terrain_generated/pave_07.png', 'assets/terrain_generated/pave_08.png',
+    'assets/terrain_generated/pave_09.png', 'assets/terrain_generated/pave_10.png',
+  ],
 };
 
 const WORLD_ICON_FILES = {
@@ -164,6 +171,12 @@ const ACCESSORY_FILES = Object.fromEntries(
 const MOUNT_FILES = Object.fromEntries(
   Object.values(MOUNT_ITEMS).map((item) => [item.id, item.asset])
 );
+// Façades du quartier résidentiel — déjà en vraie transparence (voir
+// HOUSE_MODELS), chargées comme les montures/accessoires (loadCleanImage).
+const HOUSE_FILES = Object.fromEntries(
+  Object.values(HOUSE_MODEL_BY_ID).map((item) => [item.id, item.asset])
+);
+const HOUSING_FOR_SALE_SIGN_ASSET = 'assets/residential/panneau_a_vendre.png';
 
 /* Bas utile de chaque rangee de la planche de sprites */
 const SPRITE_ROW_CROP = [0.875, 0.81];
@@ -230,6 +243,10 @@ class Renderer {
     this.castleLevels = {};
     this.castleOwners = {};
     this.castleStats = {};   // terrain -> { hp, hpMax, fortLevel } (null si non revendiqué), voir setCastleInfo
+    this.houseInfo = {};     // parcelId -> { ownerUsername, modelId } (absent si non réclamée), voir setHousingInfo
+    this.houseSprites = {};       // modelId -> image détourée (voir HOUSE_MODELS)
+    this.housingEntranceSprite = null;   // arche partagée, voir HOUSING_ENTRANCE_ASSET
+    this.housingForSaleSprite = null;
     this.playerSkins = {};
     this.accessorySprites = {};
     this.mountSprites = {};
@@ -300,6 +317,11 @@ class Renderer {
       this.mountSprites[mountId] = this.loadCleanImage(src);
     }
     this.saddlePropSprite = this.loadCleanImage(MOUNT_SADDLE_PROP.asset);
+    for (const [houseId, src] of Object.entries(HOUSE_FILES)) {
+      this.houseSprites[houseId] = this.loadCleanImage(src);
+    }
+    this.housingEntranceSprite = this.loadCleanImage(HOUSING_ENTRANCE_ASSET);
+    this.housingForSaleSprite = this.loadCleanImage(HOUSING_FOR_SALE_SIGN_ASSET);
   }
 
   setCastleInfo(list) {
@@ -315,6 +337,16 @@ class Renderer {
           fortLevel: Number(castle.fortLevel) || 0,
         }
         : null;
+    }
+  }
+
+  // Remplace entièrement le cache (pas une fusion) : la liste reçue est
+  // toujours la vérité complète du moment (voir Game.housingInfo, jamais
+  // poussé automatiquement — seulement interrogé à l'entrée du quartier).
+  setHousingInfo(list) {
+    this.houseInfo = {};
+    for (const h of list || []) {
+      if (h && h.parcelId) this.houseInfo[h.parcelId] = h;
     }
   }
 
@@ -1192,19 +1224,80 @@ if (c.kind === 'dungeon') {
     }
 
     if (c.kind === 'portal') {
+      // Arche thématique (assets/residential/entree_zone_residentielle.png)
+      // aux deux bouts du portail Capitale <-> quartier résidentiel ; la
+      // sortie d'un donjon réutilise le sprite de porte du donjon de son
+      // propre biome (WORLD_ICON_FILES.dungeon), pour rester bien visible
+      // et cohérente avec l'entrée vue sur la carte du monde.
+      const isHousingPortal = c.targetMapId === HOUSING_MAP_ID || s.currentMapId === HOUSING_MAP_ID;
+      const isDungeonExit = !isHousingPortal && c.targetMapId === 'world' && c.terrain;
       this.drawPoiBase(cx, cy, {
         fill: 'rgba(244, 205, 110, 0.16)',
         stroke: 'rgba(244, 205, 110, 0.5)',
         glow: 'rgba(244, 205, 110, 0.22)',
       });
-      ctx.beginPath();
-      ctx.arc(cx, cy - 6, 11, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(36, 47, 72, 0.88)';
-      ctx.fill();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = '#f4cd6e';
-      ctx.stroke();
-      this.label(cx, cy + TH2 + 10, 'SORTIE', '#f4cd6e', 9);
+      let drawn = null;
+      if (isHousingPortal && this.housingEntranceSprite) {
+        drawn = this.drawWorldSprite(this.housingEntranceSprite, cx, cy + 15, 108, 108, 26, 8);
+      } else if (isDungeonExit && this.worldIcons.dungeon[c.terrain]) {
+        const size = contentSpriteSize('dungeon');
+        drawn = this.drawWorldSprite(this.worldIcons.dungeon[c.terrain], cx, cy + size.groundOffset, size.w, size.h, size.shadowW, size.shadowH);
+      }
+      if (!drawn) {
+        ctx.beginPath();
+        ctx.arc(cx, cy - 6, 11, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(36, 47, 72, 0.88)';
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#f4cd6e';
+        ctx.stroke();
+      }
+      this.label(cx, cy + TH2 + 10, isHousingPortal ? 'QUARTIER' : 'SORTIE', '#f4cd6e', 9);
+      ctx.globalAlpha = 1;
+      return;
+    }
+
+    if (c.kind === 'parcel') {
+      const info = this.houseInfo[c.id];
+      const claimed = !!info;
+      const model = claimed ? HOUSE_MODEL_BY_ID[info.modelId] : null;
+      const sprite = model ? this.houseSprites[model.id] : null;
+      const saleSprite = !claimed ? this.housingForSaleSprite : null;
+      this.drawPoiBase(cx, cy, claimed
+        ? { fill: 'rgba(216, 168, 92, 0.16)', stroke: 'rgba(216, 168, 92, 0.5)', glow: 'rgba(216, 168, 92, 0.22)' }
+        : { fill: 'rgba(150, 150, 150, 0.08)', stroke: 'rgba(150, 150, 150, 0.3)', glow: 'rgba(150, 150, 150, 0.1)' });
+      let drawn = null;
+      if (sprite && model) {
+        drawn = this.drawWorldSprite(
+          sprite, cx, cy + model.world.groundOffset,
+          model.world.maxW, model.world.maxH, model.world.shadowW, model.world.shadowH
+        );
+      }
+      if (!drawn && saleSprite) {
+        drawn = this.drawWorldSprite(
+          saleSprite, cx, cy + 8,
+          72, 84, 18, 6
+        );
+      }
+      if (!drawn) {
+        // Silhouette placeholder (toit + base) : parcelle libre (aucun modèle
+        // à afficher) ou sprite pas encore chargé.
+        const baseY = cy + 4;
+        ctx.fillStyle = claimed ? '#8a6a3c' : '#6b6b6b';
+        ctx.fillRect(cx - 12, baseY - 12, 24, 14);
+        ctx.beginPath();
+        ctx.moveTo(cx - 15, baseY - 12);
+        ctx.lineTo(cx, baseY - 25);
+        ctx.lineTo(cx + 15, baseY - 12);
+        ctx.closePath();
+        ctx.fillStyle = claimed ? '#d8a85c' : '#8f8f8f';
+        ctx.fill();
+      }
+      this.label(
+        cx, cy + TH2 + 12,
+        claimed ? (info.ownerUsername || 'Maison').toUpperCase() : 'À VENDRE',
+        claimed ? '#e8c98a' : '#b8b8b8', 9
+      );
       ctx.globalAlpha = 1;
       return;
     }

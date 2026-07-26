@@ -315,9 +315,9 @@ const MOONSTONE_PACKS = [
 /* Conversion premium → or. Les gros packs offrent un rendement légèrement
  * meilleur, sans rendre obsolètes les gains obtenus en jouant. */
 const GOLD_PACKS = [
-  { id: 'pouch', gold: 750, moonstones: 5, bonusLabel: null },
-  { id: 'chest', gold: 2500, moonstones: 15, bonusLabel: '+11 %' },
-  { id: 'hoard', gold: 7500, moonstones: 40, bonusLabel: '+25 %' },
+  { id: 'pouch', gold: 2500, moonstones: 5, bonusLabel: null },
+  { id: 'chest', gold: 9000, moonstones: 15, bonusLabel: '+20 %' },
+  { id: 'hoard', gold: 26000, moonstones: 40, bonusLabel: '+30 %' },
 ];
 
 const SKIN_ASSET_REV = '20260721-flip';
@@ -585,6 +585,76 @@ const WORLD_BOSS = {
   mountId: 'wyrm_ancestral_hatchling',
 };
 
+/* ---------- Quartier résidentiel (housing) ----------
+ * Contenu personnel, jouable seul, pensé pour donner une raison de revenir
+ * même quand le contenu de groupe (donjons, château, boss mondial) est
+ * inaccessible faute de monde. Zone dédiée et STABLE, générée une seule
+ * fois comme un donjon (voir generateHousingDistrictMap dans js/world.js) —
+ * jamais touchée par la redistribution nocturne de la faune, contrairement
+ * au monde ouvert. Une seule maison par COMPTE (pas par personnage), comme
+ * les montures/dés : la décoration ne doit pas se diluer sur 7 classes.
+ *
+ * Grille de parcelles espacées d'au moins 5 cases (Chebyshev) pour qu'aucune
+ * maison ne puisse visuellement chevaucher une autre en marchant dans le
+ * quartier — voir le design retenu (grille 6×6, rues entre chaque rangée). */
+const HOUSING_MAP_ID = 'housing_district';
+const HOUSING_GRID_COORDS = [-12, -7, -2, 3, 8, 13];   // 6 colonnes × 6 lignes, pas de 5
+const HOUSING_PORTAL_WORLD_POS = { x: 2, y: 0 };        // 2 cases à l'est de la Capitale : assez d'écart pour ne pas chevaucher son sprite (voir generateWorldMap)
+const HOUSING_PLAZA_POS = { x: 0, y: 0 };
+const HOUSING_ENTRY_POS = { x: 0, y: 2 };
+// Portail thématique (arche de pierre/bois) réutilisé aux deux bouts du
+// portail Capitale <-> quartier — voir render.js, qui la substitue au rendu
+// générique du portail dès que targetMapId/le contexte pointe vers le quartier.
+const HOUSING_ENTRANCE_ASSET = 'assets/residential/entree_zone_residentielle.png';
+
+function housingParcelId(col, row) { return 'parcel_' + col + '_' + row; }
+
+/* Modèles de façade (cosmétique pur, achat en or/Écailles Lunaires) — quatre
+ * tailles croissantes, même pattern que SKIN_SHOP_ITEMS/MOUNT_ITEMS. `world`
+ * calibre le rendu isométrique (voir contentSpriteSize/drawWorldSprite dans
+ * render.js), à l'échelle relative des tailles réelles des illustrations
+ * (toutes au même ratio ~1402×1122). Le mobilier intérieur (recettes
+ * bois/pierre/plante) reste une extension future : ce premier jet couvre la
+ * parcelle + la façade, pas encore la décoration. */
+const HOUSE_MODELS = [
+  {
+    id: 'house_petite',
+    label: 'Chaumière',
+    asset: 'assets/residential/maison_residentielle_petite.png',
+    currency: 'gold',
+    price: 800,
+    world: { maxW: 100, maxH: 80, groundOffset: 13, shadowW: 26, shadowH: 8 },
+  },
+  {
+    id: 'house_moyenne',
+    label: 'Maison à Colombages',
+    asset: 'assets/residential/maison_residentielle_moyenne.png',
+    currency: 'gold',
+    price: 3000,
+    world: { maxW: 128, maxH: 102, groundOffset: 15, shadowW: 30, shadowH: 9 },
+  },
+  {
+    id: 'house_grande',
+    label: 'Manoir Bleu',
+    asset: 'assets/residential/maison_residentielle_grande.png',
+    currency: 'gold',
+    price: 9000,
+    world: { maxW: 150, maxH: 120, groundOffset: 17, shadowW: 34, shadowH: 10 },
+  },
+  {
+    id: 'house_tres_grande',
+    label: 'Domaine Doré',
+    asset: 'assets/residential/maison_residentielle_tres_grande.png',
+    currency: PREMIUM_CURRENCY.key,
+    price: 15,
+    world: { maxW: 172, maxH: 138, groundOffset: 19, shadowW: 38, shadowH: 11 },
+  },
+];
+const HOUSE_MODEL_BY_ID = Object.fromEntries(HOUSE_MODELS.map((m) => [m.id, m]));
+function houseModelFor(id) {
+  return id ? (HOUSE_MODEL_BY_ID[id] || null) : null;
+}
+
 /* Cosmétiques d'accessoire : calque additionnel dessiné en plus du skin
  * (indépendant de la classe), jamais en vente — uniquement en loot rare ou
  * attribution admin. Un seul actif à la fois par joueur (p.equippedAccessory). */
@@ -611,6 +681,93 @@ const ACCESSORY_ITEMS = {
  * homogènes pour les montures « simples » ci-dessous : à ajuster par animal
  * une fois les vrais assets importés (même exercice que pour les ailes/le
  * Wyrm — cf. loadCleanImage). */
+const ARTIFACT_ITEMS = {
+  artifact_steppe_claw: {
+    id: 'artifact_steppe_claw',
+    label: 'Griffe du Fauve des Steppes',
+    slot: 'artifact',
+    source: { kind: 'dungeonBoss', terrain: 'PLAINE', bossType: 'BOSS_PLAINE', label: 'Cerf-Orage' },
+    asset: 'assets/artifacts/griffe_fauve_steppes.png',
+    stats: { power: 18, armor: 0 },
+    fragmentsRequired: 4,
+    fragmentKey: 'FRAGMENT_ARTEFACT_PLAINE',
+    fragmentLabel: 'Fragment de la Griffe des Steppes',
+    description: 'Un eclat charge de violence primitive. Accorde une forte puissance offensive.',
+  },
+  artifact_forest_sap: {
+    id: 'artifact_forest_sap',
+    label: 'Seve du Gardien Sylvestre',
+    slot: 'artifact',
+    source: { kind: 'dungeonBoss', terrain: 'FORET', bossType: 'BOSS_FORET', label: 'Roi Roncier' },
+    asset: 'assets/artifacts/seve_gardien_sylvestre.png',
+    stats: { power: 14, armor: 8 },
+    fragmentsRequired: 4,
+    fragmentKey: 'FRAGMENT_ARTEFACT_FORET',
+    fragmentLabel: 'Fragment de Seve Sylvestre',
+    description: 'Une seve ancienne durcie comme l ambre. Offre puissance et protection.',
+  },
+  artifact_bog_heart: {
+    id: 'artifact_bog_heart',
+    label: 'Coeur de Tourbe Vivante',
+    slot: 'artifact',
+    source: { kind: 'dungeonBoss', terrain: 'MARECAGE', bossType: 'BOSS_MARECAGE', label: 'Hydre de Vase' },
+    asset: 'assets/artifacts/coeur_tourbe_vivante.png',
+    stats: { power: 0, armor: 18 },
+    fragmentsRequired: 4,
+    fragmentKey: 'FRAGMENT_ARTEFACT_MARAIS',
+    fragmentLabel: 'Fragment de Coeur de Tourbe',
+    description: 'Un noyau organique gorge de magie stagnante. Renforce fortement la vitalite (PV max).',
+  },
+  artifact_peak_core: {
+    id: 'artifact_peak_core',
+    label: 'Noyau Runique des Cimes',
+    slot: 'artifact',
+    source: { kind: 'dungeonBoss', terrain: 'MONTAGNE', bossType: 'BOSS_MONTAGNE', label: 'Golem Couronne' },
+    asset: 'assets/artifacts/noyau_runique_cimes.png',
+    stats: { power: 8, armor: 14 },
+    fragmentsRequired: 4,
+    fragmentKey: 'FRAGMENT_ARTEFACT_MONTAGNE',
+    fragmentLabel: 'Fragment de Noyau Runique',
+    description: 'Une pierre runique nee sous la pression des sommets. Apporte stabilite et puissance.',
+  },
+  artifact_dragon_scale: {
+    id: 'artifact_dragon_scale',
+    label: 'Ecaille du Dragon Ancien',
+    slot: 'artifact',
+    source: { kind: 'worldBoss', bossType: 'WORLD_BOSS_WYRM', label: 'Wyrm Ancestral' },
+    asset: 'assets/artifacts/ecaille_dragon_ancien.png',
+    stats: { power: 20, armor: 20 },
+    fragmentsRequired: 6,
+    fragmentKey: 'FRAGMENT_ARTEFACT_DRAGON',
+    fragmentLabel: 'Fragment d Ecaille Draconique',
+    description: 'Une ecaille impregnee d une puissance primordiale. Convoitise supreme des groupes T6.',
+  },
+};
+const ARTIFACT_ORDER = [
+  'artifact_steppe_claw',
+  'artifact_forest_sap',
+  'artifact_bog_heart',
+  'artifact_peak_core',
+  'artifact_dragon_scale',
+];
+const ARTIFACT_BY_FRAGMENT_KEY = Object.fromEntries(
+  Object.values(ARTIFACT_ITEMS).map((item) => [item.fragmentKey, item])
+);
+function artifactFor(id) {
+  return id ? (ARTIFACT_ITEMS[id] || null) : null;
+}
+function artifactStatsFor(p) {
+  const item = artifactFor(p && p.artifactId);
+  return item ? { power: item.stats.power || 0, armor: item.stats.armor || 0 } : { power: 0, armor: 0 };
+}
+function artifactProgressFor(p, artifactId) {
+  const item = artifactFor(artifactId);
+  if (!item) return { owned: false, count: 0, required: 0 };
+  const owned = !!(Array.isArray(p && p.ownedArtifacts) && p.ownedArtifacts.includes(item.id));
+  const count = owned ? item.fragmentsRequired : Number((p && p.inventory && p.inventory[item.fragmentKey]) || 0);
+  return { owned, count, required: item.fragmentsRequired };
+}
+
 const MOUNT_ITEMS = {
   wyrm_ancestral_hatchling: {
     id: 'wyrm_ancestral_hatchling',
@@ -856,6 +1013,10 @@ const TERRAINS = {
   MONTAGNE: { label: 'Montagne', color: '#5d616d' },
   MARECAGE: { label: 'Marécage', color: '#44594a' },
   RUINES:   { label: 'Ruines',   color: '#544663' },
+  // Quartier résidentiel : pavés du sol, aucun asset dédié (voir
+  // TERRAIN_TILE_FILES.PAVE = [] dans render.js) — rendu en dégradé uni comme
+  // n'importe quel terrain avant chargement de ses images.
+  PAVE:     { label: 'Pavés',    color: '#8a8478' },
 };
 
 const TIER_COLORS = { 0: '#6f7a87', 1: '#9aa5b1', 2: '#58b368', 3: '#4a9fd8', 4: '#a86fd1', 5: '#e8a33f', 6: '#d66a4a' };
@@ -915,9 +1076,11 @@ function playerForce(p) {
 }
 
 /* PV max = socle de la classe (Tank > Soutien > Soin/Butin > Dégâts) +
- * l'armure, qui ajoute le même montant par tier pour tous. */
+ * l'armure, qui ajoute le même montant par tier pour tous, + le bonus
+ * "armor" de l'artefact équipé (des PV bonus, visibles directement dans
+ * PV max — pas une stat de combat séparée invisible ailleurs). */
 function maxHp(p) {
-  return CLASSES[p.speciesClass].baseHp + p.armor.tier * 15;
+  return CLASSES[p.speciesClass].baseHp + p.armor.tier * 15 + artifactStatsFor(p).armor;
 }
 
 function hpLossReduction(p) {
@@ -972,12 +1135,22 @@ function applyCharacter(p, index) {
 
 /* ---------- Combat probabiliste ---------- */
 
+/* Puissance à pleine vie (arme + armure + artefact + buffs), SANS le facteur
+ * de blessure — pendant brut, symétrique de maxHp() : sert à l'affichage
+ * profil (pour que l'ajout d'un artefact s'y reflète toujours intégralement,
+ * peu importe l'état de santé au moment de l'équiper), jamais au calcul d'une
+ * bataille (voir combatPower ci-dessous, qui reste réduit si blessé). */
+function maxPower(p) {
+  const artifactStats = artifactStatsFor(p);
+  return (playerForce(p) + p.armor.tier * 8 + artifactStats.power) * buffPowerMult(p);
+}
+
 /* Puissance de combat individuelle : l'arme, l'armure ET l'état de santé.
  * Blessé, on se bat moins bien : facteur de WOUND_FLOOR (à 0 PV) à 1 (à plein). */
 function combatPower(p) {
   const woundFactor = CONFIG.COMBAT.WOUND_FLOOR +
     (1 - CONFIG.COMBAT.WOUND_FLOOR) * Math.max(0, Math.min(1, p.hp / maxHp(p)));
-  return (playerForce(p) + p.armor.tier * 8) * woundFactor * buffPowerMult(p);
+  return maxPower(p) * woundFactor;
 }
 
 /* Puissance d'équipe : somme des puissances brutes, puis bonus de RÔLE —
@@ -1084,11 +1257,15 @@ if (typeof module !== 'undefined' && module.exports) {
     PREMIUM_CURRENCY, MOONSTONE_PACKS, GOLD_PACKS, VAPID_PUBLIC_KEY,
     SKIN_SHOP_ITEMS, SKIN_BY_ID, SKIN_ASSET_REV, CLASS_SKIN_SCALE, SKIN_OFFSET_X, CLASS_BASE_SKINS,
     DICE_FX, DICE_SKIN_ITEMS, DICE_SKIN_BY_ID, diceSkinFor,
-    WORLD_BOSS, ACCESSORY_ITEMS, MOUNT_ITEMS, MOUNT_SADDLE_PROP,
+    WORLD_BOSS, ACCESSORY_ITEMS, ARTIFACT_ITEMS, ARTIFACT_ORDER, ARTIFACT_BY_FRAGMENT_KEY, MOUNT_ITEMS, MOUNT_SADDLE_PROP,
+    HOUSING_MAP_ID, HOUSING_GRID_COORDS, HOUSING_PORTAL_WORLD_POS, HOUSING_PLAZA_POS, HOUSING_ENTRY_POS,
+    HOUSING_ENTRANCE_ASSET,
+    housingParcelId, HOUSE_MODELS, HOUSE_MODEL_BY_ID, houseModelFor,
     skinFor, skinAssetUrl, classSkinScale, baseSkinAsset, equipmentAsset, classAvailableToRole,
+    artifactFor, artifactStatsFor, artifactProgressFor,
     levelFromXp, playerForce, maxHp, hpLossReduction, reviveHpPct, stackKey, parseStackKey, resourceFamily,
     newCharacter, syncActiveCharacter, applyCharacter, rollGoldLoot,
-    combatPower, teamPowerOf, winChance, winThreshold, rollD100,
+    combatPower, maxPower, teamPowerOf, winChance, winThreshold, rollD100,
     CONSUMABLES, CONSUMABLE_EFFECTS, CONSUMABLE_RECIPES, BUFF_COMBATS,
     consumableDesc, buffPowerMult, buffLossReduction, foodDropFor, resourceLabel, monsterFor,
   };

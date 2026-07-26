@@ -26,6 +26,7 @@ class ServerSim {
     this.tiles = this.worldMap.tiles;
     this.players = new Map();
     this.raids = new Map();
+    this.houses = new Map();   // parcelId -> { parcelId, ownerId, ownerUsername, modelId, furniture }
     this.tradeInvites = new Map();
     this.trades = new Map();
     this.trade = null;
@@ -46,11 +47,14 @@ class ServerSim {
     if (!p) return;
     if (!Array.isArray(p.ownedSkins)) p.ownedSkins = [];
     if (!Array.isArray(p.ownedAccessories)) p.ownedAccessories = [];
+    if (!Array.isArray(p.ownedArtifacts)) p.ownedArtifacts = [];
     if (!Array.isArray(p.ownedMounts)) p.ownedMounts = [];
     if (!Array.isArray(p.ownedDice)) p.ownedDice = [];
     if (typeof p.accessoryId === 'undefined') p.accessoryId = null;
+    if (typeof p.artifactId === 'undefined') p.artifactId = null;
     if (typeof p.mountId === 'undefined') p.mountId = null;
     if (typeof p.diceId === 'undefined') p.diceId = null;
+    if (typeof p.parcelId === 'undefined') p.parcelId = null;
     if (typeof p[PREMIUM_CURRENCY.key] !== 'number') p[PREMIUM_CURRENCY.key] = 0;
     if (typeof p.skinId === 'undefined') p.skinId = null;
     if (!Array.isArray(p.characters) || !p.characters.length) return;
@@ -86,8 +90,44 @@ class ServerSim {
       armorType: p.armor ? p.armor.type : '',
       skinId: p.skinId || null,
       accessoryId: p.accessoryId || null,
+      artifactId: p.artifactId || null,
       mountId: p.mountId || null,
     };
+  }
+
+  grantArtifactFragment(p, artifactId, qty) {
+    const item = artifactFor(artifactId);
+    const amount = Math.max(0, Math.floor(Number(qty) || 0));
+    if (!item || !amount) return null;
+    if (p.ownedArtifacts.includes(item.id)) {
+      return { item, gained: 0, assembled: false, alreadyOwned: true, count: item.fragmentsRequired, required: item.fragmentsRequired };
+    }
+    const key = item.fragmentKey;
+    const after = Number(p.inventory[key] || 0) + amount;
+    p.inventory[key] = after;
+    let assembled = false;
+    if (after >= item.fragmentsRequired) {
+      p.inventory[key] = after - item.fragmentsRequired;
+      if (p.inventory[key] <= 0) delete p.inventory[key];
+      p.ownedArtifacts.push(item.id);
+      if (!p.artifactId) p.artifactId = item.id;
+      assembled = true;
+      this.toast('Artefact reconstitue : ' + item.label + ' !');
+    }
+    const count = assembled ? item.fragmentsRequired : Number(p.inventory[key] || 0);
+    return { item, gained: amount, assembled, alreadyOwned: false, count, required: item.fragmentsRequired };
+  }
+
+  artifactIdForMonster(monster) {
+    if (!monster) return null;
+    if (monster.worldBoss) return 'artifact_dragon_scale';
+    if (!monster.boss) return null;
+    return {
+      BOSS_PLAINE: 'artifact_steppe_claw',
+      BOSS_FORET: 'artifact_forest_sap',
+      BOSS_MARECAGE: 'artifact_bog_heart',
+      BOSS_MONTAGNE: 'artifact_peak_core',
+    }[monster.type] || null;
   }
 
   syncCurrentMap() {
@@ -220,6 +260,56 @@ class ServerSim {
   craftSiegeEngine(tier) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
   deploySiegeEngine(key, tier) { return { ok: false, error: 'Châteaux de guilde disponibles en multijoueur réel.' }; }
 
+  /* ---------- Quartier résidentiel (contenu solo, contrairement aux
+   * châteaux/guildes ci-dessus) ---------- */
+  houseOf(parcelId) {
+    if (!this.houses.has(parcelId)) {
+      this.houses.set(parcelId, { parcelId, ownerId: null, ownerUsername: null, modelId: null, furniture: [] });
+    }
+    return this.houses.get(parcelId);
+  }
+
+  parcelTileFor(parcelId) {
+    const map = this.mapOf(HOUSING_MAP_ID);
+    if (!map) return null;
+    for (const tile of map.tiles.values()) {
+      if (tile.content && tile.content.kind === 'parcel' && tile.content.id === parcelId) return tile;
+    }
+    return null;
+  }
+
+  claimParcel(parcelId, modelId) {
+    const me = this.me;
+    if (me.parcelId) return { ok: false, error: 'Vous possédez déjà une maison.' };
+    const tile = this.parcelTileFor(String(parcelId || ''));
+    if (!tile) return { ok: false, error: 'Parcelle introuvable.' };
+    const house = this.houseOf(tile.content.id);
+    if (house.ownerId) return { ok: false, error: 'Cette parcelle est déjà occupée.' };
+    const model = houseModelFor(String(modelId || ''));
+    if (!model) return { ok: false, error: 'Modèle de maison invalide.' };
+    const walletKey = model.currency === PREMIUM_CURRENCY.key ? PREMIUM_CURRENCY.key : 'gold';
+    const balance = Number(me[walletKey] || 0);
+    if (balance < model.price) {
+      return { ok: false, error: walletKey === 'gold' ? 'Pas assez d’or.' : ('Pas assez de ' + PREMIUM_CURRENCY.label.toLowerCase() + '.') };
+    }
+    me[walletKey] = balance - model.price;
+    house.ownerId = me.id;
+    house.ownerUsername = me.username;
+    house.modelId = model.id;
+    me.parcelId = tile.content.id;
+    this.emit('self', me);
+    return { ok: true, parcelId: tile.content.id };
+  }
+
+  housingInfo() {
+    return {
+      ok: true,
+      list: [...this.houses.values()]
+        .filter((h) => h.ownerId)
+        .map((h) => ({ parcelId: h.parcelId, ownerUsername: h.ownerUsername, modelId: h.modelId })),
+    };
+  }
+
   mapStates() {
     const out = {};
     for (const [mapId, map] of this.maps) {
@@ -283,10 +373,13 @@ class ServerSim {
       ownedSkins: [],
       ownedAccessories: [],
       accessoryId: null,
+      ownedArtifacts: [],
+      artifactId: null,
       ownedMounts: [],
       mountId: null,
       ownedDice: [],
       diceId: null,
+      parcelId: null,
       status: 'IDLE',
       harvestKey: null, harvestEndsAt: 0,
       raidKey: null,
@@ -464,6 +557,23 @@ class ServerSim {
     if (!ACCESSORY_ITEMS[desired]) return { ok: false, error: 'Accessoire inconnu.' };
     if (!me.ownedAccessories.includes(desired)) return { ok: false, error: 'Vous ne possédez pas cet accessoire.' };
     me.accessoryId = desired;
+    this.emit('self', me);
+    return { ok: true };
+  }
+
+  equipArtifact(artifactId) {
+    const me = this.me;
+    const desired = artifactId ? String(artifactId) : null;
+    if (!desired) {
+      me.artifactId = null;
+      me.hp = Math.min(me.hp, maxHp(me));
+      this.emit('self', me);
+      return { ok: true };
+    }
+    if (!ARTIFACT_ITEMS[desired]) return { ok: false, error: 'Artefact inconnu.' };
+    if (!me.ownedArtifacts.includes(desired)) return { ok: false, error: 'Vous ne possedez pas cet artefact.' };
+    me.artifactId = desired;
+    me.hp = Math.min(me.hp, maxHp(me));
     this.emit('self', me);
     return { ok: true };
   }
@@ -792,7 +902,7 @@ class ServerSim {
     const roller = rollerPool[Math.floor(this.rng() * rollerPool.length)];
     const druid = victory && members.some((p) => p.speciesClass === 'CERF_DRUIDE');
     const rampart = members.some((p) => p.speciesClass === 'OURS_GUERRIER');
-    let myHpLoss = 0, myXp = 0, myGold = 0, myFood = null, myBoosted = false, myDied = false;
+    let myHpLoss = 0, myXp = 0, myGold = 0, myFood = null, myBoosted = false, myDied = false, myArtifact = null;
 
     for (const p of members) {
       p.status = 'IDLE';
@@ -854,6 +964,11 @@ class ServerSim {
           myFood = foodDropFor(monster.tier);
           p.inventory[myFood] = (p.inventory[myFood] || 0) + 1;
         }
+        const artifactId = this.artifactIdForMonster(monster);
+        if (artifactId) {
+          const artifactReward = this.grantArtifactFragment(p, artifactId, 1);
+          if (p.id === this.meId) myArtifact = artifactReward;
+        }
         myXp = xp;
         myGold = gold;
         if (p.id === this.meId) myBoosted = boosted;
@@ -899,6 +1014,7 @@ class ServerSim {
       participants: members.map((p) => p.username),
       gold: myGold,
       food: myFood,
+      artifact: myArtifact,
       hpLoss: myHpLoss,
       xp: myXp,
       regainBoosted: myBoosted,
@@ -1108,11 +1224,14 @@ class ServerSim {
         if (tile.content && tile.content.inactiveUntil > this.now) mapDiffs[mapId].push([key, tile.content.inactiveUntil]);
       }
     }
-    return { seed: this.seed, now: this.now, player: this.me, mapDiffs, mapStates: this.mapStates(), savedAt: Date.now() };
+    return { seed: this.seed, now: this.now, player: this.me, houses: [...this.houses.values()], mapDiffs, mapStates: this.mapStates(), savedAt: Date.now() };
   }
 
   restore(data) {
     this.now = data.now || 0;
+    for (const h of data.houses || []) {
+      if (h && h.parcelId) this.houses.set(h.parcelId, h);
+    }
     const p = data.player;
     p.status = 'IDLE';
     p.harvestKey = null;

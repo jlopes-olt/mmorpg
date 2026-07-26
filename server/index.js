@@ -191,6 +191,7 @@ if (store.countAccounts() === 0 && seed === null && fs.existsSync(LEGACY_STATE_F
     credentials: {},
     guilds: store.getMeta('guilds', []),
     castles: store.getMeta('castles', []),
+    houses: store.getMeta('houses', []),
     chatLog: store.getMeta('chatLog', []),
     worldDiffs: store.loadDiffs(),
     wildSalt: store.getMeta('wildSalt', 0),
@@ -242,6 +243,7 @@ function saveWorld() {
       store.setMeta('now', game.now);
       store.setMeta('guilds', [...game.guilds.values()]);
       store.setMeta('castles', [...game.castles.values()]);
+      store.setMeta('houses', [...game.houses.values()]);
       store.setMeta('chatLog', game.chatLog);
       store.setMeta('wildSalt', game.wildSalt);
       store.setMeta('worldBossAlive', game.worldBossAlive);
@@ -263,6 +265,11 @@ function saveAll() {
 game.onDirty = (p) => saveAccountOf(p);
 // Création/adhésion/départ de guilde → écriture immédiate (pas d'attente du filet de sécurité)
 game.onGuildsDirty = () => saveWorld();
+// Achat/libération de parcelle → écriture immédiate (voir le bug corrigé :
+// `houses` manquait de la liste meta ci-dessus, donc ne survivait à AUCUN
+// redémarrage — seul parcelId sur le compte du joueur persistait, laissant
+// une maison "fantôme" invisible et un achat bloqué sans rien à réinitialiser).
+game.onHousingDirty = () => saveWorld();
 // Chaque message (général/guilde/MP) → écriture immédiate, pour survivre à un redémarrage
 // entre l'envoi et la prochaine connexion du destinataire (coordination asynchrone).
 game.onChatDirty = () => saveWorld();
@@ -444,6 +451,23 @@ app.post('/admin/api/players/:username/dice', adminAuth, (req, res) => {
   res.json(r);
 });
 
+app.post('/admin/api/players/:username/artifact-fragment', adminAuth, (req, res) => {
+  const b = req.body || {};
+  const r = game.adminGrantArtifactFragment(req.adminPlayer, req.params.username, String(b.artifactId || ''), Number(b.qty));
+  res.json(r);
+});
+
+app.post('/admin/api/players/:username/artifact', adminAuth, (req, res) => {
+  const b = req.body || {};
+  const r = game.adminGrantArtifact(req.adminPlayer, req.params.username, String(b.artifactId || ''));
+  res.json(r);
+});
+
+app.post('/admin/api/players/:username/house/reset', adminAuth, (req, res) => {
+  const r = game.adminResetHouse(req.adminPlayer, req.params.username);
+  res.json(r);
+});
+
 app.post('/admin/api/players/:username/level', adminAuth, (req, res) => {
   const b = req.body || {};
   const r = game.adminSetLevel(req.adminPlayer, req.params.username, String(b.kind || ''), Number(b.tier));
@@ -611,6 +635,7 @@ io.on('connection', (socket) => {
   socket.on('shop:buyDice', act((d) => game.buyDiceSkin(player, String(d.diceId))));
   socket.on('shop:equipSkin', act((d) => game.equipSkin(player, d.skinId ? String(d.skinId) : null)));
   socket.on('accessory:equip', act((d) => game.equipAccessory(player, d.accessoryId ? String(d.accessoryId) : null)));
+  socket.on('artifact:equip', act((d) => game.equipArtifact(player, d.artifactId ? String(d.artifactId) : null)));
   socket.on('mount:equip', act((d) => game.equipMount(player, d.mountId ? String(d.mountId) : null)));
   socket.on('dice:equip', act((d) => game.equipDiceSkin(player, d.diceId ? String(d.diceId) : null)));
   socket.on('shop:buyGoldPack', act((d) => game.buyGoldPack(player, String(d.packId || ''))));
@@ -695,6 +720,12 @@ io.on('connection', (socket) => {
     if (!player || !game.players.has(player.id)) return ack({ ok: false, error: 'Non authentifié.' });
     ack({ ok: true, list: game.castlesInfo(player) });
   });
+  socket.on('housing:info', (payload, ack) => {
+    if (typeof ack !== 'function') ack = () => {};
+    if (!player || !game.players.has(player.id)) return ack({ ok: false, error: 'Non authentifié.' });
+    ack({ ok: true, list: game.housingInfo() });
+  });
+  socket.on('housing:claim', act((d) => game.claimParcel(player, String(d.parcelId), String(d.modelId))));
   socket.on('castle:claim', act((d) => game.claimCastle(player, String(d.terrain))));
   socket.on('castle:reinforce', act((d) => game.reinforceCastle(player, String(d.terrain))));
   socket.on('castle:repair', act((d) => game.repairCastle(player, String(d.terrain), Number(d.gold))));

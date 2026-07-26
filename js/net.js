@@ -215,6 +215,7 @@ class RemoteServer {
   buyDiceSkin(diceId) { return this.req('shop:buyDice', { diceId }); }
   equipSkin(skinId) { return this.req('shop:equipSkin', { skinId }); }
   equipAccessory(accessoryId) { return this.req('accessory:equip', { accessoryId }); }
+  equipArtifact(artifactId) { return this.req('artifact:equip', { artifactId }); }
   equipMount(mountId) { return this.req('mount:equip', { mountId }); }
   equipDiceSkin(diceId) { return this.req('dice:equip', { diceId }); }
   buyPaScroll() { return this.req('shop:buyPaScroll', {}); }
@@ -260,6 +261,8 @@ class RemoteServer {
   joinFriend(username) { return this.req('friend:join', { username }); }
   friendsList() { return this.req('friend:list', {}); }
   castlesInfo() { return this.req('castle:info', {}); }
+  housingInfo() { return this.req('housing:info', {}); }
+  claimParcel(parcelId, modelId) { return this.req('housing:claim', { parcelId, modelId }); }
   claimCastle(terrain) { return this.req('castle:claim', { terrain }); }
   reinforceCastle(terrain) { return this.req('castle:reinforce', { terrain }); }
   repairCastle(terrain, gold) { return this.req('castle:repair', { terrain, gold }); }

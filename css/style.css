@@ -1667,6 +1667,17 @@ html, body {
 .accessory-card-copy small { display: block; }
 .accessory-card-copy b { font: 700 14px Georgia, "Times New Roman", serif; }
 .accessory-card-copy small { margin-top: 5px; color: #8a6d4a; font-size: 10px; }
+.artifact-card.locked {
+  opacity: 0.82;
+  cursor: default;
+}
+.artifact-card.locked .accessory-card-art img {
+  filter: grayscale(0.15) saturate(0.85) drop-shadow(0 6px 8px rgba(49, 20, 38, 0.18));
+}
+.artifact-loot small,
+.artifact-loot em {
+  text-transform: none;
+}
 .accessory-none {
   min-height: 42px;
   padding: 8px 12px;

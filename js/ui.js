@@ -642,6 +642,72 @@ showDungeonPopup(tile, onEnter) {
     }
   }
 
+  /* ---------- Quartier résidentiel ----------
+   * Contenu personnel, sans dépendance à un groupe/une guilde — voir
+   * Game.claimParcel/housingInfo. Un seul jet de statut possible pour ce
+   * premier jet (achat de parcelle) ; la décoration intérieure (meubles,
+   * trophées) est une extension prévue mais pas encore construite. */
+  async showParcelPopup(tile) {
+    const me = this.server.me;
+    const c = tile.content;
+    const parcelId = c.id;
+    this.popup('Parcelle', '<p class="dim">Chargement…</p>', [{ label: 'Fermer' }], { mode: 'parcel' });
+    const res = await Promise.resolve(this.server.housingInfo());
+    if (this.popupMode !== 'parcel') return;   // fermé entre-temps
+    const list = (res && res.ok) ? res.list : [];
+    if (this.renderer && typeof this.renderer.setHousingInfo === 'function') {
+      this.renderer.setHousingInfo(list);
+    }
+    const house = list.find((h) => h.parcelId === parcelId) || null;
+
+    if (!house) {
+      const body = '<p class="dim">Parcelle libre — choisissez une façade.</p>' +
+        (me.parcelId ? '<p class="hp-c small">Vous possédez déjà une maison — une seule par compte.</p>' : '') +
+        '<div class="shop-grid house-model-grid">' + HOUSE_MODELS.map((m) => this.houseModelCardHtml(m, me)).join('') + '</div>';
+      this.popup('Parcelle libre', body, [{ label: 'Fermer' }], { mode: 'parcel', kicker: 'Quartier résidentiel' });
+      if (!me.parcelId) {
+        $('popup').querySelectorAll('[data-house-buy]').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const modelId = btn.dataset.houseBuy;
+            const r = await Promise.resolve(this.server.claimParcel(parcelId, modelId));
+            this.toast(r.ok ? '🏠 Parcelle acquise !' : r.error);
+            this.closePopup();
+          });
+        });
+      }
+      return;
+    }
+
+    const isMine = me.parcelId === parcelId;
+    this.popup(
+      isMine ? 'Votre maison' : 'Maison de ' + esc(house.ownerUsername),
+      '<p class="dim">' + (isMine
+        ? 'C’est chez vous ! La décoration intérieure (meubles, trophées) arrive dans une prochaine mise à jour.'
+        : 'Visite en lecture seule — la décoration intérieure arrive dans une prochaine mise à jour.') + '</p>',
+      [{ label: 'Fermer' }],
+      { mode: 'parcel', kicker: 'Quartier résidentiel' }
+    );
+  }
+
+  houseModelCardHtml(model, me) {
+    const canAfford = Number(me[model.currency] || 0) >= model.price;
+    return (
+      '<article class="shop-card">' +
+        '<div class="shop-card-art house-model-art"><img src="' + esc(model.asset) + '" alt="' + esc(model.label) + '"></div>' +
+        '<div class="shop-card-copy">' +
+          '<div class="shop-card-top"><b>' + esc(model.label) + '</b></div>' +
+          '<div class="shop-card-price ' + (model.currency === PREMIUM_CURRENCY.key ? 'premium' : 'gold') + '">' +
+            (model.currency === PREMIUM_CURRENCY.key ? this.currencyIcon('premium') : this.currencyIcon('gold')) + ' ' + model.price +
+          '</div>' +
+          '<div class="shop-card-state">' + (canAfford ? 'Disponible' : 'Fonds insuffisants') + '</div>' +
+        '</div>' +
+        '<div class="shop-card-actions">' +
+          '<button class="btn primary shop-btn" data-house-buy="' + esc(model.id) + '"' + (canAfford ? '' : ' disabled') + '>Acheter</button>' +
+        '</div>' +
+      '</article>'
+    );
+  }
+
   castleReinforceCardHtml(c, resType) {
     const me = this.server.me;
     if (c.level >= c.maxLevel) {
@@ -2027,6 +2093,16 @@ showDungeonPopup(tile, onEnter) {
         const pf = parseStackKey(r.food);
         lines.push('<p><span class="battle-label">Trouvaille</span> ' + (RESOURCE_EMOJI[pf.type] || '❔') + ' 1× ' + resourceLabel(pf.type, pf.tier) + '</p>');
       }
+      if (r.artifact && r.artifact.item) {
+        const a = r.artifact.item;
+        const progress = r.artifact.assembled
+          ? 'Artefact complet'
+          : (Math.min(r.artifact.count, r.artifact.required) + ' / ' + r.artifact.required + ' fragments');
+        lines.push('<div class="legendary-loot artifact-loot">' +
+          '<img src="' + a.asset + '" alt="">' +
+          '<span><small>ARTEFACT</small><b>' + esc(a.label) + '</b><em>+' + a.stats.power + ' puissance · +' + a.stats.armor + ' PV max · ' + esc(progress) + '</em></span>' +
+        '</div>');
+      }
       lines.push('<p><span class="battle-label">Maîtrise</span> +' + r.xp + ' XP d’arme' +
         (r.regainBoosted ? ' <span class="ok-c">(✨ Regain : doublée)</span>' : '') + '</p>');
       if (r.worldBoss && r.worldBossBonus) {
@@ -2357,7 +2433,7 @@ showDungeonPopup(tile, onEnter) {
         '</div>' +
       '</div>' +
       '<div class="desktop-stat-grid">' +
-        '<div><span>Puissance</span><b>' + Math.round(combatPower(me)) + '</b></div>' +
+        '<div><span>Puissance</span><b>' + Math.round(maxPower(me)) + '</b></div>' +
         '<div><span>PV</span><b>' + me.hp + ' / ' + maxHp(me) + '</b></div>' +
         '<div><span>Or</span><b>' + (me.gold || 0).toLocaleString('fr-FR') + '</b></div>' +
       '</div>' +
@@ -2801,7 +2877,7 @@ showDungeonPopup(tile, onEnter) {
   build_profile(body) {
     const me = this.server.me;
     const cls = CLASSES[me.speciesClass];
-    const power = Math.round(combatPower(me));
+    const power = Math.round(maxPower(me));
     // En solo (sandbox locale), les outils de triche restent toujours accessibles ;
     // en multijoueur, ils sont réservés au rôle admin.
     const showCheats = !this.server.remote || me.role === 'admin';
@@ -2830,9 +2906,13 @@ showDungeonPopup(tile, onEnter) {
       '<div class="profile-sec-title">Équipement</div>' +
       '<div class="gear-line"><img class="gear-art" src="' + equipmentAsset('weapon', me.weapon.type) + '" alt="' + esc(me.weapon.type) + '"><span class="gear-name">' + me.weapon.type + '</span><span class="tier t' + me.weapon.tier + '">T' + me.weapon.tier + '</span></div>' +
       '<div class="gear-line"><img class="gear-art" src="' + equipmentAsset('armor', me.armor.type) + '" alt="Armure de ' + esc(me.armor.type) + '"><span class="gear-name">Armure de ' + me.armor.type + '</span><span class="tier t' + me.armor.tier + '">T' + me.armor.tier + '</span></div>' +
+      '<div class="gear-line"><span class="gear-ico">◆</span><span class="gear-name">Artefact ' + esc((artifactFor(me.artifactId) || {}).label || 'Aucun') + '</span><span class="tier">' + this.artifactStatSummary(me) + '</span></div>' +
       '<div class="gear-line"><span class="gear-ico">✨</span><span class="gear-name">Apparence ' + esc((skinFor(me.skinId) || {}).label || 'Tenue de base') + '</span><span class="tier">Actuelle</span></div>' +
       '<button id="profileSkinBtn" class="btn wide">Changer d’apparence</button>' +
       '<p class="dim small profile-hint">Unique et évolutif — chez le Forgeron de la Capitale.</p>' +
+
+      '<div class="section-divider">✦</div>' +
+      this.buildArtifactSectionHtml(me) +
 
       '<div class="section-divider">✦</div>' +
       this.buildQuestsSectionHtml(me) +
@@ -2881,6 +2961,13 @@ showDungeonPopup(tile, onEnter) {
       btn.addEventListener('click', async () => {
         const accessoryId = btn.dataset.accessory || null;
         const r = await Promise.resolve(this.server.equipAccessory(accessoryId));
+        if (!r.ok) this.toast(r.error);
+      });
+    });
+    body.querySelectorAll('[data-artifact]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const artifactId = btn.dataset.artifact || null;
+        const r = await Promise.resolve(this.server.equipArtifact(artifactId));
         if (!r.ok) this.toast(r.error);
       });
     });
@@ -3036,6 +3123,39 @@ showDungeonPopup(tile, onEnter) {
       '<p class="dim small">Objet extrêmement rare, obtenu en battant un boss de raid mondial.</p>' +
       '<div class="accessory-picker">' +
         '<button class="accessory-none' + (!me.accessoryId ? ' active' : '') + '" data-accessory="">Sans accessoire</button>' +
+        items +
+      '</div>';
+  }
+
+  artifactStatSummary(me) {
+    const stats = artifactStatsFor(me);
+    if (!stats.power && !stats.armor) return 'Inactif';
+    return '+' + stats.power + ' PUI · +' + stats.armor + ' PV';
+  }
+
+  buildArtifactSectionHtml(me) {
+    const items = ARTIFACT_ORDER.map((id) => {
+      const item = ARTIFACT_ITEMS[id];
+      if (!item) return '';
+      const progress = artifactProgressFor(me, id);
+      const active = me.artifactId === id;
+      const unlocked = progress.owned;
+      const status = unlocked
+        ? (active ? 'Equipe' : 'Cliquer pour equiper')
+        : ('Fragments ' + Math.min(progress.count, progress.required) + ' / ' + progress.required);
+      return '<button class="accessory-card artifact-card' + (active ? ' active' : '') + (unlocked ? '' : ' locked') + '" data-artifact="' + (unlocked ? esc(id) : '') + '"' + (unlocked ? '' : ' disabled') + '>' +
+        '<span class="accessory-card-art"><img src="' + item.asset + '" alt=""></span>' +
+        '<span class="accessory-card-copy">' +
+          '<b>' + esc(item.label) + '</b>' +
+          '<small>+' + item.stats.power + ' puissance · +' + item.stats.armor + ' PV max</small>' +
+          '<small>' + esc(status) + '</small>' +
+        '</span>' +
+      '</button>';
+    }).join('');
+    return '<div class="profile-sec-title">Artefact magique</div>' +
+      '<p class="dim small">Un seul artefact actif a la fois. Les fragments tombent sur les boss T6 et se reforment automatiquement en artefact complet.</p>' +
+      '<div class="accessory-picker">' +
+        '<button class="accessory-none' + (!me.artifactId ? ' active' : '') + '" data-artifact="">Sans artefact</button>' +
         items +
       '</div>';
   }
