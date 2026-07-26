@@ -102,7 +102,20 @@ class Game {
     this.spawnBots();
   }
 
-  mapOf(id) { return this.maps.get(id) || this.worldMap; }
+  mapOf(id) {
+    const mapId = String(id || 'world');
+    if (this.maps.has(mapId)) return this.maps.get(mapId);
+    if (mapId.indexOf('house:') === 0) {
+      const parcelId = mapId.slice(6);
+      const house = this.houseOf(parcelId);
+      const tile = this.parcelTileFor(parcelId);
+      const modelId = house.modelId || 'house_petite';
+      const map = generateHouseInteriorMap(parcelId, modelId, tile ? { x: tile.x, y: tile.y } : null);
+      this.maps.set(map.id, map);
+      return map;
+    }
+    return this.worldMap;
+  }
   tilesOf(p) { return this.mapOf((p && p.mapId) || 'world').tiles; }
   raidId(mapId, x, y) { return raidKey(mapId || 'world', x, y); }
   normalizeRaidKey(p, key) {
@@ -880,6 +893,36 @@ class Game {
     this.pushSelf(p);
     this.onHousingDirty();
     return { ok: true, parcelId: tile.content.id };
+  }
+
+  enterHouse(p, parcelId) {
+    const desiredParcelId = String(parcelId || p.parcelId || '');
+    if (!desiredParcelId) return { ok: false, error: 'Vous ne possédez pas de maison.' };
+    if (p.parcelId !== desiredParcelId) return { ok: false, error: 'Cette maison ne vous appartient pas.' };
+    const house = this.houseOf(desiredParcelId);
+    if (!house.ownerId || !house.modelId) return { ok: false, error: 'Maison introuvable.' };
+    const map = this.mapOf(houseInteriorMapId(desiredParcelId));
+    this.resetTravelState(p);
+    p.mapId = map.id;
+    p.pos = this.nearestWalkablePos(map, map.entry);
+    this.pushMap(p);
+    this.pushSelf(p);
+    return { ok: true, mapId: map.id };
+  }
+
+  leaveHouse(p) {
+    const map = this.mapOf(p.mapId || 'world');
+    if (!map || map.kind !== 'houseInterior') return { ok: false, error: 'Vous n’êtes pas dans une maison.' };
+    const parcelId = map.parcelId || p.parcelId || '';
+    const tile = this.parcelTileFor(parcelId);
+    if (!tile) return { ok: false, error: 'Sortie de maison introuvable.' };
+    const housingMap = this.mapOf(HOUSING_MAP_ID);
+    this.resetTravelState(p);
+    p.mapId = housingMap.id;
+    p.pos = this.nearestWalkablePos(housingMap, { x: tile.x, y: tile.y });
+    this.pushMap(p);
+    this.pushSelf(p);
+    return { ok: true, mapId: housingMap.id };
   }
 
   // Jamais poussé automatiquement (comme castlesInfo) : demandé par le
@@ -2540,7 +2583,22 @@ class Game {
   }
 
   usePortal(p) {
-    const tile = this.tilesOf(p).get(tileKey(p.pos.x, p.pos.y));
+    let tile = this.tilesOf(p).get(tileKey(p.pos.x, p.pos.y));
+    if (!tile || !tile.content || tile.content.kind !== 'portal') {
+      const currentMap = this.mapOf(p.mapId || 'world');
+      if (currentMap && currentMap.kind === 'houseInterior') {
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const near = currentMap.tiles.get(tileKey(p.pos.x + dx, p.pos.y + dy));
+            if (near && near.content && near.content.kind === 'portal') {
+              tile = near;
+              break;
+            }
+          }
+          if (tile && tile.content && tile.content.kind === 'portal') break;
+        }
+      }
+    }
     if (!tile || !tile.content || tile.content.kind !== 'portal') return { ok: false, error: 'Aucun portail ici.' };
     const map = this.mapOf(tile.content.targetMapId || 'world');
     this.resetTravelState(p);

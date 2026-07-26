@@ -60,6 +60,11 @@ const TERRAIN_TILE_FILES = {
     'assets/terrain_generated/pave_07.png', 'assets/terrain_generated/pave_08.png',
     'assets/terrain_generated/pave_09.png', 'assets/terrain_generated/pave_10.png',
   ],
+  PARQUET: [
+    'assets/terrain_generated/parquet_01.png', 'assets/terrain_generated/parquet_02.png',
+    'assets/terrain_generated/parquet_03.png', 'assets/terrain_generated/parquet_04.png',
+    'assets/terrain_generated/parquet_05.png', 'assets/terrain_generated/parquet_06.png',
+  ],
 };
 
 const WORLD_ICON_FILES = {
@@ -177,6 +182,7 @@ const HOUSE_FILES = Object.fromEntries(
   Object.values(HOUSE_MODEL_BY_ID).map((item) => [item.id, item.asset])
 );
 const HOUSING_FOR_SALE_SIGN_ASSET = 'assets/residential/panneau_a_vendre.png';
+const HOUSE_INTERIOR_DOOR_ASSET = 'assets/residential/porte_interieure_maison.png';
 
 /* Bas utile de chaque rangee de la planche de sprites */
 const SPRITE_ROW_CROP = [0.875, 0.81];
@@ -247,6 +253,7 @@ class Renderer {
     this.houseSprites = {};       // modelId -> image détourée (voir HOUSE_MODELS)
     this.housingEntranceSprite = null;   // arche partagée, voir HOUSING_ENTRANCE_ASSET
     this.housingForSaleSprite = null;
+    this.houseInteriorDoorSprite = null;
     this.playerSkins = {};
     this.accessorySprites = {};
     this.mountSprites = {};
@@ -322,6 +329,7 @@ class Renderer {
     }
     this.housingEntranceSprite = this.loadCleanImage(HOUSING_ENTRANCE_ASSET);
     this.housingForSaleSprite = this.loadCleanImage(HOUSING_FOR_SALE_SIGN_ASSET);
+    this.houseInteriorDoorSprite = this.loadCleanImage(HOUSE_INTERIOR_DOOR_ASSET);
   }
 
   setCastleInfo(list) {
@@ -1229,7 +1237,8 @@ if (c.kind === 'dungeon') {
       // sortie d'un donjon réutilise le sprite de porte du donjon de son
       // propre biome (WORLD_ICON_FILES.dungeon), pour rester bien visible
       // et cohérente avec l'entrée vue sur la carte du monde.
-      const isHousingPortal = c.targetMapId === HOUSING_MAP_ID || s.currentMapId === HOUSING_MAP_ID;
+      const isInteriorDoor = !!c.interiorDoor;
+      const isHousingPortal = !isInteriorDoor && (c.targetMapId === HOUSING_MAP_ID || s.currentMapId === HOUSING_MAP_ID);
       const isDungeonExit = !isHousingPortal && c.targetMapId === 'world' && c.terrain;
       this.drawPoiBase(cx, cy, {
         fill: 'rgba(244, 205, 110, 0.16)',
@@ -1237,7 +1246,9 @@ if (c.kind === 'dungeon') {
         glow: 'rgba(244, 205, 110, 0.22)',
       });
       let drawn = null;
-      if (isHousingPortal && this.housingEntranceSprite) {
+      if (isInteriorDoor && this.houseInteriorDoorSprite) {
+        drawn = this.drawWorldSprite(this.houseInteriorDoorSprite, cx, cy + 16, 78, 92, 18, 6);
+      } else if (isHousingPortal && this.housingEntranceSprite) {
         drawn = this.drawWorldSprite(this.housingEntranceSprite, cx, cy + 15, 108, 108, 26, 8);
       } else if (isDungeonExit && this.worldIcons.dungeon[c.terrain]) {
         const size = contentSpriteSize('dungeon');
@@ -1252,7 +1263,7 @@ if (c.kind === 'dungeon') {
         ctx.strokeStyle = '#f4cd6e';
         ctx.stroke();
       }
-      this.label(cx, cy + TH2 + 10, isHousingPortal ? 'QUARTIER' : 'SORTIE', '#f4cd6e', 9);
+      this.label(cx, cy + TH2 + 10, isInteriorDoor ? 'PORTE' : (isHousingPortal ? 'QUARTIER' : 'SORTIE'), '#f4cd6e', 9);
       ctx.globalAlpha = 1;
       return;
     }

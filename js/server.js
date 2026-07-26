@@ -40,7 +40,20 @@ class ServerSim {
   emit(ev, data) { (this.listeners[ev] || []).forEach((cb) => cb(data)); }
 
   get me() { return this.players.get(this.meId); }
-  mapOf(id) { return this.maps.get(id) || this.worldMap; }
+  mapOf(id) {
+    const mapId = String(id || 'world');
+    if (this.maps.has(mapId)) return this.maps.get(mapId);
+    if (mapId.indexOf('house:') === 0) {
+      const parcelId = mapId.slice(6);
+      const house = this.houseOf(parcelId);
+      const tile = this.parcelTileFor(parcelId);
+      const modelId = house.modelId || 'house_petite';
+      const map = generateHouseInteriorMap(parcelId, modelId, tile ? { x: tile.x, y: tile.y } : null);
+      this.maps.set(map.id, map);
+      return map;
+    }
+    return this.worldMap;
+  }
   tilesOf(p) { return this.mapOf((p && p.mapId) || 'world').tiles; }
   raidId(mapId, x, y) { return raidKey(mapId || 'world', x, y); }
   skinStateOf(p) {
@@ -299,6 +312,38 @@ class ServerSim {
     me.parcelId = tile.content.id;
     this.emit('self', me);
     return { ok: true, parcelId: tile.content.id };
+  }
+
+  enterHouse(parcelId) {
+    const me = this.me;
+    const desiredParcelId = String(parcelId || me.parcelId || '');
+    if (!desiredParcelId) return { ok: false, error: 'Vous ne possédez pas de maison.' };
+    if (me.parcelId !== desiredParcelId) return { ok: false, error: 'Cette maison ne vous appartient pas.' };
+    const house = this.houseOf(desiredParcelId);
+    if (!house.ownerId || !house.modelId) return { ok: false, error: 'Maison introuvable.' };
+    const map = this.mapOf(houseInteriorMapId(desiredParcelId));
+    this.resetTravelState(me);
+    me.mapId = map.id;
+    me.pos = this.nearestWalkablePos(map, map.entry);
+    this.syncCurrentMap();
+    this.emit('self', me);
+    return { ok: true, mapId: map.id };
+  }
+
+  leaveHouse() {
+    const me = this.me;
+    const map = this.mapOf(me.mapId || 'world');
+    if (!map || map.kind !== 'houseInterior') return { ok: false, error: 'Vous n’êtes pas dans une maison.' };
+    const parcelId = map.parcelId || me.parcelId || '';
+    const tile = this.parcelTileFor(parcelId);
+    if (!tile) return { ok: false, error: 'Sortie de maison introuvable.' };
+    const housingMap = this.mapOf(HOUSING_MAP_ID);
+    this.resetTravelState(me);
+    me.mapId = housingMap.id;
+    me.pos = this.nearestWalkablePos(housingMap, { x: tile.x, y: tile.y });
+    this.syncCurrentMap();
+    this.emit('self', me);
+    return { ok: true, mapId: housingMap.id };
   }
 
   housingInfo() {
@@ -1040,7 +1085,22 @@ class ServerSim {
 
   usePortal() {
     const me = this.me;
-    const tile = this.tilesOf(me).get(tileKey(me.pos.x, me.pos.y));
+    let tile = this.tilesOf(me).get(tileKey(me.pos.x, me.pos.y));
+    if (!tile || !tile.content || tile.content.kind !== 'portal') {
+      const map = this.mapOf(me.mapId || 'world');
+      if (map && map.kind === 'houseInterior') {
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const near = map.tiles.get(tileKey(me.pos.x + dx, me.pos.y + dy));
+            if (near && near.content && near.content.kind === 'portal') {
+              tile = near;
+              break;
+            }
+          }
+          if (tile && tile.content && tile.content.kind === 'portal') break;
+        }
+      }
+    }
     if (!tile || !tile.content || tile.content.kind !== 'portal') return { ok: false, error: 'Aucun portail ici.' };
     const map = this.mapOf(tile.content.targetMapId || 'world');
     this.resetTravelState(me);

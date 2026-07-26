@@ -679,6 +679,31 @@ showDungeonPopup(tile, onEnter) {
     }
 
     const isMine = me.parcelId === parcelId;
+    const layout = houseInteriorLayoutFor(house.modelId);
+    const enhancedBody = '<p class="dim">' + (isMine
+      ? 'Votre interieur est pret. Le mobilier viendra ensuite, mais vous pouvez deja y entrer.'
+      : 'Maison privee. Les visites d interieur arriveront dans une prochaine mise a jour.') + '</p>' +
+      '<p><b>Facade :</b> ' + esc((houseModelFor(house.modelId) || {}).label || 'Maison') + '</p>' +
+      '<p><b>Taille :</b> ' + esc(layout.size) + '</p>' +
+      '<p class="small dim">Sol parquet, instance reservee a cette parcelle et extensible pour les futurs meubles et trophées.</p>';
+    const enhancedActions = [{ label: 'Fermer' }];
+    if (isMine) {
+      enhancedActions.push({
+        label: 'Entrer',
+        primary: true,
+        cb: async () => {
+          const r = await Promise.resolve(this.server.enterHouse(parcelId));
+          if (!r.ok) this.toast(r.error);
+        },
+      });
+    }
+    this.popup(
+      isMine ? 'Votre maison' : 'Maison de ' + esc(house.ownerUsername),
+      enhancedBody,
+      enhancedActions,
+      { mode: 'parcel', kicker: 'Quartier résidentiel' }
+    );
+    return;
     this.popup(
       isMine ? 'Votre maison' : 'Maison de ' + esc(house.ownerUsername),
       '<p class="dim">' + (isMine
@@ -1536,7 +1561,9 @@ showDungeonPopup(tile, onEnter) {
     // Bouton contextuel : PNJ de la Capitale (monde uniquement — l'entrée
     // d'un donjon est aussi en (0,0))
     const onCapital = (me.mapId || 'world') === 'world' && me.pos.x === 0 && me.pos.y === 0;
-    $('ctxAction').classList.toggle('hidden', !onCapital);
+    const inHouse = String(me.mapId || '').indexOf('house:') === 0;
+    $('ctxAction').textContent = inHouse ? '🚪 Sortir de la maison' : '⚒ Capitale — PNJ & Forgeron';
+    $('ctxAction').classList.toggle('hidden', !(onCapital || inHouse));
 
     // Badge du buff de nourriture actif
     const buffBadge = $('buffBadge');
@@ -2946,6 +2973,16 @@ showDungeonPopup(tile, onEnter) {
         '</button>'
         : '') +
       (this.server.remote ? '<button id="logoutBtn" class="btn wide logout-btn">🚪 Se déconnecter</button>' : '');
+    const gearLines = body.querySelectorAll('.gear-line');
+    const artifactLine = gearLines[2] || null;
+    const activeArtifact = artifactFor(me.artifactId);
+    if (artifactLine) {
+      artifactLine.innerHTML = (activeArtifact
+        ? '<img class="gear-art" src="' + activeArtifact.asset + '" alt="' + esc(activeArtifact.label) + '">'
+        : '<span class="gear-ico gear-art gear-empty">Artefact</span>') +
+        '<span class="gear-name">Artefact ' + esc((activeArtifact || {}).label || 'Aucun') + '</span>' +
+        '<span class="tier">' + this.artifactStatSummary(me) + '</span>';
+    }
     body.querySelectorAll('[data-title]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const title = btn.dataset.title || null;

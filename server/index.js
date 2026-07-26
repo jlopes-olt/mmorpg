@@ -726,6 +726,8 @@ io.on('connection', (socket) => {
     ack({ ok: true, list: game.housingInfo() });
   });
   socket.on('housing:claim', act((d) => game.claimParcel(player, String(d.parcelId), String(d.modelId))));
+  socket.on('housing:enter', act((d) => game.enterHouse(player, String((d && d.parcelId) || ''))));
+  socket.on('housing:leave', act(() => game.leaveHouse(player)));
   socket.on('castle:claim', act((d) => game.claimCastle(player, String(d.terrain))));
   socket.on('castle:reinforce', act((d) => game.reinforceCastle(player, String(d.terrain))));
   socket.on('castle:repair', act((d) => game.repairCastle(player, String(d.terrain), Number(d.gold))));

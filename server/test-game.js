@@ -1475,6 +1475,47 @@ const housingList = g.housingInfo();
 assert.ok(housingList.some((h) => h.parcelId === parcelA && h.ownerUsername === 'Alice' && h.modelId === model.id), 'maison d’Alice listée');
 assert.ok(housingList.some((h) => h.parcelId === parcelB && h.ownerUsername === 'Bob'), 'maison de Bob listée');
 assert.strictEqual(housingList.length, 2, 'seules les parcelles réclamées apparaissent');
+assert.ok(!g.enterHouse(carl, parcelA).ok, 'entrée refusée pour un joueur sans maison');
+assert.ok(!g.enterHouse(bob, parcelA).ok, 'entrée refusée dans la maison d’un autre joueur');
+const enterHome = g.enterHouse(alice, parcelA);
+assert.ok(enterHome.ok, 'le propriétaire peut entrer dans sa maison');
+assert.strictEqual(alice.mapId, houseInteriorMapId(parcelA), 'carte intérieure dédiée par parcelle');
+const interiorMap = g.mapOf(alice.mapId);
+assert.ok(interiorMap && interiorMap.kind === 'houseInterior', 'carte intérieure générée à la demande');
+assert.strictEqual(interiorMap.terrain, 'PARQUET', 'terrain intérieur en parquet');
+const exitTile = interiorMap.tiles.get(tileKey(interiorMap.entry.x, interiorMap.entry.y));
+assert.ok(!exitTile || !exitTile.content, 'point d’entrée libre pour laisser respirer la caméra');
+const exitDoorPos = houseInteriorLayoutFor(model.id).door;
+const exitDoorTile = interiorMap.tiles.get(tileKey(exitDoorPos.x, exitDoorPos.y));
+assert.ok(exitDoorTile && exitDoorTile.content && exitDoorTile.content.kind === 'portal', 'sortie intérieure présente');
+assert.strictEqual(exitDoorTile.content.targetMapId, HOUSING_MAP_ID, 'sortie intérieure retourne au quartier');
+assert.strictEqual(exitDoorTile.content.targetPos.x, parcelTiles.find((t) => t.content.id === parcelA).x, 'sortie intérieure recale sur la parcelle');
+for (const houseModel of HOUSE_MODELS) {
+  const sampleMap = generateHouseInteriorMap('sample_' + houseModel.id, houseModel.id, { x: 1, y: 2 });
+  const layout = houseInteriorLayoutFor(houseModel.id);
+  assert.strictEqual(sampleMap.min, layout.min, 'borne min correcte pour ' + houseModel.id);
+  assert.strictEqual(sampleMap.max, layout.max, 'borne max correcte pour ' + houseModel.id);
+  assert.strictEqual(sampleMap.entry.y, layout.entry.y, 'point d’entrée correct pour ' + houseModel.id);
+  assert.strictEqual(sampleMap.tiles.get(tileKey(layout.door.x, layout.door.y)).content.kind, 'portal', 'porte correcte pour ' + houseModel.id);
+  const parquetTiles = [...sampleMap.tiles.values()].filter((t) => t.terrain === 'PARQUET');
+  assert.ok(parquetTiles.length > 0, 'parquet présent pour ' + houseModel.id);
+}
+alice.pos = { x: exitDoorPos.x, y: exitDoorPos.y };
+const leaveHome = g.usePortal(alice);
+assert.ok(leaveHome.ok, 'on peut ressortir de la maison par le portail');
+assert.strictEqual(alice.mapId, HOUSING_MAP_ID, 'retour au quartier résidentiel après sortie');
+const reEnterHome = g.enterHouse(alice, parcelA);
+assert.ok(reEnterHome.ok, 'on peut rentrer à nouveau dans sa maison');
+alice.pos = { x: exitDoorPos.x, y: exitDoorPos.y - 1 };
+const leaveFromNearDoor = g.usePortal(alice);
+assert.ok(leaveFromNearDoor.ok, 'sortie tolérée juste devant la porte intérieure');
+assert.strictEqual(alice.mapId, HOUSING_MAP_ID, 'retour au quartier résidentiel même depuis la case voisine');
+const reEnterHomeAgain = g.enterHouse(alice, parcelA);
+assert.ok(reEnterHomeAgain.ok, 'on peut rerentrer après une sortie');
+const leaveViaDedicatedAction = g.leaveHouse(alice);
+assert.ok(leaveViaDedicatedAction.ok, 'sortie dédiée de maison disponible');
+assert.strictEqual(alice.mapId, HOUSING_MAP_ID, 'sortie dédiée renvoie au quartier');
+assert.ok(!g.leaveHouse(alice).ok, 'sortie dédiée refusée hors maison');
 
 // Persistance : sérialisation/rechargement (comme les châteaux).
 const housingSnapshot = g.serialize();

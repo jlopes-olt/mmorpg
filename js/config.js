@@ -654,6 +654,18 @@ const HOUSE_MODEL_BY_ID = Object.fromEntries(HOUSE_MODELS.map((m) => [m.id, m]))
 function houseModelFor(id) {
   return id ? (HOUSE_MODEL_BY_ID[id] || null) : null;
 }
+const HOUSE_INTERIOR_LAYOUTS = {
+  house_petite: { label: 'Interieur cosy', size: 'Petite', min: -5, max: 5, entry: { x: 0, y: 1 }, door: { x: 0, y: 4 } },
+  house_moyenne: { label: 'Interieur familial', size: 'Moyenne', min: -8, max: 8, entry: { x: 0, y: 2 }, door: { x: 0, y: 7 } },
+  house_grande: { label: 'Grand interieur', size: 'Grande', min: -11, max: 11, entry: { x: 0, y: 3 }, door: { x: 0, y: 10 } },
+  house_tres_grande: { label: 'Hall du domaine', size: 'Tres grande', min: -14, max: 14, entry: { x: 0, y: 4 }, door: { x: 0, y: 13 } },
+};
+function houseInteriorLayoutFor(modelId) {
+  return HOUSE_INTERIOR_LAYOUTS[modelId] || HOUSE_INTERIOR_LAYOUTS.house_petite;
+}
+function houseInteriorMapId(parcelId) {
+  return 'house:' + String(parcelId || '');
+}
 
 /* Cosmétiques d'accessoire : calque additionnel dessiné en plus du skin
  * (indépendant de la classe), jamais en vente — uniquement en loot rare ou
@@ -1017,6 +1029,7 @@ const TERRAINS = {
   // TERRAIN_TILE_FILES.PAVE = [] dans render.js) — rendu en dégradé uni comme
   // n'importe quel terrain avant chargement de ses images.
   PAVE:     { label: 'Pavés',    color: '#8a8478' },
+  PARQUET:  { label: 'Parquet',  color: '#b7884f' },
 };
 
 const TIER_COLORS = { 0: '#6f7a87', 1: '#9aa5b1', 2: '#58b368', 3: '#4a9fd8', 4: '#a86fd1', 5: '#e8a33f', 6: '#d66a4a' };
@@ -1261,6 +1274,7 @@ if (typeof module !== 'undefined' && module.exports) {
     HOUSING_MAP_ID, HOUSING_GRID_COORDS, HOUSING_PORTAL_WORLD_POS, HOUSING_PLAZA_POS, HOUSING_ENTRY_POS,
     HOUSING_ENTRANCE_ASSET,
     housingParcelId, HOUSE_MODELS, HOUSE_MODEL_BY_ID, houseModelFor,
+    HOUSE_INTERIOR_LAYOUTS, houseInteriorLayoutFor, houseInteriorMapId,
     skinFor, skinAssetUrl, classSkinScale, baseSkinAsset, equipmentAsset, classAvailableToRole,
     artifactFor, artifactStatsFor, artifactProgressFor,
     levelFromXp, playerForce, maxHp, hpLossReduction, reviveHpPct, stackKey, parseStackKey, resourceFamily,

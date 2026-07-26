@@ -456,6 +456,17 @@ html, body {
   object-fit: contain;
   filter: drop-shadow(0 5px 5px rgba(72, 42, 17, 0.22));
 }
+.gear-empty {
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(222, 209, 185, 0.9), rgba(201, 183, 154, 0.92));
+  color: #7a6244;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
 .gear-line .gear-name { flex: 1; }
 .profile-hint { color: #7a6244; }
 

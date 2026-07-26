@@ -526,6 +526,45 @@ function generateHousingDistrictMap(seed) {
   };
 }
 
+function generateHouseInteriorMap(parcelId, modelId, parcelPos) {
+  const layout = houseInteriorLayoutFor(modelId);
+  const min = layout.min;
+  const max = layout.max;
+  const tiles = attachBounds(new Map(), min, max, houseInteriorMapId(parcelId));
+  for (let y = min; y <= max; y++) {
+    for (let x = min; x <= max; x++) {
+      const edge = x === min || x === max || y === min || y === max;
+      let content = null;
+      const doorPos = layout.door || layout.entry;
+      if (x === doorPos.x && y === doorPos.y) {
+        content = {
+          kind: 'portal',
+          label: 'Sortir de la maison',
+          targetMapId: HOUSING_MAP_ID,
+          targetPos: parcelPos ? { x: parcelPos.x, y: parcelPos.y } : { x: 0, y: 0 },
+          interiorDoor: true,
+        };
+      }
+      tiles.set(tileKey(x, y), {
+        x, y,
+        terrain: edge ? 'PAVE' : 'PARQUET',
+        content,
+        blocked: false,
+      });
+    }
+  }
+  return {
+    id: houseInteriorMapId(parcelId),
+    kind: 'houseInterior',
+    terrain: 'PARQUET',
+    min, max,
+    entry: { ...layout.entry },
+    parcelId,
+    modelId,
+    tiles,
+  };
+}
+
 function generateGameMaps(seed) {
   const world = generateWorldMap(seed);
   const maps = new Map([[world.id, world]]);
@@ -573,7 +612,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     mulberry32, hash2, tileKey, raidKey, tierAtDistance, terrainAt, resourceTypeAt,
     villageNameFor, dungeonBossFor, dungeonResourceFor,
-    generateWorld, generateWorldMap, generateDungeonMap, generateGameMaps, generateHousingDistrictMap,
+    generateWorld, generateWorldMap, generateDungeonMap, generateGameMaps, generateHousingDistrictMap, generateHouseInteriorMap,
     inBounds, isWalkable, boundsOf, attachBounds, applyWildLayer,
   };
 }

@@ -14,6 +14,7 @@ class RemoteServer {
     this.raids = new Map();
     this.maps = new Map();
     this.tiles = new Map();
+    this.housingList = [];
     this.currentMapId = 'world';
     this.seed = 0;
     this.now = 0;
@@ -28,7 +29,28 @@ class RemoteServer {
   on(ev, cb) { (this.listeners[ev] = this.listeners[ev] || []).push(cb); }
   emit(ev, data) { (this.listeners[ev] || []).forEach((cb) => cb(data)); }
   get me() { return this.meId ? this.players.get(this.meId) : null; }
-  mapOf(id) { return this.maps.get(id) || this.maps.get('world'); }
+  parcelTileFor(parcelId) {
+    const map = this.maps.get(HOUSING_MAP_ID);
+    if (!map) return null;
+    for (const tile of map.tiles.values()) {
+      if (tile.content && tile.content.kind === 'parcel' && tile.content.id === parcelId) return tile;
+    }
+    return null;
+  }
+  mapOf(id) {
+    const mapId = String(id || 'world');
+    if (this.maps.has(mapId)) return this.maps.get(mapId);
+    if (mapId.indexOf('house:') === 0) {
+      const parcelId = mapId.slice(6);
+      const fromList = this.housingList.find((h) => h && h.parcelId === parcelId);
+      const modelId = (fromList && fromList.modelId) || 'house_petite';
+      const tile = this.parcelTileFor(parcelId);
+      const map = generateHouseInteriorMap(parcelId, modelId, tile ? { x: tile.x, y: tile.y } : null);
+      this.maps.set(map.id, map);
+      return map;
+    }
+    return this.maps.get('world');
+  }
   chebyshev(a, b) { return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)); }
   teamForce(raid) { return raid.teamForce || 0; }
   raidChance(raid) { return raid.winChance || 0; }
@@ -261,8 +283,17 @@ class RemoteServer {
   joinFriend(username) { return this.req('friend:join', { username }); }
   friendsList() { return this.req('friend:list', {}); }
   castlesInfo() { return this.req('castle:info', {}); }
-  housingInfo() { return this.req('housing:info', {}); }
+  housingInfo() {
+    return this.req('housing:info', {}).then((res) => {
+      if (res && res.ok && Array.isArray(res.list)) this.housingList = res.list.slice();
+      return res;
+    });
+  }
   claimParcel(parcelId, modelId) { return this.req('housing:claim', { parcelId, modelId }); }
+  enterHouse(parcelId) {
+    return this.housingInfo().then(() => this.req('housing:enter', { parcelId }));
+  }
+  leaveHouse() { return this.req('housing:leave', {}); }
   claimCastle(terrain) { return this.req('castle:claim', { terrain }); }
   reinforceCastle(terrain) { return this.req('castle:reinforce', { terrain }); }
   repairCastle(terrain, gold) { return this.req('castle:repair', { terrain, gold }); }

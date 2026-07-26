@@ -554,7 +554,15 @@
   });
   window.addEventListener('resize', () => renderer.resize());
 
-document.getElementById('ctxAction').addEventListener('click', () => ui.showSheet('capital'));
+document.getElementById('ctxAction').addEventListener('click', async () => {
+  const me = server.me;
+  if (me && String(me.mapId || '').indexOf('house:') === 0) {
+    const r = await Promise.resolve(server.leaveHouse ? server.leaveHouse() : server.usePortal());
+    if (!r.ok) ui.toast(r.error);
+    return;
+  }
+  ui.showSheet('capital');
+});
 
   // Téléportation serveur (KO → Capitale) : on abandonne le chemin en cours
   server.on('self', (p) => {
@@ -576,6 +584,9 @@ document.getElementById('ctxAction').addEventListener('click', () => ui.showShee
     } catch (e) { /* ignore */ }
     if ((server.currentMapId || 'world') === 'world') {
       for (const k of ((server.me && server.me.exploredWorld) || [])) explored.add(k);
+    }
+    if (String(server.currentMapId || '').indexOf('house:') === 0) {
+      for (const k of server.tiles.keys()) explored.add(k);
     }
     updateExplored();
     // Quartier résidentiel : les parcelles occupées ne sont jamais poussées
