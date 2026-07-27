@@ -282,6 +282,44 @@ class ServerSim {
     return this.houses.get(parcelId);
   }
 
+  invalidateHouseMap(parcelId) {
+    const mapId = houseInteriorMapId(parcelId);
+    this.maps.delete(mapId);
+  }
+
+  housePublicState(house) {
+    if (!house || !house.ownerId) return null;
+    return {
+      parcelId: house.parcelId,
+      ownerUsername: house.ownerUsername,
+      modelId: house.modelId,
+      furniture: Array.isArray(house.furniture) ? house.furniture.map((f) => ({ ...f })) : [],
+    };
+  }
+
+  houseFurnitureCells(item, x, y) {
+    const fp = (item && item.footprint) || { w: 1, h: 1 };
+    const cells = [];
+    for (let oy = 0; oy < fp.h; oy++) {
+      for (let ox = 0; ox < fp.w; ox++) cells.push({ x: x + ox, y: y + oy });
+    }
+    return cells;
+  }
+
+  furnitureAt(house, x, y) {
+    if (!house || !Array.isArray(house.furniture)) return null;
+    for (const placed of house.furniture) {
+      const item = housingFurnitureFor(placed.itemId);
+      const cells = this.houseFurnitureCells(item, placed.x, placed.y);
+      if (cells.some((cell) => cell.x === x && cell.y === y)) return placed;
+    }
+    return null;
+  }
+
+  furnitureStockOf(me, itemId) {
+    return Number((me.furnitureInventory && me.furnitureInventory[itemId]) || 0);
+  }
+
   parcelTileFor(parcelId) {
     const map = this.mapOf(HOUSING_MAP_ID);
     if (!map) return null;
@@ -289,6 +327,20 @@ class ServerSim {
       if (tile.content && tile.content.kind === 'parcel' && tile.content.id === parcelId) return tile;
     }
     return null;
+  }
+  houseInfoFor(parcelId) {
+    const house = this.houses.get(String(parcelId || ''));
+    return house && house.ownerId ? this.housePublicState(house) : null;
+  }
+  currentHouseInfo() {
+    const me = this.me;
+    const map = this.mapOf((me && me.mapId) || 'world');
+    if (!map || map.kind !== 'houseInterior') return null;
+    return this.houseInfoFor(map.parcelId);
+  }
+  furnitureAtCurrentPos(x, y) {
+    const house = this.currentHouseInfo();
+    return house ? this.furnitureAt(house, x, y) : null;
   }
 
   claimParcel(parcelId, modelId) {
@@ -309,9 +361,34 @@ class ServerSim {
     house.ownerId = me.id;
     house.ownerUsername = me.username;
     house.modelId = model.id;
+    this.invalidateHouseMap(tile.content.id);
     me.parcelId = tile.content.id;
     this.emit('self', me);
     return { ok: true, parcelId: tile.content.id };
+  }
+
+  craftFurniture(itemId) {
+    const me = this.me;
+    const map = this.mapOf(me.mapId || 'world');
+    if (!map || map.kind !== 'houseInterior') return { ok: false, error: 'Fabriquez votre mobilier depuis votre maison.' };
+    const parcelId = map.parcelId || me.parcelId || '';
+    if (!parcelId || me.parcelId !== parcelId) return { ok: false, error: 'Cette maison ne vous appartient pas.' };
+    const item = housingFurnitureFor(String(itemId || ''));
+    if (!item || !item.recipe) return { ok: false, error: 'Meuble inconnu.' };
+    for (const [key, qty] of Object.entries(item.recipe)) {
+      if ((me.inventory[key] || 0) < qty) {
+        const parsed = parseStackKey(key);
+        return { ok: false, error: 'Il manque : ' + qty + '× ' + resourceLabel(parsed.type, parsed.tier) + '.' };
+      }
+    }
+    for (const [key, qty] of Object.entries(item.recipe)) {
+      me.inventory[key] -= qty;
+      if (me.inventory[key] <= 0) delete me.inventory[key];
+    }
+    if (!me.furnitureInventory) me.furnitureInventory = {};
+    me.furnitureInventory[item.id] = this.furnitureStockOf(me, item.id) + 1;
+    this.emit('self', me);
+    return { ok: true, itemId: item.id, count: me.furnitureInventory[item.id] };
   }
 
   enterHouse(parcelId) {
@@ -321,6 +398,7 @@ class ServerSim {
     if (me.parcelId !== desiredParcelId) return { ok: false, error: 'Cette maison ne vous appartient pas.' };
     const house = this.houseOf(desiredParcelId);
     if (!house.ownerId || !house.modelId) return { ok: false, error: 'Maison introuvable.' };
+    this.invalidateHouseMap(desiredParcelId);
     const map = this.mapOf(houseInteriorMapId(desiredParcelId));
     this.resetTravelState(me);
     me.mapId = map.id;
@@ -346,12 +424,56 @@ class ServerSim {
     return { ok: true, mapId: housingMap.id };
   }
 
+  placeFurniture(itemId, x, y) {
+    const me = this.me;
+    const map = this.mapOf(me.mapId || 'world');
+    if (!map || map.kind !== 'houseInterior') return { ok: false, error: 'Vous devez être dans votre maison.' };
+    const parcelId = map.parcelId || me.parcelId || '';
+    if (!parcelId || me.parcelId !== parcelId) return { ok: false, error: 'Cette maison ne vous appartient pas.' };
+    const house = this.houseOf(parcelId);
+    const item = housingFurnitureFor(String(itemId || ''));
+    if (!item) return { ok: false, error: 'Meuble inconnu.' };
+    if (this.furnitureStockOf(me, item.id) < 1) return { ok: false, error: 'Vous devez d’abord fabriquer ce meuble.' };
+    const baseX = Math.round(Number(x) || 0);
+    const baseY = Math.round(Number(y) || 0);
+    const cells = this.houseFurnitureCells(item, baseX, baseY);
+    for (const cell of cells) {
+      const tile = map.tiles.get(tileKey(cell.x, cell.y));
+      if (!tile || tile.blocked || tile.terrain !== 'PARQUET') return { ok: false, error: 'Placez ce meuble sur le parquet intérieur.' };
+      if (tile.content) return { ok: false, error: 'Cette case est déjà occupée.' };
+      if (this.furnitureAt(house, cell.x, cell.y)) return { ok: false, error: 'Un meuble est déjà posé ici.' };
+    }
+    const placed = { id: 'f_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6), itemId: item.id, x: baseX, y: baseY };
+    if (!Array.isArray(house.furniture)) house.furniture = [];
+    house.furniture.push(placed);
+    me.furnitureInventory[item.id] -= 1;
+    if (me.furnitureInventory[item.id] <= 0) delete me.furnitureInventory[item.id];
+    this.emit('self', me);
+    return { ok: true, house: this.housePublicState(house), placed: { ...placed } };
+  }
+
+  removeFurniture(x, y) {
+    const me = this.me;
+    const map = this.mapOf(me.mapId || 'world');
+    if (!map || map.kind !== 'houseInterior') return { ok: false, error: 'Vous devez être dans votre maison.' };
+    const parcelId = map.parcelId || me.parcelId || '';
+    if (!parcelId || me.parcelId !== parcelId) return { ok: false, error: 'Cette maison ne vous appartient pas.' };
+    const house = this.houseOf(parcelId);
+    const target = this.furnitureAt(house, Math.round(Number(x) || 0), Math.round(Number(y) || 0));
+    if (!target) return { ok: false, error: 'Aucun meuble sur cette case.' };
+    house.furniture = house.furniture.filter((f) => f !== target);
+    if (!me.furnitureInventory) me.furnitureInventory = {};
+    me.furnitureInventory[target.itemId] = this.furnitureStockOf(me, target.itemId) + 1;
+    this.emit('self', me);
+    return { ok: true, house: this.housePublicState(house), removed: { ...target } };
+  }
+
   housingInfo() {
     return {
       ok: true,
       list: [...this.houses.values()]
         .filter((h) => h.ownerId)
-        .map((h) => ({ parcelId: h.parcelId, ownerUsername: h.ownerUsername, modelId: h.modelId })),
+        .map((h) => this.housePublicState(h)),
     };
   }
 
@@ -413,6 +535,7 @@ class ServerSim {
       pa: CONFIG.PA.START, paMs: 0,
       hp: 100, hpMs: 0,
       inventory: {},
+      furnitureInventory: {},
       gold: 0,
       [PREMIUM_CURRENCY.key]: 24,
       ownedSkins: [],
@@ -1310,6 +1433,7 @@ class ServerSim {
     if (!Array.isArray(p.ownedSkins)) p.ownedSkins = [];
     if (!Array.isArray(p.ownedDice)) p.ownedDice = [];
     if (!Array.isArray(p.visitedVillages)) p.visitedVillages = [];
+    if (!p.furnitureInventory || typeof p.furnitureInventory !== 'object') p.furnitureInventory = {};
     if (!p.duels || typeof p.duels.wins !== 'number') p.duels = { wins: 0, losses: 0 };
     if (typeof p.guildId !== 'string') p.guildId = null;
     if (!p.guildInvite || typeof p.guildInvite !== 'object') p.guildInvite = null;

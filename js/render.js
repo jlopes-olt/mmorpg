@@ -182,7 +182,9 @@ const HOUSE_FILES = Object.fromEntries(
   Object.values(HOUSE_MODEL_BY_ID).map((item) => [item.id, item.asset])
 );
 const HOUSING_FOR_SALE_SIGN_ASSET = 'assets/residential/panneau_a_vendre.png';
-const HOUSE_INTERIOR_DOOR_ASSET = 'assets/residential/porte_interieure_maison.png';
+const HOUSING_FURNITURE_FILES = Object.fromEntries(
+  HOUSING_FURNITURE_ITEMS.map((item) => [item.id, item.asset])
+);
 
 /* Bas utile de chaque rangee de la planche de sprites */
 const SPRITE_ROW_CROP = [0.875, 0.81];
@@ -253,11 +255,12 @@ class Renderer {
     this.houseSprites = {};       // modelId -> image détourée (voir HOUSE_MODELS)
     this.housingEntranceSprite = null;   // arche partagée, voir HOUSING_ENTRANCE_ASSET
     this.housingForSaleSprite = null;
-    this.houseInteriorDoorSprite = null;
+    this.furnitureSprites = {};
     this.playerSkins = {};
     this.accessorySprites = {};
     this.mountSprites = {};
     this.saddlePropSprite = null;
+    this.staticTerrainCache = new Map();
     // Boîtes écran des structures (capitale/village/donjon/château) du frame
     // courant — recalculées dans draw(), lues par drawPlayer() pour estomper
     // une monture qui les chevaucherait (voir STRUCTURE_KINDS plus bas).
@@ -329,7 +332,16 @@ class Renderer {
     }
     this.housingEntranceSprite = this.loadCleanImage(HOUSING_ENTRANCE_ASSET);
     this.housingForSaleSprite = this.loadCleanImage(HOUSING_FOR_SALE_SIGN_ASSET);
-    this.houseInteriorDoorSprite = this.loadCleanImage(HOUSE_INTERIOR_DOOR_ASSET);
+    for (const [itemId, src] of Object.entries(HOUSING_FURNITURE_FILES)) {
+      this.furnitureSprites[itemId] = this.loadCleanImage(src);
+    }
+  }
+
+  currentHouseInfo() {
+    if (this.server && typeof this.server.currentHouseInfo === 'function') return this.server.currentHouseInfo();
+    if (!this.server || !this.server.currentMapId || String(this.server.currentMapId).indexOf('house:') !== 0) return null;
+    if (typeof this.server.houseInfoFor === 'function') return this.server.houseInfoFor(String(this.server.currentMapId).slice(6));
+    return null;
   }
 
   setCastleInfo(list) {
@@ -356,6 +368,15 @@ class Renderer {
     for (const h of list || []) {
       if (h && h.parcelId) this.houseInfo[h.parcelId] = h;
     }
+    this.invalidateStaticTerrainCache(HOUSING_MAP_ID);
+  }
+
+  invalidateStaticTerrainCache(mapId) {
+    if (!mapId) {
+      this.staticTerrainCache.clear();
+      return;
+    }
+    this.staticTerrainCache.delete(String(mapId));
   }
 
   async refreshCastleLevels() {
@@ -661,6 +682,105 @@ class Renderer {
   isoX(x, y) { return (x - y) * TW2; }
   isoY(x, y) { return (x + y) * TH2; }
 
+  isStaticTerrainMap(map) {
+    return !!map && (map.kind === 'housing' || map.kind === 'houseInterior');
+  }
+
+  terrainVariantLimit(terrain, map) {
+    if (!map || !this.isStaticTerrainMap(map)) return Infinity;
+    if (terrain === 'PAVE') return 4;
+    if (terrain === 'PARQUET') return 3;
+    return Infinity;
+  }
+
+  terrainVariantsFor(terrain, map) {
+    const variants = this.terrainTiles[terrain] || this.terrainTiles.MONTAGNE || [];
+    const limit = this.terrainVariantLimit(terrain, map);
+    return Number.isFinite(limit) ? variants.slice(0, Math.min(limit, variants.length)) : variants;
+  }
+
+  canBuildStaticTerrainCache(map) {
+    if (!this.isStaticTerrainMap(map) || !map.tiles) return false;
+    const terrains = new Set();
+    for (const tile of map.tiles.values()) {
+      if (!tile || tile.blocked) continue;
+      terrains.add(tile.terrain);
+    }
+    for (const terrain of terrains) {
+      const variants = this.terrainVariantsFor(terrain, map);
+      if (!variants.length) continue;
+      if (!variants.every((sprite) => sprite && sprite.ready && sprite.bounds && sprite.processed)) return false;
+    }
+    return true;
+  }
+
+  staticTerrainSignature(map) {
+    if (!map) return '';
+    if (map.kind === 'houseInterior') return map.id + '|' + (map.modelId || '');
+    if (map.kind !== 'housing') return map.id;
+    const houses = Object.keys(this.houseInfo).sort().map((parcelId) => {
+      const info = this.houseInfo[parcelId];
+      return parcelId + ':' + ((info && info.modelId) || '-');
+    }).join('|');
+    return map.id + '|' + houses;
+  }
+
+  buildStaticTerrainCache(map) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const tile of map.tiles.values()) {
+      if (!tile || tile.blocked) continue;
+      const cx = this.isoX(tile.x, tile.y);
+      const cy = this.isoY(tile.x, tile.y);
+      if (cx - TW2 < minX) minX = cx - TW2;
+      if (cy - TH2 < minY) minY = cy - TH2;
+      if (cx + TW2 > maxX) maxX = cx + TW2;
+      if (cy + TH2 > maxY) maxY = cy + TH2;
+    }
+    if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null;
+    const pad = 4;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.ceil(maxX - minX + pad * 2));
+    canvas.height = Math.max(1, Math.ceil(maxY - minY + pad * 2));
+    const g = canvas.getContext('2d');
+    const prevCtx = this.ctx;
+    this.ctx = g;
+    for (const tile of map.tiles.values()) {
+      if (!tile || tile.blocked) continue;
+      const cx = this.isoX(tile.x, tile.y) - minX + pad;
+      const cy = this.isoY(tile.x, tile.y) - minY + pad;
+      this.drawTerrainTile(tile, cx, cy, true, map);
+    }
+    this.ctx = prevCtx;
+    return {
+      mapId: map.id,
+      signature: this.staticTerrainSignature(map),
+      canvas,
+      originX: -minX + pad,
+      originY: -minY + pad,
+    };
+  }
+
+  ensureStaticTerrainCache(map) {
+    if (!this.canBuildStaticTerrainCache(map)) return null;
+    const signature = this.staticTerrainSignature(map);
+    const cached = this.staticTerrainCache.get(map.id);
+    if (cached && cached.signature === signature) return cached;
+    const rebuilt = this.buildStaticTerrainCache(map);
+    if (!rebuilt) return null;
+    this.staticTerrainCache.set(map.id, rebuilt);
+    return rebuilt;
+  }
+
+  drawStaticTerrain(cache) {
+    if (!cache || !cache.canvas) return false;
+    this.ctx.drawImage(
+      cache.canvas,
+      -this.cam.x + this.w / 2 - cache.originX,
+      -this.cam.y + this.h / 2 - cache.originY
+    );
+    return true;
+  }
+
   drawTerrainUnderlay(tile, cx, cy) {
     const ctx = this.ctx;
     const base = terrainBaseColor(tile.terrain);
@@ -827,9 +947,9 @@ class Renderer {
     ctx.stroke();
   }
 
-  drawTerrainTile(tile, cx, cy, visible) {
+  drawTerrainTile(tile, cx, cy, visible, map) {
     const ctx = this.ctx;
-    const variants = this.terrainTiles[tile.terrain] || this.terrainTiles.MONTAGNE || [];
+    const variants = this.terrainVariantsFor(tile.terrain, map || this.server.map);
     const index = variants.length
       ? Math.floor(hash2(tile.x, tile.y, this.server.seed, 7) * variants.length) % variants.length
       : 0;
@@ -913,6 +1033,7 @@ class Renderer {
   draw(dt) {
     const s = this.server, me = s.me, ctx = this.ctx;
     if (!me) return;
+    const map = s.map;
 
     const tx = this.isoX(me.pos.x, me.pos.y);
     const ty = this.isoY(me.pos.x, me.pos.y);
@@ -968,7 +1089,11 @@ class Renderer {
       }
     }
 
+    const staticTerrain = this.ensureStaticTerrainCache(map);
+    if (staticTerrain) this.drawStaticTerrain(staticTerrain);
+
     const poi = [];
+    const furniturePoi = [];
     for (let y = py - R; y <= py + R; y++) {
       for (let x = px - R; x <= px + R; x++) {
         if (!inBounds(x, y, s.tiles)) continue;
@@ -1002,7 +1127,19 @@ class Renderer {
         // jamais s'y être rendu. Zone déjà explorée : toujours en clair, même
         // glissée, puisqu'on l'a réellement visitée.
         const visible = !this.camPanned || this.explored.has(key);
-        this.drawTerrainTile(tile, cx, cy, visible);
+        if (!staticTerrain) {
+          this.drawTerrainTile(tile, cx, cy, visible, map);
+        } else if (!visible) {
+          ctx.fillStyle = 'rgba(8,10,14,0.18)';
+          ctx.beginPath();
+          ctx.moveTo(cx, cy - TH2);
+          ctx.lineTo(cx + TW2, cy);
+          ctx.lineTo(cx, cy + TH2);
+          ctx.lineTo(cx - TW2, cy);
+          ctx.closePath();
+          ctx.fill();
+          this.drawTileGrid(cx, cy, visible);
+        }
         // Sous brouillard, un monstre ou une ressource ne doit laisser deviner
         // ni sa présence ni son tier à distance (repérage gratuit sans y être
         // jamais allé) — on ne les dessine pas du tout. Les repères de
@@ -1013,8 +1150,21 @@ class Renderer {
       }
     }
 
+    const houseInfo = this.currentHouseInfo();
+    if (houseInfo && Array.isArray(houseInfo.furniture)) {
+      for (const placed of houseInfo.furniture) {
+        furniturePoi.push({
+          placed,
+          cx: this.isoX(placed.x, placed.y) - this.cam.x + this.w / 2,
+          cy: this.isoY(placed.x, placed.y) - this.cam.y + this.h / 2,
+        });
+      }
+    }
+
     poi.sort((a, b) => a.cy - b.cy);
     for (const p of poi) this.drawContent(p.tile, p.cx, p.cy, p.visible);
+    furniturePoi.sort((a, b) => a.cy - b.cy);
+    for (const p of furniturePoi) this.drawFurniture(p.placed, p.cx, p.cy);
 
     // Une monture (bien plus grande qu'un personnage) peut chevaucher une
     // structure voisine sans que rien n'y paraisse dans l'ordre de dessin
@@ -1237,8 +1387,7 @@ if (c.kind === 'dungeon') {
       // sortie d'un donjon réutilise le sprite de porte du donjon de son
       // propre biome (WORLD_ICON_FILES.dungeon), pour rester bien visible
       // et cohérente avec l'entrée vue sur la carte du monde.
-      const isInteriorDoor = !!c.interiorDoor;
-      const isHousingPortal = !isInteriorDoor && (c.targetMapId === HOUSING_MAP_ID || s.currentMapId === HOUSING_MAP_ID);
+      const isHousingPortal = c.targetMapId === HOUSING_MAP_ID || s.currentMapId === HOUSING_MAP_ID;
       const isDungeonExit = !isHousingPortal && c.targetMapId === 'world' && c.terrain;
       this.drawPoiBase(cx, cy, {
         fill: 'rgba(244, 205, 110, 0.16)',
@@ -1246,9 +1395,7 @@ if (c.kind === 'dungeon') {
         glow: 'rgba(244, 205, 110, 0.22)',
       });
       let drawn = null;
-      if (isInteriorDoor && this.houseInteriorDoorSprite) {
-        drawn = this.drawWorldSprite(this.houseInteriorDoorSprite, cx, cy + 16, 78, 92, 18, 6);
-      } else if (isHousingPortal && this.housingEntranceSprite) {
+      if (isHousingPortal && this.housingEntranceSprite) {
         drawn = this.drawWorldSprite(this.housingEntranceSprite, cx, cy + 15, 108, 108, 26, 8);
       } else if (isDungeonExit && this.worldIcons.dungeon[c.terrain]) {
         const size = contentSpriteSize('dungeon');
@@ -1263,7 +1410,7 @@ if (c.kind === 'dungeon') {
         ctx.strokeStyle = '#f4cd6e';
         ctx.stroke();
       }
-      this.label(cx, cy + TH2 + 10, isInteriorDoor ? 'PORTE' : (isHousingPortal ? 'QUARTIER' : 'SORTIE'), '#f4cd6e', 9);
+      this.label(cx, cy + TH2 + 10, isHousingPortal ? 'QUARTIER' : 'SORTIE', '#f4cd6e', 9);
       ctx.globalAlpha = 1;
       return;
     }
@@ -1435,6 +1582,22 @@ if (c.kind === 'dungeon') {
       }
     }
     ctx.globalAlpha = 1;
+  }
+
+  drawFurniture(placed, cx, cy) {
+    const item = housingFurnitureFor(placed && placed.itemId);
+    if (!item) return;
+    const sprite = this.furnitureSprites[item.id];
+    const world = item.world || { maxW: 72, maxH: 60, groundOffset: 10, shadowW: 18, shadowH: 5 };
+    this.drawWorldSprite(
+      sprite,
+      cx,
+      cy + world.groundOffset,
+      world.maxW,
+      world.maxH,
+      world.shadowW,
+      world.shadowH
+    );
   }
 
   label(cx, cy, text, color, size) {

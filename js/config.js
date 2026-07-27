@@ -667,6 +667,116 @@ function houseInteriorMapId(parcelId) {
   return 'house:' + String(parcelId || '');
 }
 
+/* Mobilier de maison : premier set purement esthétique, posé au sol
+ * uniquement. Toutes les entrées passent par un catalogue partagé pour que
+ * le rendu, le placement et les futures recettes/crafts réutilisent les
+ * mêmes ids stables. */
+const HOUSING_FURNITURE_ITEMS = [
+  {
+    id: 'lit_simple',
+    label: 'Lit simple',
+    category: 'Repos',
+    asset: 'assets/housing_furniture/meuble_lit_simple.png',
+    recipe: { BOIS_2: 18, PLANTE_1: 8 },
+    footprint: { w: 1, h: 1 },
+    world: { maxW: 92, maxH: 76, groundOffset: 10, shadowW: 22, shadowH: 7 },
+  },
+  {
+    id: 'table_ronde',
+    label: 'Table ronde',
+    category: 'Salon',
+    asset: 'assets/housing_furniture/meuble_table_ronde.png',
+    recipe: { BOIS_1: 16, MINERAI_1: 4 },
+    footprint: { w: 1, h: 1 },
+    world: { maxW: 76, maxH: 70, groundOffset: 10, shadowW: 20, shadowH: 6 },
+  },
+  {
+    id: 'chaise_rustique',
+    label: 'Chaise rustique',
+    category: 'Salon',
+    asset: 'assets/housing_furniture/meuble_chaise_rustique.png',
+    recipe: { BOIS_1: 10 },
+    footprint: { w: 1, h: 1 },
+    world: { maxW: 62, maxH: 66, groundOffset: 10, shadowW: 16, shadowH: 5 },
+  },
+  {
+    id: 'coffre_bois',
+    label: 'Coffre en bois',
+    category: 'Rangement',
+    asset: 'assets/housing_furniture/meuble_coffre_bois.png',
+    recipe: { BOIS_2: 14, MINERAI_1: 6 },
+    footprint: { w: 1, h: 1 },
+    world: { maxW: 72, maxH: 62, groundOffset: 10, shadowW: 18, shadowH: 5 },
+  },
+  {
+    id: 'bibliotheque_basse',
+    label: 'Bibliotheque basse',
+    category: 'Rangement',
+    asset: 'assets/housing_furniture/meuble_bibliotheque_basse.png',
+    recipe: { BOIS_2: 16, PLANTE_1: 6 },
+    footprint: { w: 1, h: 1 },
+    world: { maxW: 84, maxH: 68, groundOffset: 10, shadowW: 21, shadowH: 6 },
+  },
+  {
+    id: 'tapis_ovale',
+    label: 'Tapis ovale',
+    category: 'Deco',
+    asset: 'assets/housing_furniture/deco_tapis_ovale.png',
+    recipe: { PLANTE_2: 18, PLANTE_1: 6 },
+    footprint: { w: 1, h: 1 },
+    world: { maxW: 90, maxH: 48, groundOffset: 8, shadowW: 24, shadowH: 4 },
+  },
+  {
+    id: 'plante_pot',
+    label: 'Plante en pot',
+    category: 'Deco',
+    asset: 'assets/housing_furniture/deco_plante_pot.png',
+    recipe: { PLANTE_1: 14, BOIS_1: 4 },
+    footprint: { w: 1, h: 1 },
+    world: { maxW: 56, maxH: 70, groundOffset: 10, shadowW: 15, shadowH: 5 },
+  },
+  {
+    id: 'commode_bois',
+    label: 'Commode en bois',
+    category: 'Rangement',
+    asset: 'assets/housing_furniture/meuble_commode_bois.png',
+    recipe: { BOIS_2: 15, MINERAI_1: 5 },
+    footprint: { w: 1, h: 1 },
+    world: { maxW: 82, maxH: 70, groundOffset: 10, shadowW: 20, shadowH: 6 },
+  },
+  {
+    id: 'banc_bois',
+    label: 'Banc en bois',
+    category: 'Salon',
+    asset: 'assets/housing_furniture/meuble_banc_bois.png',
+    recipe: { BOIS_1: 12 },
+    footprint: { w: 1, h: 1 },
+    world: { maxW: 86, maxH: 58, groundOffset: 10, shadowW: 21, shadowH: 5 },
+  },
+  {
+    id: 'table_basse',
+    label: 'Table basse',
+    category: 'Salon',
+    asset: 'assets/housing_furniture/meuble_table_basse.png',
+    recipe: { BOIS_1: 12, MINERAI_1: 3 },
+    footprint: { w: 1, h: 1 },
+    world: { maxW: 74, maxH: 54, groundOffset: 9, shadowW: 18, shadowH: 5 },
+  },
+  {
+    id: 'tabouret_bois',
+    label: 'Tabouret',
+    category: 'Salon',
+    asset: 'assets/housing_furniture/meuble_tabouret_bois.png',
+    recipe: { BOIS_1: 8 },
+    footprint: { w: 1, h: 1 },
+    world: { maxW: 52, maxH: 50, groundOffset: 9, shadowW: 14, shadowH: 4 },
+  },
+];
+const HOUSING_FURNITURE_BY_ID = Object.fromEntries(HOUSING_FURNITURE_ITEMS.map((item) => [item.id, item]));
+function housingFurnitureFor(id) {
+  return id ? (HOUSING_FURNITURE_BY_ID[id] || null) : null;
+}
+
 /* Cosmétiques d'accessoire : calque additionnel dessiné en plus du skin
  * (indépendant de la classe), jamais en vente — uniquement en loot rare ou
  * attribution admin. Un seul actif à la fois par joueur (p.equippedAccessory). */
@@ -1275,6 +1385,7 @@ if (typeof module !== 'undefined' && module.exports) {
     HOUSING_ENTRANCE_ASSET,
     housingParcelId, HOUSE_MODELS, HOUSE_MODEL_BY_ID, houseModelFor,
     HOUSE_INTERIOR_LAYOUTS, houseInteriorLayoutFor, houseInteriorMapId,
+    HOUSING_FURNITURE_ITEMS, HOUSING_FURNITURE_BY_ID, housingFurnitureFor,
     skinFor, skinAssetUrl, classSkinScale, baseSkinAsset, equipmentAsset, classAvailableToRole,
     artifactFor, artifactStatsFor, artifactProgressFor,
     levelFromXp, playerForce, maxHp, hpLossReduction, reviveHpPct, stackKey, parseStackKey, resourceFamily,

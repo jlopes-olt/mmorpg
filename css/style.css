@@ -1269,6 +1269,146 @@ html, body {
   font-size: 14px;
   font-weight: 700;
   cursor: pointer;
+  z-index: 25;
+}
+
+#houseHud {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(86px + env(safe-area-inset-bottom));
+  z-index: 28;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  pointer-events: none;
+}
+
+#houseToolRail {
+  display: flex;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(31, 25, 17, 0.96), rgba(18, 14, 10, 0.96));
+  border: 1px solid rgba(222, 187, 120, 0.34);
+  box-shadow:
+    0 14px 28px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 240, 210, 0.1);
+  pointer-events: auto;
+}
+
+.house-tool-btn {
+  width: 48px;
+  height: 48px;
+  border: 1px solid rgba(212, 173, 96, 0.55);
+  border-radius: 15px;
+  background:
+    radial-gradient(circle at 30% 25%, rgba(255, 232, 182, 0.2), transparent 48%),
+    linear-gradient(180deg, rgba(97, 71, 38, 0.96), rgba(53, 37, 20, 0.98));
+  color: #f4d48c;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+  text-shadow: 0 1px 0 rgba(38, 20, 6, 0.85);
+  box-shadow:
+    0 6px 16px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 243, 214, 0.22);
+  cursor: pointer;
+}
+
+.house-tool-btn.active {
+  border-color: rgba(255, 215, 128, 0.9);
+  background:
+    radial-gradient(circle at 30% 20%, rgba(255, 236, 196, 0.32), transparent 42%),
+    linear-gradient(180deg, #9f7838, #6d4a22 54%, #4b3016);
+  color: #fff4cf;
+  box-shadow:
+    0 10px 20px rgba(0, 0, 0, 0.32),
+    0 0 0 1px rgba(255, 228, 156, 0.18),
+    inset 0 1px 0 rgba(255, 247, 224, 0.32);
+}
+
+#houseActionBar {
+  width: min(460px, 100%);
+  padding: 14px 16px 15px;
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(36, 28, 19, 0.97), rgba(20, 15, 10, 0.97));
+  border: 1px solid rgba(218, 178, 102, 0.42);
+  box-shadow:
+    0 18px 34px rgba(0, 0, 0, 0.44),
+    inset 0 1px 0 rgba(255, 241, 214, 0.12);
+  pointer-events: auto;
+  position: relative;
+  overflow: hidden;
+}
+
+#houseActionBar::before {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 228, 167, 0.08);
+  pointer-events: none;
+}
+
+.house-action-mode,
+.house-action-hint,
+.house-action-buttons {
+  position: relative;
+  z-index: 1;
+}
+
+.house-action-mode {
+  color: #f1d79e;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+
+.house-action-hint {
+  margin-top: 4px;
+  color: #d9c7a2;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.house-action-buttons {
+  margin-top: 12px;
+  display: flex;
+  gap: 10px;
+}
+
+.house-action-btn {
+  flex: 1 1 0;
+  min-height: 42px;
+  border: 1px solid rgba(210, 172, 101, 0.4);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(83, 61, 34, 0.92), rgba(49, 34, 18, 0.98));
+  color: #edd9ae;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 14px;
+  font-weight: 700;
+  text-shadow: 0 1px 0 rgba(34, 18, 7, 0.85);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 244, 219, 0.14),
+    0 6px 16px rgba(0, 0, 0, 0.22);
+  cursor: pointer;
+}
+
+.house-action-btn.primary {
+  border-color: rgba(222, 183, 98, 0.68);
+  background:
+    linear-gradient(180deg, #e4bb66, #b77a2c 56%, #83501c);
+  color: #412108;
+  text-shadow: 0 1px 0 rgba(255, 233, 181, 0.66);
 }
 
 #recenterBtn {
@@ -2699,6 +2839,104 @@ html, body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+}
+.housing-catalog-popup {
+  width: min(94vw, 460px);
+  max-height: min(88dvh, 760px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.housing-catalog-popup > .popup-copy {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.housing-catalog-popup > .popup-copy > .popup-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+.housing-catalog-popup > .popup-actions {
+  flex: 0 0 auto;
+  margin-top: 14px;
+}
+.housing-catalog-popup .shop-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.housing-furniture-card {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  grid-template-areas:
+    "art copy"
+    "art actions";
+  align-items: start;
+  min-height: 0;
+  gap: 10px;
+  padding: 8px 10px;
+}
+.housing-furniture-art {
+  grid-area: art;
+  height: 76px;
+  padding: 6px;
+}
+.housing-furniture-card .shop-card-copy {
+  grid-area: copy;
+  gap: 3px;
+}
+.housing-furniture-card .shop-card-top b {
+  font-size: 13px;
+  line-height: 1.15;
+}
+.housing-furniture-category {
+  font-size: 11px;
+  font-weight: 700;
+  color: #8a6a42;
+}
+.housing-furniture-card .shop-card-state {
+  font-size: 11px;
+  line-height: 1.2;
+}
+.housing-furniture-recipe {
+  margin: 1px 0 0;
+  padding-left: 14px;
+  font-size: 10px;
+  line-height: 1.2;
+  color: #745e47;
+}
+.housing-furniture-recipe li {
+  margin: 1px 0;
+}
+.housing-furniture-actions {
+  grid-area: actions;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-self: end;
+}
+.housing-furniture-card .shop-card-actions .shop-btn {
+  flex: 1 1 120px;
+  min-height: 32px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+@media (max-width: 420px) {
+  .housing-furniture-card {
+    grid-template-columns: 74px minmax(0, 1fr);
+    gap: 8px;
+    padding: 7px 8px;
+  }
+  .housing-furniture-art {
+    height: 68px;
+  }
+  .housing-furniture-card .shop-card-actions .shop-btn {
+    flex-basis: 100%;
+  }
 }
 .trade-head { margin-bottom: 10px; }
 /* Toujours en colonne unique : la largeur réellement disponible est celle de

@@ -1487,31 +1487,41 @@ const exitTile = interiorMap.tiles.get(tileKey(interiorMap.entry.x, interiorMap.
 assert.ok(!exitTile || !exitTile.content, 'point d’entrée libre pour laisser respirer la caméra');
 const exitDoorPos = houseInteriorLayoutFor(model.id).door;
 const exitDoorTile = interiorMap.tiles.get(tileKey(exitDoorPos.x, exitDoorPos.y));
-assert.ok(exitDoorTile && exitDoorTile.content && exitDoorTile.content.kind === 'portal', 'sortie intérieure présente');
-assert.strictEqual(exitDoorTile.content.targetMapId, HOUSING_MAP_ID, 'sortie intérieure retourne au quartier');
-assert.strictEqual(exitDoorTile.content.targetPos.x, parcelTiles.find((t) => t.content.id === parcelA).x, 'sortie intérieure recale sur la parcelle');
+assert.ok(!exitDoorTile || !exitDoorTile.content, 'aucune porte ni portail dans l interieur');
+assert.ok(!g.craftFurniture(alice, 'lit_simple').ok, 'fabrication refusée sans ressources');
+alice.inventory.BOIS_2 = 40;
+alice.inventory.PLANTE_1 = 20;
+const craftedFurniture = g.craftFurniture(alice, 'lit_simple');
+assert.ok(craftedFurniture.ok, 'fabrication du meuble autorisée avec les ressources');
+assert.strictEqual(alice.furnitureInventory.lit_simple, 1, 'stock de meuble crédité après fabrication');
+assert.ok(!g.placeFurniture(carl, 'lit_simple', 0, 0).ok, 'placement refusé hors de sa maison');
+assert.ok(!g.placeFurniture(alice, 'meuble_inconnu', 0, 0).ok, 'meuble inconnu refusé');
+assert.ok(g.placeFurniture(alice, 'lit_simple', exitDoorPos.x, exitDoorPos.y).ok, 'ancienne zone de porte désormais libre pour le mobilier');
+assert.ok(!alice.furnitureInventory.lit_simple, 'poser consomme le stock disponible');
+g.removeFurniture(alice, exitDoorPos.x, exitDoorPos.y);
+assert.strictEqual(alice.furnitureInventory.lit_simple, 1, 'retirer remet le meuble dans le stock');
+const placedFurniture = g.placeFurniture(alice, 'lit_simple', 1, 1);
+assert.ok(placedFurniture.ok, 'placement d’un meuble autorisé dans la maison');
+assert.strictEqual(g.houses.get(parcelA).furniture.length, 1, 'meuble stocké côté maison');
+assert.strictEqual(g.housingInfo().find((h) => h.parcelId === parcelA).furniture.length, 1, 'mobilier exposé dans l’état public');
+assert.ok(!g.placeFurniture(alice, 'lit_simple', 2, 2).ok, 'impossible de reposer sans stock restant');
+assert.ok(!g.placeFurniture(alice, 'table_ronde', 1, 1).ok, 'double placement refusé sur la même case');
+const removedFurniture = g.removeFurniture(alice, 1, 1);
+assert.ok(removedFurniture.ok, 'retrait du meuble autorisé');
+assert.strictEqual(g.houses.get(parcelA).furniture.length, 0, 'meuble retiré du stockage');
+assert.strictEqual(alice.furnitureInventory.lit_simple, 1, 'retirer rembourse à nouveau le stock');
+assert.ok(!g.removeFurniture(alice, 1, 1).ok, 'retrait refusé si aucune déco sur la case');
 for (const houseModel of HOUSE_MODELS) {
   const sampleMap = generateHouseInteriorMap('sample_' + houseModel.id, houseModel.id, { x: 1, y: 2 });
   const layout = houseInteriorLayoutFor(houseModel.id);
   assert.strictEqual(sampleMap.min, layout.min, 'borne min correcte pour ' + houseModel.id);
   assert.strictEqual(sampleMap.max, layout.max, 'borne max correcte pour ' + houseModel.id);
   assert.strictEqual(sampleMap.entry.y, layout.entry.y, 'point d’entrée correct pour ' + houseModel.id);
-  assert.strictEqual(sampleMap.tiles.get(tileKey(layout.door.x, layout.door.y)).content.kind, 'portal', 'porte correcte pour ' + houseModel.id);
+  assert.ok(!sampleMap.tiles.get(tileKey(layout.door.x, layout.door.y)).content, 'aucune porte interieure pour ' + houseModel.id);
   const parquetTiles = [...sampleMap.tiles.values()].filter((t) => t.terrain === 'PARQUET');
   assert.ok(parquetTiles.length > 0, 'parquet présent pour ' + houseModel.id);
 }
-alice.pos = { x: exitDoorPos.x, y: exitDoorPos.y };
-const leaveHome = g.usePortal(alice);
-assert.ok(leaveHome.ok, 'on peut ressortir de la maison par le portail');
-assert.strictEqual(alice.mapId, HOUSING_MAP_ID, 'retour au quartier résidentiel après sortie');
-const reEnterHome = g.enterHouse(alice, parcelA);
-assert.ok(reEnterHome.ok, 'on peut rentrer à nouveau dans sa maison');
-alice.pos = { x: exitDoorPos.x, y: exitDoorPos.y - 1 };
-const leaveFromNearDoor = g.usePortal(alice);
-assert.ok(leaveFromNearDoor.ok, 'sortie tolérée juste devant la porte intérieure');
-assert.strictEqual(alice.mapId, HOUSING_MAP_ID, 'retour au quartier résidentiel même depuis la case voisine');
-const reEnterHomeAgain = g.enterHouse(alice, parcelA);
-assert.ok(reEnterHomeAgain.ok, 'on peut rerentrer après une sortie');
+assert.ok(!g.usePortal(alice).ok, 'aucun portail utilisable dans la maison');
 const leaveViaDedicatedAction = g.leaveHouse(alice);
 assert.ok(leaveViaDedicatedAction.ok, 'sortie dédiée de maison disponible');
 assert.strictEqual(alice.mapId, HOUSING_MAP_ID, 'sortie dédiée renvoie au quartier');
@@ -1539,6 +1549,17 @@ assert.ok(!g.adminResetHouse(alice, 'Alice').ok, 'reset refusé si déjà sans m
 alice.gold = model.price + 10;
 const reclaim = g.claimParcel(alice, parcelA, model.id);
 assert.ok(reclaim.ok, 'Alice peut racheter une parcelle après le reset');
+const hugeModel = HOUSE_MODELS.find((m) => m.id === 'house_tres_grande');
+if (hugeModel) {
+  g.adminResetHouse(alice, 'Alice');
+  if (hugeModel.currency === PREMIUM_CURRENCY.key) alice[PREMIUM_CURRENCY.key] = hugeModel.price + 10;
+  else alice.gold = hugeModel.price + 10;
+  const reclaimHuge = g.claimParcel(alice, parcelA, hugeModel.id);
+  assert.ok(reclaimHuge.ok, 'Alice peut racheter en tres grand modele');
+  const reEnterHuge = g.enterHouse(alice, parcelA);
+  assert.ok(reEnterHuge.ok, 'Alice peut re-rentrer apres le rachat');
+  assert.strictEqual(g.mapOf(alice.mapId).max, houseInteriorLayoutFor(hugeModel.id).max, 'la nouvelle taille interieure remplace bien l ancien cache');
+}
 console.log('Quartier résidentiel : grille espacée ✔, portails aller/retour ✔, une maison par compte ✔, persistance ✔, reset admin ✔');
 
 // --- Admin : attribution de fragments d'artefact / d'artefacts complets ---

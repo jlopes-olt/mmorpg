@@ -85,6 +85,8 @@ class UI {
     this.popupMode = null;
     this.tradeDraft = null;
     this.tradeUiState = { filter: 'ALL', selectedSlot: null, scrollTop: 0 };
+    this.pendingFurnitureId = null;
+    this.houseEditMode = 'move';
     this.desktopMedia = window.matchMedia('(min-width: 1600px)');
     this.desktopProfileSignature = '';
     this.desktopSocialRequest = 0;
@@ -160,6 +162,17 @@ class UI {
     });
     $('desktopProfileOpen').addEventListener('click', () => this.showSheet('profile'));
     $('desktopMapOpen').addEventListener('click', () => this.showSheet('map'));
+    $('houseToolAdd').addEventListener('click', () => {
+      this.setHouseEditMode('add');
+      this.showHousingCatalog();
+    });
+    $('houseToolRemove').addEventListener('click', () => this.setHouseEditMode('remove'));
+    $('houseToolMove').addEventListener('click', () => this.setHouseEditMode('move'));
+    $('houseCatalogBtn').addEventListener('click', () => this.showHousingCatalog());
+    $('houseExitBtn').addEventListener('click', async () => {
+      const r = await Promise.resolve(this.server.leaveHouse ? this.server.leaveHouse() : this.server.usePortal());
+      if (!r.ok) this.toast(r.error);
+    });
     const onDesktopChange = () => this.syncDesktopPanels(true);
     if (this.desktopMedia.addEventListener) this.desktopMedia.addEventListener('change', onDesktopChange);
     else this.desktopMedia.addListener(onDesktopChange);
@@ -730,6 +743,173 @@ showDungeonPopup(tile, onEnter) {
           '<button class="btn primary shop-btn" data-house-buy="' + esc(model.id) + '"' + (canAfford ? '' : ' disabled') + '>Acheter</button>' +
         '</div>' +
       '</article>'
+    );
+  }
+
+  currentHouseInfo() {
+    return this.server && typeof this.server.currentHouseInfo === 'function'
+      ? this.server.currentHouseInfo()
+      : null;
+  }
+
+  housingFurnitureCardHtml(item) {
+    const me = this.server.me;
+    const owned = Number((me.furnitureInventory && me.furnitureInventory[item.id]) || 0);
+    const recipeLines = Object.entries(item.recipe || {}).map(([key, qty]) => {
+      const parsed = parseStackKey(key);
+      const have = Number((me.inventory && me.inventory[key]) || 0);
+      return '<li class="' + (have >= qty ? 'ok-c' : 'hp-c') + '">' + qty + '× ' + esc(resourceLabel(parsed.type, parsed.tier)) +
+        ' <span class="dim">(' + have + '/' + qty + ')</span></li>';
+    }).join('');
+    const canCraft = Object.entries(item.recipe || {}).every(([key, qty]) => Number((me.inventory && me.inventory[key]) || 0) >= qty);
+    return (
+      '<article class="shop-card housing-furniture-card">' +
+        '<div class="shop-card-art house-model-art housing-furniture-art"><img src="' + esc(item.asset) + '" alt="' + esc(item.label) + '"></div>' +
+        '<div class="shop-card-copy">' +
+          '<div class="shop-card-top"><b>' + esc(item.label) + '</b><span class="housing-furniture-category">' + esc(item.category) + '</span></div>' +
+          '<div class="shop-card-state">En stock : ' + owned + '</div>' +
+          '<ul class="housing-furniture-recipe">' + recipeLines + '</ul>' +
+        '</div>' +
+        '<div class="shop-card-actions housing-furniture-actions">' +
+          '<button class="btn shop-btn" data-furniture-craft="' + esc(item.id) + '"' + (canCraft ? '' : ' disabled') + '>Fabriquer</button>' +
+          '<button class="btn primary shop-btn" data-furniture-pick="' + esc(item.id) + '"' + (owned > 0 ? '' : ' disabled') + '>Placer</button>' +
+        '</div>' +
+      '</article>'
+    );
+  }
+
+  clearFurniturePlacement(silent) {
+    this.pendingFurnitureId = null;
+    if (this.houseEditMode === 'add') this.houseEditMode = 'move';
+    this.syncHouseHud();
+    if (!silent) this.toast('Placement annule.');
+  }
+
+  beginFurniturePlacement(itemId) {
+    const item = housingFurnitureFor(itemId);
+    if (!item) return;
+    this.pendingFurnitureId = item.id;
+    this.houseEditMode = 'add';
+    this.syncHouseHud();
+    this.toast('Placement : ' + item.label + '. Touchez une case de parquet.');
+  }
+
+  setHouseEditMode(mode) {
+    this.houseEditMode = mode === 'add' || mode === 'remove' ? mode : 'move';
+    if (this.houseEditMode !== 'add') this.pendingFurnitureId = null;
+    this.syncHouseHud();
+  }
+
+  houseModeUi() {
+    const item = housingFurnitureFor(this.pendingFurnitureId);
+    if (this.houseEditMode === 'add') {
+      return item
+        ? {
+          title: 'Ajout : ' + item.label,
+          hint: 'Touchez une case libre de parquet pour le poser.',
+        }
+        : {
+          title: 'Ajout de mobilier',
+          hint: 'Ouvrez le catalogue puis choisissez un meuble.',
+        };
+    }
+    if (this.houseEditMode === 'remove') {
+      return {
+        title: 'Retrait de mobilier',
+        hint: 'Touchez un meuble pose pour le retirer.',
+      };
+    }
+    return {
+      title: 'Deplacement libre',
+      hint: 'Aucun outil actif. Touchez le sol pour vous deplacer.',
+    };
+  }
+
+  syncHouseHud() {
+    const me = this.server.me;
+    const inHouse = !!(me && String(me.mapId || '').indexOf('house:') === 0);
+    $('houseHud').classList.toggle('hidden', !inHouse);
+    if (!inHouse) return;
+    const modeUi = this.houseModeUi();
+    $('houseToolAdd').classList.toggle('active', this.houseEditMode === 'add');
+    $('houseToolRemove').classList.toggle('active', this.houseEditMode === 'remove');
+    $('houseToolMove').classList.toggle('active', this.houseEditMode === 'move');
+    $('houseActionMode').textContent = modeUi.title;
+    $('houseActionHint').textContent = modeUi.hint;
+  }
+
+  showHousingCatalog() {
+    const itemCount = HOUSING_FURNITURE_ITEMS.length;
+    const body = '<p class="dim">Choisissez un meuble puis touchez une case libre de parquet dans votre maison.</p>' +
+      '<p class="small dim">' + itemCount + ' objets disponibles dans cette premiere collection.</p>' +
+      '<div class="shop-grid house-model-grid">' + HOUSING_FURNITURE_ITEMS.map((item) => this.housingFurnitureCardHtml(item)).join('') + '</div>';
+    const actions = [{ label: 'Fermer' }];
+    this.popup('Amenager la maison', body, actions, {
+      mode: 'housing',
+      kicker: 'Mobilier',
+      className: 'popup-card housing-catalog-popup',
+    });
+    $('popup').querySelectorAll('[data-furniture-craft]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const itemId = btn.dataset.furnitureCraft;
+        const r = await Promise.resolve(this.server.craftFurniture(itemId));
+        if (!r.ok) this.toast(r.error);
+        else {
+          const item = housingFurnitureFor(itemId);
+          this.toast((item ? item.label : 'Meuble') + ' fabrique.');
+          this.showHousingCatalog();
+        }
+      });
+    });
+    $('popup').querySelectorAll('[data-furniture-pick]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.beginFurniturePlacement(btn.dataset.furniturePick);
+        this.syncHouseHud();
+        this.closePopup();
+      });
+    });
+  }
+
+  showHousingMenu() {
+    const house = this.currentHouseInfo();
+    const count = house && Array.isArray(house.furniture) ? house.furniture.length : 0;
+    const placing = housingFurnitureFor(this.pendingFurnitureId);
+    const body = '<p class="dim">Votre maison peut maintenant accueillir du mobilier decoratif.</p>' +
+      '<p><b>Meubles poses :</b> ' + count + '</p>' +
+      (placing ? '<p class="ok-c small">Placement en cours : <b>' + esc(placing.label) + '</b></p>' : '<p class="small dim">Touchez un meuble pose pour le retirer.</p>');
+    const actions = [{ label: 'Fermer' }];
+    if (placing) actions.unshift({ label: 'Annuler placement', cb: () => this.clearFurniturePlacement(false) });
+    actions.push({ label: 'Amenager', cb: () => this.showHousingCatalog() });
+    actions.push({
+      label: 'Sortir',
+      primary: true,
+      cb: async () => {
+        const r = await Promise.resolve(this.server.leaveHouse ? this.server.leaveHouse() : this.server.usePortal());
+        if (!r.ok) this.toast(r.error);
+      },
+    });
+    this.popup('Maison', body, actions, { mode: 'housing', kicker: 'Interieur' });
+  }
+
+  showPlacedFurniturePopup(placed) {
+    const item = housingFurnitureFor(placed && placed.itemId);
+    if (!item) return;
+    this.popup(
+      item.label,
+      '<p class="dim">Meuble decoratif pose dans votre maison.</p><p class="small dim">Vous pourrez bientot le deplacer, pivoter et classer par categories.</p>',
+      [
+        { label: 'Fermer' },
+        {
+          label: 'Retirer',
+          primary: true,
+          cb: async () => {
+            const r = await Promise.resolve(this.server.removeFurniture(placed.x, placed.y));
+            if (!r.ok) this.toast(r.error);
+            else this.toast(item.label + ' retire.');
+          },
+        },
+      ],
+      { mode: 'housing', kicker: 'Mobilier' }
     );
   }
 
@@ -1562,8 +1742,9 @@ showDungeonPopup(tile, onEnter) {
     // d'un donjon est aussi en (0,0))
     const onCapital = (me.mapId || 'world') === 'world' && me.pos.x === 0 && me.pos.y === 0;
     const inHouse = String(me.mapId || '').indexOf('house:') === 0;
-    $('ctxAction').textContent = inHouse ? '🚪 Sortir de la maison' : '⚒ Capitale — PNJ & Forgeron';
-    $('ctxAction').classList.toggle('hidden', !(onCapital || inHouse));
+    $('ctxAction').textContent = '⚒ Capitale — PNJ & Forgeron';
+    $('ctxAction').classList.toggle('hidden', !onCapital || inHouse);
+    this.syncHouseHud();
 
     // Badge du buff de nourriture actif
     const buffBadge = $('buffBadge');

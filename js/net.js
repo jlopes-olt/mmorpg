@@ -37,6 +37,9 @@ class RemoteServer {
     }
     return null;
   }
+  invalidateHouseMap(parcelId) {
+    this.maps.delete(houseInteriorMapId(parcelId));
+  }
   mapOf(id) {
     const mapId = String(id || 'world');
     if (this.maps.has(mapId)) return this.maps.get(mapId);
@@ -50,6 +53,36 @@ class RemoteServer {
       return map;
     }
     return this.maps.get('world');
+  }
+  houseInfoFor(parcelId) {
+    return this.housingList.find((h) => h && h.parcelId === parcelId) || null;
+  }
+  currentHouseInfo() {
+    const map = this.mapOf(this.currentMapId);
+    if (!map || map.kind !== 'houseInterior') return null;
+    return this.houseInfoFor(map.parcelId);
+  }
+  furnitureAt(x, y) {
+    const house = this.currentHouseInfo();
+    if (!house || !Array.isArray(house.furniture)) return null;
+    for (const placed of house.furniture) {
+      const item = housingFurnitureFor(placed.itemId);
+      const fp = (item && item.footprint) || { w: 1, h: 1 };
+      for (let oy = 0; oy < fp.h; oy++) {
+        for (let ox = 0; ox < fp.w; ox++) {
+          if (placed.x + ox === x && placed.y + oy === y) return placed;
+        }
+      }
+    }
+    return null;
+  }
+  updateHousingEntry(house) {
+    if (!house || !house.parcelId) return;
+    const idx = this.housingList.findIndex((h) => h && h.parcelId === house.parcelId);
+    const prev = idx >= 0 ? this.housingList[idx] : null;
+    if (!prev || prev.modelId !== house.modelId) this.invalidateHouseMap(house.parcelId);
+    if (idx >= 0) this.housingList[idx] = house;
+    else this.housingList.push(house);
   }
   chebyshev(a, b) { return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)); }
   teamForce(raid) { return raid.teamForce || 0; }
@@ -285,15 +318,40 @@ class RemoteServer {
   castlesInfo() { return this.req('castle:info', {}); }
   housingInfo() {
     return this.req('housing:info', {}).then((res) => {
-      if (res && res.ok && Array.isArray(res.list)) this.housingList = res.list.slice();
+      if (res && res.ok && Array.isArray(res.list)) {
+        const next = res.list.slice();
+        const prevById = new Map(this.housingList.filter((h) => h && h.parcelId).map((h) => [h.parcelId, h]));
+        for (const house of next) {
+          const prev = prevById.get(house.parcelId);
+          if (!prev || prev.modelId !== house.modelId) this.invalidateHouseMap(house.parcelId);
+        }
+        this.housingList = next;
+      }
       return res;
     });
   }
   claimParcel(parcelId, modelId) { return this.req('housing:claim', { parcelId, modelId }); }
   enterHouse(parcelId) {
-    return this.housingInfo().then(() => this.req('housing:enter', { parcelId }));
+    return this.housingInfo().then(() => {
+      const targetParcelId = String(parcelId || (this.me && this.me.parcelId) || '');
+      if (targetParcelId) this.invalidateHouseMap(targetParcelId);
+      return this.req('housing:enter', { parcelId });
+    });
   }
   leaveHouse() { return this.req('housing:leave', {}); }
+  craftFurniture(itemId) { return this.req('housing:craftFurniture', { itemId }); }
+  placeFurniture(itemId, x, y) {
+    return this.req('housing:placeFurniture', { itemId, x, y }).then((res) => {
+      if (res && res.ok && res.house) this.updateHousingEntry(res.house);
+      return res;
+    });
+  }
+  removeFurniture(x, y) {
+    return this.req('housing:removeFurniture', { x, y }).then((res) => {
+      if (res && res.ok && res.house) this.updateHousingEntry(res.house);
+      return res;
+    });
+  }
   claimCastle(terrain) { return this.req('castle:claim', { terrain }); }
   reinforceCastle(terrain) { return this.req('castle:reinforce', { terrain }); }
   repairCastle(terrain, gold) { return this.req('castle:repair', { terrain, gold }); }

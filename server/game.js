@@ -362,6 +362,7 @@ class Game {
       pa: CONFIG.PA.START, paMs: 0,
       hp: 100, hpMs: 0,
       inventory: {},
+      furnitureInventory: {},
       gold: 0,
       [PREMIUM_CURRENCY.key]: 0,
       pushSubscriptions: [],
@@ -858,6 +859,44 @@ class Game {
     return this.houses.get(parcelId);
   }
 
+  invalidateHouseMap(parcelId) {
+    const mapId = houseInteriorMapId(parcelId);
+    this.maps.delete(mapId);
+  }
+
+  housePublicState(house) {
+    if (!house || !house.ownerId) return null;
+    return {
+      parcelId: house.parcelId,
+      ownerUsername: house.ownerUsername,
+      modelId: house.modelId,
+      furniture: Array.isArray(house.furniture) ? house.furniture.map((f) => ({ ...f })) : [],
+    };
+  }
+
+  houseFurnitureCells(item, x, y) {
+    const fp = (item && item.footprint) || { w: 1, h: 1 };
+    const cells = [];
+    for (let oy = 0; oy < fp.h; oy++) {
+      for (let ox = 0; ox < fp.w; ox++) cells.push({ x: x + ox, y: y + oy });
+    }
+    return cells;
+  }
+
+  furnitureAt(house, x, y) {
+    if (!house || !Array.isArray(house.furniture)) return null;
+    for (const placed of house.furniture) {
+      const item = housingFurnitureFor(placed.itemId);
+      const cells = this.houseFurnitureCells(item, placed.x, placed.y);
+      if (cells.some((cell) => cell.x === x && cell.y === y)) return placed;
+    }
+    return null;
+  }
+
+  furnitureStockOf(p, itemId) {
+    return Number((p.furnitureInventory && p.furnitureInventory[itemId]) || 0);
+  }
+
   // Retrouve la tuile de la carte du quartier portant cet id de parcelle —
   // valide qu'un id réclamé par un client existe réellement (défense en
   // profondeur) avant d'accepter un achat.
@@ -889,10 +928,34 @@ class Game {
     house.ownerId = p.id;
     house.ownerUsername = p.username;
     house.modelId = model.id;
+    this.invalidateHouseMap(tile.content.id);
     p.parcelId = tile.content.id;
     this.pushSelf(p);
     this.onHousingDirty();
     return { ok: true, parcelId: tile.content.id };
+  }
+
+  craftFurniture(p, itemId) {
+    const map = this.mapOf(p.mapId || 'world');
+    if (!map || map.kind !== 'houseInterior') return { ok: false, error: 'Fabriquez votre mobilier depuis votre maison.' };
+    const parcelId = map.parcelId || p.parcelId || '';
+    if (!parcelId || p.parcelId !== parcelId) return { ok: false, error: 'Cette maison ne vous appartient pas.' };
+    const item = housingFurnitureFor(String(itemId || ''));
+    if (!item || !item.recipe) return { ok: false, error: 'Meuble inconnu.' };
+    for (const [key, qty] of Object.entries(item.recipe)) {
+      if ((p.inventory[key] || 0) < qty) {
+        const parsed = parseStackKey(key);
+        return { ok: false, error: 'Il manque : ' + qty + '× ' + resourceLabel(parsed.type, parsed.tier) + '.' };
+      }
+    }
+    for (const [key, qty] of Object.entries(item.recipe)) {
+      p.inventory[key] -= qty;
+      if (p.inventory[key] <= 0) delete p.inventory[key];
+    }
+    if (!p.furnitureInventory) p.furnitureInventory = {};
+    p.furnitureInventory[item.id] = this.furnitureStockOf(p, item.id) + 1;
+    this.pushSelf(p);
+    return { ok: true, itemId: item.id, count: p.furnitureInventory[item.id] };
   }
 
   enterHouse(p, parcelId) {
@@ -925,13 +988,59 @@ class Game {
     return { ok: true, mapId: housingMap.id };
   }
 
+  placeFurniture(p, itemId, x, y) {
+    const map = this.mapOf(p.mapId || 'world');
+    if (!map || map.kind !== 'houseInterior') return { ok: false, error: 'Vous devez être dans votre maison.' };
+    const parcelId = map.parcelId || p.parcelId || '';
+    if (!parcelId || p.parcelId !== parcelId) return { ok: false, error: 'Cette maison ne vous appartient pas.' };
+    const house = this.houseOf(parcelId);
+    const item = housingFurnitureFor(String(itemId || ''));
+    if (!item) return { ok: false, error: 'Meuble inconnu.' };
+    if (this.furnitureStockOf(p, item.id) < 1) return { ok: false, error: 'Vous devez d’abord fabriquer ce meuble.' };
+    const baseX = Math.round(Number(x) || 0);
+    const baseY = Math.round(Number(y) || 0);
+    const cells = this.houseFurnitureCells(item, baseX, baseY);
+    for (const cell of cells) {
+      const tile = map.tiles.get(tileKey(cell.x, cell.y));
+      if (!tile || tile.blocked || tile.terrain !== 'PARQUET') {
+        return { ok: false, error: 'Placez ce meuble sur le parquet intérieur.' };
+      }
+      if (tile.content) return { ok: false, error: 'Cette case est déjà occupée.' };
+      if (this.furnitureAt(house, cell.x, cell.y)) return { ok: false, error: 'Un meuble est déjà posé ici.' };
+    }
+    const placed = { id: 'f_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6), itemId: item.id, x: baseX, y: baseY };
+    if (!Array.isArray(house.furniture)) house.furniture = [];
+    house.furniture.push(placed);
+    p.furnitureInventory[item.id] -= 1;
+    if (p.furnitureInventory[item.id] <= 0) delete p.furnitureInventory[item.id];
+    this.pushSelf(p);
+    this.onHousingDirty();
+    return { ok: true, house: this.housePublicState(house), placed: { ...placed } };
+  }
+
+  removeFurniture(p, x, y) {
+    const map = this.mapOf(p.mapId || 'world');
+    if (!map || map.kind !== 'houseInterior') return { ok: false, error: 'Vous devez être dans votre maison.' };
+    const parcelId = map.parcelId || p.parcelId || '';
+    if (!parcelId || p.parcelId !== parcelId) return { ok: false, error: 'Cette maison ne vous appartient pas.' };
+    const house = this.houseOf(parcelId);
+    const target = this.furnitureAt(house, Math.round(Number(x) || 0), Math.round(Number(y) || 0));
+    if (!target) return { ok: false, error: 'Aucun meuble sur cette case.' };
+    house.furniture = house.furniture.filter((f) => f !== target);
+    if (!p.furnitureInventory) p.furnitureInventory = {};
+    p.furnitureInventory[target.itemId] = this.furnitureStockOf(p, target.itemId) + 1;
+    this.pushSelf(p);
+    this.onHousingDirty();
+    return { ok: true, house: this.housePublicState(house), removed: { ...target } };
+  }
+
   // Jamais poussé automatiquement (comme castlesInfo) : demandé par le
   // client à l'entrée dans le quartier, pour que toutes les maisons déjà
   // occupées s'affichent d'un coup à qui s'y promène.
   housingInfo() {
     return [...this.houses.values()]
       .filter((h) => h.ownerId)
-      .map((h) => ({ parcelId: h.parcelId, ownerUsername: h.ownerUsername, modelId: h.modelId }));
+      .map((h) => this.housePublicState(h));
   }
 
   publicPlayers() {
@@ -3044,6 +3153,7 @@ class Game {
       house.ownerUsername = null;
       house.modelId = null;
       house.furniture = [];
+      this.invalidateHouseMap(target.parcelId);
     }
     target.parcelId = null;
     this.pushSelf(target);
@@ -3211,6 +3321,7 @@ class Game {
       if (!p.guildInvite || typeof p.guildInvite !== 'object') p.guildInvite = null;
       if (!Array.isArray(p.friends)) p.friends = [];
       if (!Array.isArray(p.friendRequests)) p.friendRequests = [];
+      if (!p.furnitureInventory || typeof p.furnitureInventory !== 'object') p.furnitureInventory = {};
       // Comptes créés avant l'ajout de l'OTP par email : pas d'email connu —
       // voir setAccountEmail(), demandé à la prochaine connexion.
       if (typeof p.email !== 'string') p.email = null;

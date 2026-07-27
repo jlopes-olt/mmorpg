@@ -122,8 +122,24 @@
 
     <div id="toasts"></div>
 
-    <!-- Action contextuelle : visible uniquement sur la case (0,0) -->
+    <!-- Action contextuelle : visible hors maison sur la case (0,0) -->
     <button id="ctxAction" class="hidden">⚒ Capitale — PNJ &amp; Forgeron</button>
+
+    <section id="houseHud" class="hidden" aria-label="Outils de maison">
+      <div id="houseToolRail">
+        <button id="houseToolAdd" class="house-tool-btn" aria-label="Ajouter un meuble">+</button>
+        <button id="houseToolRemove" class="house-tool-btn" aria-label="Retirer un meuble">−</button>
+        <button id="houseToolMove" class="house-tool-btn" aria-label="Mode déplacement">✕</button>
+      </div>
+      <div id="houseActionBar">
+        <div id="houseActionMode" class="house-action-mode">Deplacement libre</div>
+        <div id="houseActionHint" class="house-action-hint">Touchez le sol pour vous deplacer.</div>
+        <div class="house-action-buttons">
+          <button id="houseCatalogBtn" class="house-action-btn">Catalogue</button>
+          <button id="houseExitBtn" class="house-action-btn primary">Sortir</button>
+        </div>
+      </div>
+    </section>
 
     <!-- Recentrage caméra : visible seulement pendant qu'on a glissé la vue loin du héros -->
     <button id="recenterBtn" class="hidden" aria-label="Recentrer la caméra sur le héros">⌖</button>

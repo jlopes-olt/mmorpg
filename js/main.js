@@ -239,7 +239,7 @@
   }
 
   /* ---------- Interactions sur la carte ---------- */
-  function handleTap(tx, ty) {
+  async function handleTap(tx, ty) {
     const me = server.me;
     if (!me || me.status === 'LOBBY_COMBAT') return;
     if (!inBounds(tx, ty, server.tiles)) return;
@@ -248,7 +248,53 @@
     if (!tile || tile.blocked) return;   // vide de donjon : inerte
     const c = tile.content;
     const adjacent = server.chebyshev(me.pos, tile) <= 1;
+    const inHouse = String(me.mapId || '').indexOf('house:') === 0;
     moveQueue = [];
+
+    if (inHouse) {
+      const house = typeof server.currentHouseInfo === 'function' ? server.currentHouseInfo() : null;
+      const placed = house && Array.isArray(house.furniture)
+        ? house.furniture.find((f) => {
+          const item = housingFurnitureFor(f.itemId);
+          const fp = (item && item.footprint) || { w: 1, h: 1 };
+          for (let oy = 0; oy < fp.h; oy++) {
+            for (let ox = 0; ox < fp.w; ox++) {
+              if (f.x + ox === tx && f.y + oy === ty) return true;
+            }
+          }
+          return false;
+        })
+        : null;
+
+      if (ui.houseEditMode === 'add') {
+        if (!ui.pendingFurnitureId) {
+          ui.showHousingCatalog();
+          return;
+        }
+        const r = await Promise.resolve(server.placeFurniture(ui.pendingFurnitureId, tx, ty));
+        if (!r.ok) ui.toast(r.error);
+        else {
+          const item = housingFurnitureFor(ui.pendingFurnitureId);
+          ui.toast((item ? item.label : 'Meuble') + ' place.');
+        }
+        return;
+      }
+      if (ui.houseEditMode === 'remove') {
+        if (!placed) {
+          ui.toast('Aucun meuble a retirer ici.');
+          return;
+        }
+        const item = housingFurnitureFor(placed.itemId);
+        const r = await Promise.resolve(server.removeFurniture(placed.x, placed.y));
+        if (!r.ok) ui.toast(r.error);
+        else ui.toast((item ? item.label : 'Meuble') + ' retire.');
+        return;
+      }
+      if (placed) {
+        ui.showPlacedFurniturePopup(placed);
+        return;
+      }
+    }
 
     if (c && c.kind === 'capital') {
       if (me.pos.x === 0 && me.pos.y === 0) ui.showSheet('capital');
@@ -557,8 +603,6 @@
 document.getElementById('ctxAction').addEventListener('click', async () => {
   const me = server.me;
   if (me && String(me.mapId || '').indexOf('house:') === 0) {
-    const r = await Promise.resolve(server.leaveHouse ? server.leaveHouse() : server.usePortal());
-    if (!r.ok) ui.toast(r.error);
     return;
   }
   ui.showSheet('capital');
@@ -587,6 +631,8 @@ document.getElementById('ctxAction').addEventListener('click', async () => {
     }
     if (String(server.currentMapId || '').indexOf('house:') === 0) {
       for (const k of server.tiles.keys()) explored.add(k);
+    } else if (ui && typeof ui.clearFurniturePlacement === 'function') {
+      ui.clearFurniturePlacement(true);
     }
     updateExplored();
     // Quartier résidentiel : les parcelles occupées ne sont jamais poussées

@@ -534,21 +534,10 @@ function generateHouseInteriorMap(parcelId, modelId, parcelPos) {
   for (let y = min; y <= max; y++) {
     for (let x = min; x <= max; x++) {
       const edge = x === min || x === max || y === min || y === max;
-      let content = null;
-      const doorPos = layout.door || layout.entry;
-      if (x === doorPos.x && y === doorPos.y) {
-        content = {
-          kind: 'portal',
-          label: 'Sortir de la maison',
-          targetMapId: HOUSING_MAP_ID,
-          targetPos: parcelPos ? { x: parcelPos.x, y: parcelPos.y } : { x: 0, y: 0 },
-          interiorDoor: true,
-        };
-      }
       tiles.set(tileKey(x, y), {
         x, y,
         terrain: edge ? 'PAVE' : 'PARQUET',
-        content,
+        content: null,
         blocked: false,
       });
     }
