@@ -87,6 +87,8 @@ class UI {
     this.tradeUiState = { filter: 'ALL', selectedSlot: null, scrollTop: 0 };
     this.pendingFurnitureId = null;
     this.houseEditMode = 'move';
+    this.housingCatalogTab = 'furniture';
+    this.trophyPreviewSrc = {};
     this.desktopMedia = window.matchMedia('(min-width: 1600px)');
     this.desktopProfileSignature = '';
     this.desktopSocialRequest = 0;
@@ -727,6 +729,63 @@ showDungeonPopup(tile, onEnter) {
     );
   }
 
+  async showParcelPopup(tile) {
+    const me = this.server.me;
+    const c = tile.content;
+    const parcelId = c.id;
+    this.popup('Parcelle', '<p class="dim">Chargement...</p>', [{ label: 'Fermer' }], { mode: 'parcel' });
+    const res = await Promise.resolve(this.server.housingInfo());
+    if (this.popupMode !== 'parcel') return;
+    const list = (res && res.ok) ? res.list : [];
+    if (this.renderer && typeof this.renderer.setHousingInfo === 'function') {
+      this.renderer.setHousingInfo(list);
+    }
+    const house = list.find((h) => h.parcelId === parcelId) || null;
+
+    if (!house) {
+      const body = '<p class="dim">Parcelle libre - choisissez une facade.</p>' +
+        (me.parcelId ? '<p class="hp-c small">Vous possedez deja une maison - une seule par compte.</p>' : '') +
+        '<div class="shop-grid house-model-grid">' + HOUSE_MODELS.map((m) => this.houseModelCardHtml(m, me)).join('') + '</div>';
+      this.popup('Parcelle libre', body, [{ label: 'Fermer' }], { mode: 'parcel', kicker: 'Quartier residentiel' });
+      if (!me.parcelId) {
+        $('popup').querySelectorAll('[data-house-buy]').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const modelId = btn.dataset.houseBuy;
+            const r = await Promise.resolve(this.server.claimParcel(parcelId, modelId));
+            this.toast(r.ok ? 'Maison acquise !' : r.error);
+            this.closePopup();
+          });
+        });
+      }
+      return;
+    }
+
+    const isMine = me.parcelId === parcelId;
+    const layout = houseInteriorLayoutFor(house.modelId);
+    const body = '<p class="dim">' + (isMine
+      ? 'Votre interieur est pret. Vous pouvez y entrer, l amenager et exposer vos trophees.'
+      : 'Visite libre : entrez pour decouvrir l interieur et la decoration de cette maison.') + '</p>' +
+      '<p><b>Facade :</b> ' + esc((houseModelFor(house.modelId) || {}).label || 'Maison') + '</p>' +
+      '<p><b>Taille :</b> ' + esc(layout.size) + '</p>' +
+      '<p class="small dim">Sol parquet, instance reservee a cette parcelle et capable d accueillir mobilier et trophees.</p>';
+    this.popup(
+      isMine ? 'Votre maison' : 'Maison de ' + esc(house.ownerUsername),
+      body,
+      [
+        { label: 'Fermer' },
+        {
+          label: isMine ? 'Entrer' : 'Visiter',
+          primary: true,
+          cb: async () => {
+            const r = await Promise.resolve(this.server.enterHouse(parcelId));
+            if (!r.ok) this.toast(r.error);
+          },
+        },
+      ],
+      { mode: 'parcel', kicker: 'Quartier residentiel' }
+    );
+  }
+
   houseModelCardHtml(model, me) {
     const canAfford = Number(me[model.currency] || 0) >= model.price;
     return (
@@ -752,26 +811,46 @@ showDungeonPopup(tile, onEnter) {
       : null;
   }
 
+  currentHouseParcelId() {
+    if (!this.server || typeof this.server.mapOf !== 'function') return null;
+    const map = this.server.mapOf(this.server.currentMapId);
+    return map && map.kind === 'houseInterior' ? (map.parcelId || null) : null;
+  }
+
+  canEditCurrentHouse() {
+    const me = this.server.me;
+    const parcelId = this.currentHouseParcelId();
+    return !!(me && parcelId && me.parcelId === parcelId);
+  }
+
   housingFurnitureCardHtml(item) {
     const me = this.server.me;
     const owned = Number((me.furnitureInventory && me.furnitureInventory[item.id]) || 0);
+    const isTrophy = item.collection === 'trophy';
+    const trophyPreviewSrc = isTrophy ? this.getHousingTrophyPreviewSrc(item) : '';
     const recipeLines = Object.entries(item.recipe || {}).map(([key, qty]) => {
       const parsed = parseStackKey(key);
       const have = Number((me.inventory && me.inventory[key]) || 0);
       return '<li class="' + (have >= qty ? 'ok-c' : 'hp-c') + '">' + qty + '× ' + esc(resourceLabel(parsed.type, parsed.tier)) +
         ' <span class="dim">(' + have + '/' + qty + ')</span></li>';
     }).join('');
-    const canCraft = Object.entries(item.recipe || {}).every(([key, qty]) => Number((me.inventory && me.inventory[key]) || 0) >= qty);
+    const canCraft = !isTrophy && Object.entries(item.recipe || {}).every(([key, qty]) => Number((me.inventory && me.inventory[key]) || 0) >= qty);
     return (
       '<article class="shop-card housing-furniture-card">' +
-        '<div class="shop-card-art house-model-art housing-furniture-art"><img src="' + esc(item.asset) + '" alt="' + esc(item.label) + '"></div>' +
+        '<div class="shop-card-art house-model-art housing-furniture-art">' +
+          (isTrophy
+            ? '<span class="housing-trophy-preview"><img class="housing-trophy-composite" style="display:block;width:88%;height:88%;margin:auto;object-fit:contain;" src="' + esc(trophyPreviewSrc || item.asset) + '" alt="' + esc(item.label) + '"></span>'
+            : '<img src="' + esc(item.asset) + '" alt="' + esc(item.label) + '">') +
+        '</div>' +
         '<div class="shop-card-copy">' +
           '<div class="shop-card-top"><b>' + esc(item.label) + '</b><span class="housing-furniture-category">' + esc(item.category) + '</span></div>' +
           '<div class="shop-card-state">En stock : ' + owned + '</div>' +
-          '<ul class="housing-furniture-recipe">' + recipeLines + '</ul>' +
+          (isTrophy
+            ? '<p class="housing-furniture-lore">Butin rare ajoute automatiquement au catalogue apres un kill chanceux.</p>'
+            : '<ul class="housing-furniture-recipe">' + recipeLines + '</ul>') +
         '</div>' +
         '<div class="shop-card-actions housing-furniture-actions">' +
-          '<button class="btn shop-btn" data-furniture-craft="' + esc(item.id) + '"' + (canCraft ? '' : ' disabled') + '>Fabriquer</button>' +
+          (isTrophy ? '' : '<button class="btn shop-btn" data-furniture-craft="' + esc(item.id) + '"' + (canCraft ? '' : ' disabled') + '>Fabriquer</button>') +
           '<button class="btn primary shop-btn" data-furniture-pick="' + esc(item.id) + '"' + (owned > 0 ? '' : ' disabled') + '>Placer</button>' +
         '</div>' +
       '</article>'
@@ -830,24 +909,47 @@ showDungeonPopup(tile, onEnter) {
     const inHouse = !!(me && String(me.mapId || '').indexOf('house:') === 0);
     $('houseHud').classList.toggle('hidden', !inHouse);
     if (!inHouse) return;
+    const canEdit = this.canEditCurrentHouse();
+    if (!canEdit) {
+      this.houseEditMode = 'move';
+      this.pendingFurnitureId = null;
+    }
     const modeUi = this.houseModeUi();
-    $('houseToolAdd').classList.toggle('active', this.houseEditMode === 'add');
-    $('houseToolRemove').classList.toggle('active', this.houseEditMode === 'remove');
+    $('houseToolAdd').classList.toggle('active', canEdit && this.houseEditMode === 'add');
+    $('houseToolRemove').classList.toggle('active', canEdit && this.houseEditMode === 'remove');
     $('houseToolMove').classList.toggle('active', this.houseEditMode === 'move');
-    $('houseActionMode').textContent = modeUi.title;
-    $('houseActionHint').textContent = modeUi.hint;
+    $('houseToolRail').classList.toggle('hidden', !canEdit);
+    $('houseCatalogBtn').classList.toggle('hidden', !canEdit);
+    $('houseActionMode').textContent = canEdit ? modeUi.title : 'Visite libre';
+    $('houseActionHint').textContent = canEdit ? modeUi.hint : 'Vous visitez la maison d un autre joueur. Deplacement libre uniquement.';
   }
 
   showHousingCatalog() {
-    const itemCount = HOUSING_FURNITURE_ITEMS.length;
-    const body = '<p class="dim">Choisissez un meuble puis touchez une case libre de parquet dans votre maison.</p>' +
-      '<p class="small dim">' + itemCount + ' objets disponibles dans cette premiere collection.</p>' +
-      '<div class="shop-grid house-model-grid">' + HOUSING_FURNITURE_ITEMS.map((item) => this.housingFurnitureCardHtml(item)).join('') + '</div>';
+    if (!this.canEditCurrentHouse()) {
+      this.toast('Amenagement reserve au proprietaire.');
+      return;
+    }
+    const currentTab = this.housingCatalogTab === 'trophy' ? 'trophy' : 'furniture';
+    const items = HOUSING_PLACEABLE_ITEMS.filter((item) => (item.collection || 'furniture') === currentTab);
+    const itemCount = items.length;
+    const body = '<p class="dim">Choisissez un objet puis touchez une case libre de parquet dans votre maison.</p>' +
+      '<div class="housing-catalog-tabs">' +
+        '<button class="housing-catalog-tab' + (currentTab === 'furniture' ? ' active' : '') + '" data-housing-tab="furniture">Mobilier</button>' +
+        '<button class="housing-catalog-tab' + (currentTab === 'trophy' ? ' active' : '') + '" data-housing-tab="trophy">Trophees</button>' +
+      '</div>' +
+      '<p class="small dim">' + itemCount + ' objets disponibles dans cet onglet.</p>' +
+      '<div class="shop-grid house-model-grid">' + items.map((item) => this.housingFurnitureCardHtml(item)).join('') + '</div>';
     const actions = [{ label: 'Fermer' }];
     this.popup('Amenager la maison', body, actions, {
       mode: 'housing',
-      kicker: 'Mobilier',
+      kicker: currentTab === 'trophy' ? 'Trophees' : 'Mobilier',
       className: 'popup-card housing-catalog-popup',
+    });
+    $('popup').querySelectorAll('[data-housing-tab]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.housingCatalogTab = btn.dataset.housingTab === 'trophy' ? 'trophy' : 'furniture';
+        this.showHousingCatalog();
+      });
     });
     $('popup').querySelectorAll('[data-furniture-craft]').forEach((btn) => {
       btn.addEventListener('click', async () => {
@@ -894,21 +996,24 @@ showDungeonPopup(tile, onEnter) {
   showPlacedFurniturePopup(placed) {
     const item = housingFurnitureFor(placed && placed.itemId);
     if (!item) return;
+    const canEdit = this.canEditCurrentHouse();
     this.popup(
       item.label,
       '<p class="dim">Meuble decoratif pose dans votre maison.</p><p class="small dim">Vous pourrez bientot le deplacer, pivoter et classer par categories.</p>',
-      [
-        { label: 'Fermer' },
-        {
-          label: 'Retirer',
-          primary: true,
-          cb: async () => {
-            const r = await Promise.resolve(this.server.removeFurniture(placed.x, placed.y));
-            if (!r.ok) this.toast(r.error);
-            else this.toast(item.label + ' retire.');
+      canEdit
+        ? [
+          { label: 'Fermer' },
+          {
+            label: 'Retirer',
+            primary: true,
+            cb: async () => {
+              const r = await Promise.resolve(this.server.removeFurniture(placed.x, placed.y));
+              if (!r.ok) this.toast(r.error);
+              else this.toast(item.label + ' retire.');
+            },
           },
-        },
-      ],
+        ]
+        : [{ label: 'Fermer', primary: true }],
       { mode: 'housing', kicker: 'Mobilier' }
     );
   }
@@ -2229,6 +2334,46 @@ showDungeonPopup(tile, onEnter) {
       return sprite.processed.toDataURL('image/png');
     }
     return sprite.src || '';
+  }
+
+  drawPreviewSprite(ctx, image, cx, groundY, maxW, maxH, scaleAdjust, widthScale) {
+    if (!image || !image.ready || !image.processed || !image.bounds) return null;
+    const b = image.bounds;
+    const scale = Math.min(maxW / b.w, maxH / b.h) * (scaleAdjust || 1);
+    const dw = b.w * scale * (widthScale || 1);
+    const dh = b.h * scale;
+    ctx.drawImage(image.processed, b.x, b.y, b.w, b.h, cx - dw / 2, groundY - dh, dw, dh);
+    return { dw, dh, topY: groundY - dh, groundY };
+  }
+
+  getHousingTrophyPreviewSrc(item) {
+    if (!item || !item.id) return '';
+    if (this.trophyPreviewSrc[item.id]) return this.trophyPreviewSrc[item.id];
+    const renderer = this.renderer;
+    const pedestal = renderer && renderer.furnitureSprites && renderer.furnitureSprites[item.id];
+    const monster = renderer && renderer.worldIcons && renderer.worldIcons.monster && renderer.worldIcons.monster[item.trophyFor];
+    if (!pedestal || !monster || !pedestal.ready || !monster.ready) return '';
+
+    const world = item.world || {};
+    const pedestalW = (world.pedestalW || 82) * 0.84;
+    const pedestalH = (world.pedestalH || 60) * 0.84;
+    const monsterW = (world.monsterW || 46) * 0.8;
+    const monsterH = (world.monsterH || 46) * 0.8;
+    const surfaceYRatio = world.surfaceYRatio == null ? 0.45 : world.surfaceYRatio;
+    const monsterScale = (world.monsterScale == null ? 0.92 : world.monsterScale) * 0.95;
+    const canvas = document.createElement('canvas');
+    canvas.width = 112;
+    canvas.height = 88;
+    const ctx = canvas.getContext('2d');
+    const cx = canvas.width / 2;
+    const groundY = canvas.height - 11;
+    const pedestalDraw = this.drawPreviewSprite(ctx, pedestal, cx, groundY, pedestalW, pedestalH, 1, 1);
+    if (!pedestalDraw) return '';
+    const monsterGroundY = pedestalDraw.topY + pedestalDraw.dh * surfaceYRatio;
+    this.drawPreviewSprite(ctx, monster, cx, monsterGroundY, monsterW, monsterH, monsterScale, 0.96);
+    const src = canvas.toDataURL('image/png');
+    this.trophyPreviewSrc[item.id] = src;
+    return src;
   }
 
   getMonsterTargetSrc(monster) {

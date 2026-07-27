@@ -195,6 +195,11 @@ function artifactOptions() {
     .map((item) => '<option value="artifact:' + item.id + '">' + item.label + ' (complet)</option>').join('');
 }
 
+function trophyOptions() {
+  return HOUSING_TROPHY_ITEMS
+    .map((item) => '<option value="trophy:' + item.id + '">' + item.label + '</option>').join('');
+}
+
 function grantFormHtml() {
   const resourceOptions = Object.keys(RESOURCES)
     .map((t) => '<option value="item:' + t + '">' + RESOURCES[t].label + '</option>').join('');
@@ -223,6 +228,7 @@ function grantFormHtml() {
           '<optgroup label="Dés cosmétiques">' + diceOptions() + '</optgroup>' +
           '<optgroup label="Fragments d’artefact">' + artifactFragmentOptions() + '</optgroup>' +
           '<optgroup label="Artefacts (rares)">' + artifactOptions() + '</optgroup>' +
+          '<optgroup label="TrophÃ©es de maison">' + trophyOptions() + '</optgroup>' +
         '</select>' +
         '<select id="grantTier">' + tierOptions + '</select>' +
         '<input id="grantQty" type="number" min="1" max="999" value="1">' +
@@ -347,6 +353,7 @@ function renderPlayerPanel(p) {
     else if (what.indexOf('dice:') === 0) r = await api('POST', '/players/' + u + '/dice', { diceId: what.slice(5) });
     else if (what.indexOf('artifactFragment:') === 0) r = await api('POST', '/players/' + u + '/artifact-fragment', { artifactId: what.slice('artifactFragment:'.length), qty });
     else if (what.indexOf('artifact:') === 0) r = await api('POST', '/players/' + u + '/artifact', { artifactId: what.slice('artifact:'.length) });
+    else if (what.indexOf('trophy:') === 0) r = await api('POST', '/players/' + u + '/item', { key: what.slice('trophy:'.length), qty });
     toast((r && r.ok) ? 'Attribution effectuée.' : ((r && r.error) || 'Erreur serveur.'), !(r && r.ok));
     if (r && r.ok) loadAll();
   });

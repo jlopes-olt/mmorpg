@@ -143,6 +143,15 @@ class ServerSim {
     }[monster.type] || null;
   }
 
+  grantHousingTrophy(p, monster) {
+    const item = housingTrophyForMonster(monster && monster.type);
+    if (!item) return null;
+    if (!p.furnitureInventory) p.furnitureInventory = {};
+    p.furnitureInventory[item.id] = this.furnitureStockOf(p, item.id) + 1;
+    this.toast('Trophee obtenu : ' + item.label + ' !');
+    return { item, count: p.furnitureInventory[item.id] };
+  }
+
   syncCurrentMap() {
     const me = this.me;
     this.currentMapId = (me && me.mapId) || 'world';
@@ -396,6 +405,22 @@ class ServerSim {
     const desiredParcelId = String(parcelId || me.parcelId || '');
     if (!desiredParcelId) return { ok: false, error: 'Vous ne possédez pas de maison.' };
     if (me.parcelId !== desiredParcelId) return { ok: false, error: 'Cette maison ne vous appartient pas.' };
+    const house = this.houseOf(desiredParcelId);
+    if (!house.ownerId || !house.modelId) return { ok: false, error: 'Maison introuvable.' };
+    this.invalidateHouseMap(desiredParcelId);
+    const map = this.mapOf(houseInteriorMapId(desiredParcelId));
+    this.resetTravelState(me);
+    me.mapId = map.id;
+    me.pos = this.nearestWalkablePos(map, map.entry);
+    this.syncCurrentMap();
+    this.emit('self', me);
+    return { ok: true, mapId: map.id };
+  }
+
+  enterHouse(parcelId) {
+    const me = this.me;
+    const desiredParcelId = String(parcelId || me.parcelId || '');
+    if (!desiredParcelId) return { ok: false, error: 'Maison introuvable.' };
     const house = this.houseOf(desiredParcelId);
     if (!house.ownerId || !house.modelId) return { ok: false, error: 'Maison introuvable.' };
     this.invalidateHouseMap(desiredParcelId);
@@ -1070,7 +1095,7 @@ class ServerSim {
     const roller = rollerPool[Math.floor(this.rng() * rollerPool.length)];
     const druid = victory && members.some((p) => p.speciesClass === 'CERF_DRUIDE');
     const rampart = members.some((p) => p.speciesClass === 'OURS_GUERRIER');
-    let myHpLoss = 0, myXp = 0, myGold = 0, myFood = null, myBoosted = false, myDied = false, myArtifact = null;
+    let myHpLoss = 0, myXp = 0, myGold = 0, myFood = null, myBoosted = false, myDied = false, myArtifact = null, myTrophy = null;
 
     for (const p of members) {
       p.status = 'IDLE';
@@ -1137,6 +1162,10 @@ class ServerSim {
           const artifactReward = this.grantArtifactFragment(p, artifactId, 1);
           if (p.id === this.meId) myArtifact = artifactReward;
         }
+        if (this.rng() < housingTrophyDropChance(monster)) {
+          const trophyReward = this.grantHousingTrophy(p, monster);
+          if (p.id === this.meId) myTrophy = trophyReward;
+        }
         myXp = xp;
         myGold = gold;
         if (p.id === this.meId) myBoosted = boosted;
@@ -1183,6 +1212,7 @@ class ServerSim {
       gold: myGold,
       food: myFood,
       artifact: myArtifact,
+      trophy: myTrophy,
       hpLoss: myHpLoss,
       xp: myXp,
       regainBoosted: myBoosted,

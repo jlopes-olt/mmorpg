@@ -893,6 +893,15 @@ class Game {
     return null;
   }
 
+  grantHousingTrophy(p, monster) {
+    const item = housingTrophyForMonster(monster && monster.type);
+    if (!item) return null;
+    if (!p.furnitureInventory) p.furnitureInventory = {};
+    p.furnitureInventory[item.id] = this.furnitureStockOf(p, item.id) + 1;
+    this.toast(p, 'Trophee obtenu : ' + item.label + ' !');
+    return { item, count: p.furnitureInventory[item.id] };
+  }
+
   furnitureStockOf(p, itemId) {
     return Number((p.furnitureInventory && p.furnitureInventory[itemId]) || 0);
   }
@@ -960,8 +969,7 @@ class Game {
 
   enterHouse(p, parcelId) {
     const desiredParcelId = String(parcelId || p.parcelId || '');
-    if (!desiredParcelId) return { ok: false, error: 'Vous ne possédez pas de maison.' };
-    if (p.parcelId !== desiredParcelId) return { ok: false, error: 'Cette maison ne vous appartient pas.' };
+    if (!desiredParcelId) return { ok: false, error: 'Maison introuvable.' };
     const house = this.houseOf(desiredParcelId);
     if (!house.ownerId || !house.modelId) return { ok: false, error: 'Maison introuvable.' };
     const map = this.mapOf(houseInteriorMapId(desiredParcelId));
@@ -2541,8 +2549,10 @@ class Game {
         }
         let bonus = null;
         let artifactReward = null;
+        let trophyReward = null;
         const artifactId = this.artifactIdForMonster(monster);
         if (artifactId) artifactReward = this.grantArtifactFragment(p, artifactId, 1);
+        if (this.rng() < housingTrophyDropChance(monster)) trophyReward = this.grantHousingTrophy(p, monster);
         if (monster.worldBoss) {
           const bonusGold = WORLD_BOSS.goldMin + Math.floor(this.rng() * (WORLD_BOSS.goldMax - WORLD_BOSS.goldMin + 1));
           p.gold += bonusGold;
@@ -2570,7 +2580,7 @@ class Game {
           p.stats.worldBossKills = (p.stats.worldBossKills || 0) + 1;
           bonus = { gold: bonusGold, xp: bonusXp, moonstones, accessory, mount };
         }
-        rewards.set(p.id, { gold, xp, food, worldBossBonus: bonus, artifact: artifactReward, boosted });
+        rewards.set(p.id, { gold, xp, food, worldBossBonus: bonus, artifact: artifactReward, trophy: trophyReward, boosted });
         this.checkLevelUp(p, 'weapon');
         p.stats.monsterKills = (p.stats.monsterKills || 0) + 1;
         p.stats.kills[monster.type] = (p.stats.kills[monster.type] || 0) + 1;
@@ -2633,6 +2643,7 @@ class Game {
         gold: rw ? rw.gold : 0,
         food: rw ? rw.food : null,
         artifact: rw ? rw.artifact : null,
+        trophy: rw ? rw.trophy : null,
         hpLoss: lossById.get(p.id) || 0,
         xp: rw ? rw.xp : 0,
         regainBoosted: rw ? !!rw.boosted : false,
@@ -3068,10 +3079,18 @@ class Game {
     if (!admin || admin.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
     const target = this.adminFindTarget(username);
     if (!target) return { ok: false, error: 'Joueur introuvable.' };
-    const parsed = parseStackKey(String(key));
+    const itemKey = String(key || '');
+    const housingItem = housingFurnitureFor(itemKey);
+    if (housingItem && housingItem.collection === 'trophy') {
+      if (!target.furnitureInventory) target.furnitureInventory = {};
+      target.furnitureInventory[itemKey] = this.furnitureStockOf(target, itemKey) + Math.max(1, Math.min(999, Math.floor(Number(qty)) || 1));
+      this.pushSelf(target);
+      return { ok: true };
+    }
+    const parsed = parseStackKey(itemKey);
     if (!RESOURCES[parsed.type] && !CONSUMABLES[parsed.type]) return { ok: false, error: 'Objet inconnu.' };
     const n = Math.max(1, Math.min(999, Math.floor(Number(qty)) || 1));
-    target.inventory[key] = (target.inventory[key] || 0) + n;
+    target.inventory[itemKey] = (target.inventory[itemKey] || 0) + n;
     this.pushSelf(target);
     return { ok: true };
   }

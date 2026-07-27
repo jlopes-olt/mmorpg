@@ -183,7 +183,7 @@ const HOUSE_FILES = Object.fromEntries(
 );
 const HOUSING_FOR_SALE_SIGN_ASSET = 'assets/residential/panneau_a_vendre.png';
 const HOUSING_FURNITURE_FILES = Object.fromEntries(
-  HOUSING_FURNITURE_ITEMS.map((item) => [item.id, item.asset])
+  HOUSING_PLACEABLE_ITEMS.map((item) => [item.id, item.asset])
 );
 
 /* Bas utile de chaque rangee de la planche de sprites */
@@ -337,7 +337,10 @@ class Renderer {
     this.housingEntranceSprite = this.loadCleanImageScaled(HOUSING_ENTRANCE_ASSET, 108, 108, 2.2);
     this.housingForSaleSprite = this.loadCleanImageScaled(HOUSING_FOR_SALE_SIGN_ASSET, 72, 84, 2.2);
     for (const [itemId, src] of Object.entries(HOUSING_FURNITURE_FILES)) {
-      this.furnitureSprites[itemId] = this.loadCleanImage(src);
+      const item = HOUSING_FURNITURE_BY_ID[itemId];
+      this.furnitureSprites[itemId] = item && item.collection === 'trophy'
+        ? this.loadSimpleImage(src, 'monster')
+        : this.loadCleanImage(src);
     }
   }
 
@@ -619,11 +622,13 @@ class Renderer {
     if (a === 0) return false;
     const isChromaMagenta = r > 220 && b > 220 && gg < 80;
     if (isChromaMagenta) return true;
+    const isNearWhite = r > 236 && gg > 236 && b > 236;
+    const isSoftNeutral = r > 224 && gg > 224 && b > 224 && Math.abs(r - gg) < 10 && Math.abs(gg - b) < 10;
 
     if (profile === 'mineral' || profile === 'monster') {
       const isVeryDark = r < 24 && gg < 24 && b < 28;
       const isDarkNeutral = r < 30 && gg < 30 && b < 34 && Math.abs(r - gg) < 6 && Math.abs(gg - b) < 8;
-      return isVeryDark || isDarkNeutral;
+      return isVeryDark || isDarkNeutral || isNearWhite || isSoftNeutral;
     }
 
     const isVeryDark = r < 34 && gg < 34 && b < 40;
@@ -1718,6 +1723,41 @@ if (c.kind === 'dungeon') {
     if (!item) return;
     const sprite = this.furnitureSprites[item.id];
     const world = item.world || { maxW: 72, maxH: 60, groundOffset: 10, shadowW: 18, shadowH: 5 };
+    if (item.collection === 'trophy') {
+      const pedestalW = world.pedestalW || 82;
+      const pedestalH = world.pedestalH || 60;
+      const monsterW = world.monsterW || 46;
+      const monsterH = world.monsterH || 46;
+      const surfaceYRatio = world.surfaceYRatio == null ? 0.45 : world.surfaceYRatio;
+      const monsterScale = world.monsterScale == null ? 0.92 : world.monsterScale;
+      const monsterSprite = this.worldIcons.monster[item.trophyFor];
+      const pedestalDraw = this.drawWorldSprite(
+        sprite,
+        cx,
+        cy + world.groundOffset,
+        pedestalW,
+        pedestalH,
+        world.shadowW,
+        world.shadowH
+      );
+      const monsterGroundY = pedestalDraw
+        ? (pedestalDraw.topY + pedestalDraw.dh * surfaceYRatio)
+        : (cy - pedestalH * 0.05);
+      if (monsterSprite) {
+        this.drawWorldSprite(
+          monsterSprite,
+          cx,
+          monsterGroundY,
+          monsterW,
+          monsterH,
+          0,
+          0,
+          monsterScale,
+          0.96
+        );
+      }
+      return;
+    }
     this.drawWorldSprite(
       sprite,
       cx,

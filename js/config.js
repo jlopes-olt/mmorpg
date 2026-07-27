@@ -772,9 +772,64 @@ const HOUSING_FURNITURE_ITEMS = [
     world: { maxW: 52, maxH: 50, groundOffset: 9, shadowW: 14, shadowH: 4 },
   },
 ];
-const HOUSING_FURNITURE_BY_ID = Object.fromEntries(HOUSING_FURNITURE_ITEMS.map((item) => [item.id, item]));
+const HOUSING_TROPHY_DEFS = [
+  { monsterType: 'LUPUS', label: 'Trophee du Loup des Fourres', asset: 'assets/monstre_01_lupus.png', boss: false },
+  { monsterType: 'OURS_MOUSSE', label: 'Trophee de l Ours de Mousse', asset: 'assets/monster_foret_t2_ours_mousse.png', boss: false },
+  { monsterType: 'ARAIGNEE_SYLVESTRE', label: 'Trophee de l Araignee Sylvestre', asset: 'assets/monster_foret_t3_araignee_sylvestre.png', boss: false },
+  { monsterType: 'CERF_CORROMPU', label: 'Trophee du Cerf Corrompu', asset: 'assets/monster_foret_t4_cerf_corrompu.png', boss: false },
+  { monsterType: 'ENT_HOSTILE', label: 'Trophee de l Ent hostile', asset: 'assets/monster_foret_t5_ent_hostile.png', boss: false },
+  { monsterType: 'CHACAL_STEPPE', label: 'Trophee du Chacal des Steppes', asset: 'assets/monster_plaine_t1_chacal_steppe.png', boss: false },
+  { monsterType: 'SANGLIER_HERBES', label: 'Trophee du Sanglier des Hautes Herbes', asset: 'assets/monster_plaine_t2_sanglier_herbes.png', boss: false },
+  { monsterType: 'VAUTOUR_CHAROGNARD', label: 'Trophee du Vautour Charognard', asset: 'assets/monster_plaine_t3_vautour_charognard.png', boss: false },
+  { monsterType: 'LION_PLAINES', label: 'Trophee du Lion des Plaines', asset: 'assets/monster_plaine_t4_lion_plaines.png', boss: false },
+  { monsterType: 'MANTICORE_VENTS', label: 'Trophee de la Manticore des Vents', asset: 'assets/monster_plaine_t5_manticore_vents.png', boss: false },
+  { monsterType: 'BOUQUETIN_HARGNEUX', label: 'Trophee du Bouquetin Hargneux', asset: 'assets/monster_montagne_t1_bouquetin_hargneux.png', boss: false },
+  { monsterType: 'OURS_PIERRE', label: 'Trophee de l Ours de Pierre', asset: 'assets/monstre_02_ours.png', boss: false },
+  { monsterType: 'SPECTRE_EBOULIS', label: 'Trophee du Spectre des Eboulis', asset: 'assets/monster_montagne_t3_spectre_eboulis.png', boss: false },
+  { monsterType: 'SPECTRE', label: 'Trophee du Spectre des Brumes', asset: 'assets/monstre_03_spectre.png', boss: false },
+  { monsterType: 'BASILIC', label: 'Trophee du Basilic des Cretes', asset: 'assets/monstre_04_basilic.png', boss: false },
+  { monsterType: 'WYRM', label: 'Trophee du Wyrm des Cimes', asset: 'assets/monstre_05_wyrm.png', boss: false },
+  { monsterType: 'CRAPAUD_FANGEUX', label: 'Trophee du Crapaud Fangeux', asset: 'assets/monster_marecage_t1_crapaud_fangeux.png', boss: false },
+  { monsterType: 'SERPENT_VASIERES', label: 'Trophee du Serpent des Vasieres', asset: 'assets/monster_marecage_t2_serpent_vasieres.png', boss: false },
+  { monsterType: 'HYDRE_TOURBIERES', label: 'Trophee de l Hydre des Tourbieres', asset: 'assets/monster_marecage_t4_hydre_tourbieres.png', boss: false },
+  { monsterType: 'DRAKE_PUTRIDE', label: 'Trophee du Drake putride', asset: 'assets/monster_marecage_t5_drake_putride.png', boss: false },
+  { monsterType: 'SQUELETTE', label: 'Trophee du Squelette T6', asset: 'assets/monstre_t6_squelette.png', boss: false },
+  { monsterType: 'BOSS_FORET', label: 'Trophee du Roi Roncier', asset: 'assets/boss_foret_t6.png', boss: true },
+  { monsterType: 'BOSS_PLAINE', label: 'Trophee du Cerf-Orage', asset: 'assets/boss_plaine_t6.png', boss: true },
+  { monsterType: 'BOSS_MONTAGNE', label: 'Trophee du Golem Couronne', asset: 'assets/boss_montagne_t6.png', boss: true },
+  { monsterType: 'BOSS_MARECAGE', label: 'Trophee de l Hydre de Vase', asset: 'assets/boss_marecage_t6.png', boss: true },
+  { monsterType: 'WYRM_ANCESTRAL', label: 'Trophee du Wyrm Ancestral', asset: 'assets/bosses/wyrm_ancestral.png', boss: true },
+];
+const HOUSING_TROPHY_PEDESTAL_ASSET = 'assets/housing_trophies/trophy_pedestal.png';
+const HOUSING_TROPHY_ITEMS = HOUSING_TROPHY_DEFS.map((def) => ({
+  id: 'trophy_' + def.monsterType.toLowerCase(),
+  label: def.label,
+  category: 'Trophee',
+  collection: 'trophy',
+  trophyFor: def.monsterType,
+  asset: HOUSING_TROPHY_PEDESTAL_ASSET,
+  previewAsset: def.asset,
+  recipe: null,
+  footprint: { w: 1, h: 1 },
+  world: def.boss
+    ? { pedestalW: 92, pedestalH: 68, monsterW: 58, monsterH: 58, groundOffset: 10, shadowW: 22, shadowH: 6, surfaceYRatio: 0.46, monsterScale: 0.94 }
+    : { pedestalW: 82, pedestalH: 60, monsterW: 46, monsterH: 46, groundOffset: 10, shadowW: 19, shadowH: 5, surfaceYRatio: 0.45, monsterScale: 0.92 },
+}));
+const HOUSING_PLACEABLE_ITEMS = HOUSING_FURNITURE_ITEMS.concat(HOUSING_TROPHY_ITEMS);
+const HOUSING_FURNITURE_BY_ID = Object.fromEntries(HOUSING_PLACEABLE_ITEMS.map((item) => [item.id, item]));
+const HOUSING_TROPHY_BY_MONSTER_TYPE = Object.fromEntries(HOUSING_TROPHY_ITEMS.map((item) => [item.trophyFor, item]));
 function housingFurnitureFor(id) {
   return id ? (HOUSING_FURNITURE_BY_ID[id] || null) : null;
+}
+function housingTrophyForMonster(monsterType) {
+  return monsterType ? (HOUSING_TROPHY_BY_MONSTER_TYPE[monsterType] || null) : null;
+}
+function housingTrophyDropChance(monster) {
+  if (!monster || !monster.type) return 0;
+  if (monster.worldBoss) return 0.12;
+  if (monster.boss) return 0.05;
+  if (monster.dungeonMob || monster.tier >= 6) return 0.012;
+  return 0.003;
 }
 
 /* Cosmétiques d'accessoire : calque additionnel dessiné en plus du skin
@@ -1385,7 +1440,7 @@ if (typeof module !== 'undefined' && module.exports) {
     HOUSING_ENTRANCE_ASSET,
     housingParcelId, HOUSE_MODELS, HOUSE_MODEL_BY_ID, houseModelFor,
     HOUSE_INTERIOR_LAYOUTS, houseInteriorLayoutFor, houseInteriorMapId,
-    HOUSING_FURNITURE_ITEMS, HOUSING_FURNITURE_BY_ID, housingFurnitureFor,
+    HOUSING_FURNITURE_ITEMS, HOUSING_TROPHY_PEDESTAL_ASSET, HOUSING_TROPHY_ITEMS, HOUSING_PLACEABLE_ITEMS, HOUSING_FURNITURE_BY_ID, housingFurnitureFor, housingTrophyForMonster, housingTrophyDropChance,
     skinFor, skinAssetUrl, classSkinScale, baseSkinAsset, equipmentAsset, classAvailableToRole,
     artifactFor, artifactStatsFor, artifactProgressFor,
     levelFromXp, playerForce, maxHp, hpLossReduction, reviveHpPct, stackKey, parseStackKey, resourceFamily,
