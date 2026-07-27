@@ -473,7 +473,7 @@ class Renderer {
         image.bounds = null;
         image.processed = null;
         image.onload = () => {
-          const processed = this.prepareTerrainImage(image);
+          const processed = this.prepareTerrainImage(image, terrain);
           image.processed = processed.canvas;
           image.bounds = processed.bounds;
           image.ready = true;
@@ -485,12 +485,27 @@ class Renderer {
     }
   }
 
-  prepareTerrainImage(image) {
+  terrainImageScale(terrain, image) {
+    if (terrain === 'PAVE') {
+      const maxW = 420, maxH = 280;
+      return Math.min(maxW / image.naturalWidth, maxH / image.naturalHeight, 1);
+    }
+    if (terrain === 'PARQUET') {
+      const maxW = 420, maxH = 220;
+      return Math.min(maxW / image.naturalWidth, maxH / image.naturalHeight, 1);
+    }
+    return 1;
+  }
+
+  prepareTerrainImage(image, terrain) {
+    const scale = this.terrainImageScale(terrain, image);
     const c = document.createElement('canvas');
-    c.width = image.naturalWidth;
-    c.height = image.naturalHeight;
+    c.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    c.height = Math.max(1, Math.round(image.naturalHeight * scale));
     const g = c.getContext('2d', { willReadFrequently: true });
-    g.drawImage(image, 0, 0);
+    g.imageSmoothingEnabled = true;
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(image, 0, 0, c.width, c.height);
     const img = g.getImageData(0, 0, c.width, c.height);
     const data = img.data;
 
@@ -527,7 +542,7 @@ class Renderer {
     if (maxX < minX || maxY < minY) {
       return {
         canvas: c,
-        bounds: { x: 0, y: 0, w: image.naturalWidth, h: image.naturalHeight },
+        bounds: { x: 0, y: 0, w: c.width, h: c.height },
       };
     }
     return {
