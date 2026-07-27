@@ -1178,7 +1178,11 @@ class Renderer {
     // pour voir le reste. On simule ici une caméra hypothétique centrée sur le
     // héros pour découvrir la même zone que si on suivait, quelle que soit la
     // direction regardée pendant ce temps (bornes strictes, comme ci-dessus).
-    if (this.camPanned) {
+    const staticScene = this.ensureStaticSceneCache(map);
+    const staticTerrain = staticScene ? null : this.ensureStaticTerrainCache(map);
+    const skipHousingTileSweep = !!staticScene && map && map.kind === 'housing';
+
+    if (this.camPanned && !skipHousingTileSweep) {
       const hx = this.isoX(me.pos.x, me.pos.y);
       const hy = this.isoY(me.pos.x, me.pos.y);
       for (let y = me.pos.y - R; y <= me.pos.y + R; y++) {
@@ -1195,14 +1199,13 @@ class Renderer {
       }
     }
 
-    const staticScene = this.ensureStaticSceneCache(map);
-    const staticTerrain = staticScene ? null : this.ensureStaticTerrainCache(map);
     if (staticScene) this.drawStaticScene(staticScene);
     else if (staticTerrain) this.drawStaticTerrain(staticTerrain);
 
     const poi = [];
     const furniturePoi = [];
-    for (let y = py - R; y <= py + R; y++) {
+    if (!skipHousingTileSweep) {
+      for (let y = py - R; y <= py + R; y++) {
       for (let x = px - R; x <= px + R; x++) {
         if (!inBounds(x, y, s.tiles)) continue;
         const key = tileKey(x, y);
@@ -1258,6 +1261,7 @@ class Renderer {
           tile.content && (tile.content.kind === 'parcel' || tile.content.kind === 'portal');
         if (tile.content && !isHousingStaticContent && !(isScoutable && !visible)) poi.push({ tile, cx, cy, visible });
       }
+    }
     }
 
     const houseInfo = this.currentHouseInfo();
