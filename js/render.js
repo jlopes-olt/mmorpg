@@ -261,6 +261,7 @@ class Renderer {
     this.mountSprites = {};
     this.saddlePropSprite = null;
     this.staticTerrainCache = new Map();
+    this.staticSceneCache = new Map();
     // Boîtes écran des structures (capitale/village/donjon/château) du frame
     // courant — recalculées dans draw(), lues par drawPlayer() pour estomper
     // une monture qui les chevaucherait (voir STRUCTURE_KINDS plus bas).
@@ -328,10 +329,13 @@ class Renderer {
     }
     this.saddlePropSprite = this.loadCleanImage(MOUNT_SADDLE_PROP.asset);
     for (const [houseId, src] of Object.entries(HOUSE_FILES)) {
-      this.houseSprites[houseId] = this.loadCleanImage(src);
+      const model = HOUSE_MODEL_BY_ID[houseId];
+      this.houseSprites[houseId] = model
+        ? this.loadCleanImageScaled(src, model.world.maxW, model.world.maxH, 2.4)
+        : this.loadCleanImage(src);
     }
-    this.housingEntranceSprite = this.loadCleanImage(HOUSING_ENTRANCE_ASSET);
-    this.housingForSaleSprite = this.loadCleanImage(HOUSING_FOR_SALE_SIGN_ASSET);
+    this.housingEntranceSprite = this.loadCleanImageScaled(HOUSING_ENTRANCE_ASSET, 108, 108, 2.2);
+    this.housingForSaleSprite = this.loadCleanImageScaled(HOUSING_FOR_SALE_SIGN_ASSET, 72, 84, 2.2);
     for (const [itemId, src] of Object.entries(HOUSING_FURNITURE_FILES)) {
       this.furnitureSprites[itemId] = this.loadCleanImage(src);
     }
@@ -374,9 +378,11 @@ class Renderer {
   invalidateStaticTerrainCache(mapId) {
     if (!mapId) {
       this.staticTerrainCache.clear();
+      this.staticSceneCache.clear();
       return;
     }
     this.staticTerrainCache.delete(String(mapId));
+    this.staticSceneCache.delete(String(mapId));
   }
 
   async refreshCastleLevels() {
@@ -411,6 +417,33 @@ class Renderer {
   // keepLargestAlphaComponent. Ce dernier suppose UN SEUL sujet connexe : sur
   // des ailes en deux moitiés séparées par du vide, il effacerait une des
   // deux (la plus petite composante), d'où cette variante allégée.
+  loadCleanImageScaled(src, maxW, maxH, oversample) {
+    const image = new Image();
+    image.ready = false;
+    image.bounds = null;
+    image.processed = null;
+    image.onload = () => {
+      const targetScale = Math.max(1, Number(oversample) || 1);
+      const capW = Math.max(1, Math.round((Number(maxW) || image.naturalWidth) * targetScale));
+      const capH = Math.max(1, Math.round((Number(maxH) || image.naturalHeight) * targetScale));
+      const ratio = Math.min(capW / image.naturalWidth, capH / image.naturalHeight, 1);
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(image.naturalWidth * ratio));
+      c.height = Math.max(1, Math.round(image.naturalHeight * ratio));
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.imageSmoothingEnabled = true;
+      g.imageSmoothingQuality = 'high';
+      g.drawImage(image, 0, 0, c.width, c.height);
+      const measured = this.measureProcessedCanvas(c);
+      image.processed = measured.canvas;
+      image.bounds = measured.bounds;
+      image.ready = true;
+    };
+    image.onerror = () => { image.ready = false; };
+    image.src = src;
+    return image;
+  }
+
   loadCleanImage(src) {
     const image = new Image();
     image.ready = false;
@@ -714,6 +747,26 @@ class Renderer {
     return true;
   }
 
+  canBuildStaticSceneCache(map) {
+    if (!map || map.kind !== 'housing' || !this.canBuildStaticTerrainCache(map)) return false;
+    for (const tile of map.tiles.values()) {
+      if (!tile || !tile.content) continue;
+      const c = tile.content;
+      if (c.kind === 'portal' && !this.housingEntranceSprite) return false;
+      if (c.kind === 'portal' && this.housingEntranceSprite && !(this.housingEntranceSprite.ready && this.housingEntranceSprite.bounds && this.housingEntranceSprite.processed)) return false;
+      if (c.kind === 'parcel') {
+        const info = this.houseInfo[c.id];
+        if (!info) {
+          if (!this.housingForSaleSprite || !this.housingForSaleSprite.ready || !this.housingForSaleSprite.bounds || !this.housingForSaleSprite.processed) return false;
+        } else {
+          const sprite = this.houseSprites[info.modelId];
+          if (!sprite || !sprite.ready || !sprite.bounds || !sprite.processed) return false;
+        }
+      }
+    }
+    return true;
+  }
+
   staticTerrainSignature(map) {
     if (!map) return '';
     if (map.kind === 'houseInterior') return map.id + '|' + (map.modelId || '');
@@ -771,7 +824,60 @@ class Renderer {
     return rebuilt;
   }
 
+  buildStaticSceneCache(map) {
+    const terrainCache = this.ensureStaticTerrainCache(map);
+    if (!terrainCache) return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = terrainCache.canvas.width;
+    canvas.height = terrainCache.canvas.height;
+    const g = canvas.getContext('2d');
+    g.drawImage(terrainCache.canvas, 0, 0);
+    const prevCtx = this.ctx;
+    this.ctx = g;
+    const poi = [];
+    for (const tile of map.tiles.values()) {
+      if (!tile || !tile.content || tile.blocked) continue;
+      poi.push({
+        tile,
+        cx: this.isoX(tile.x, tile.y) + terrainCache.originX,
+        cy: this.isoY(tile.x, tile.y) + terrainCache.originY,
+        visible: true,
+      });
+    }
+    poi.sort((a, b) => a.cy - b.cy);
+    for (const item of poi) this.drawContent(item.tile, item.cx, item.cy, item.visible);
+    this.ctx = prevCtx;
+    return {
+      mapId: map.id,
+      signature: this.staticTerrainSignature(map),
+      canvas,
+      originX: terrainCache.originX,
+      originY: terrainCache.originY,
+    };
+  }
+
+  ensureStaticSceneCache(map) {
+    if (!this.canBuildStaticSceneCache(map)) return null;
+    const signature = this.staticTerrainSignature(map);
+    const cached = this.staticSceneCache.get(map.id);
+    if (cached && cached.signature === signature) return cached;
+    const rebuilt = this.buildStaticSceneCache(map);
+    if (!rebuilt) return null;
+    this.staticSceneCache.set(map.id, rebuilt);
+    return rebuilt;
+  }
+
   drawStaticTerrain(cache) {
+    if (!cache || !cache.canvas) return false;
+    this.ctx.drawImage(
+      cache.canvas,
+      -this.cam.x + this.w / 2 - cache.originX,
+      -this.cam.y + this.h / 2 - cache.originY
+    );
+    return true;
+  }
+
+  drawStaticScene(cache) {
     if (!cache || !cache.canvas) return false;
     this.ctx.drawImage(
       cache.canvas,
@@ -1089,8 +1195,10 @@ class Renderer {
       }
     }
 
-    const staticTerrain = this.ensureStaticTerrainCache(map);
-    if (staticTerrain) this.drawStaticTerrain(staticTerrain);
+    const staticScene = this.ensureStaticSceneCache(map);
+    const staticTerrain = staticScene ? null : this.ensureStaticTerrainCache(map);
+    if (staticScene) this.drawStaticScene(staticScene);
+    else if (staticTerrain) this.drawStaticTerrain(staticTerrain);
 
     const poi = [];
     const furniturePoi = [];
@@ -1146,7 +1254,9 @@ class Renderer {
         // structure (capitale, village, donjon, château) restent visibles,
         // comme sur la minicarte : ils indiquent juste qu'il y a quelque chose là.
         const isScoutable = tile.content && (tile.content.kind === 'resource' || tile.content.kind === 'monster');
-        if (tile.content && !(isScoutable && !visible)) poi.push({ tile, cx, cy, visible });
+        const isHousingStaticContent = !!staticScene && map && map.kind === 'housing' &&
+          tile.content && (tile.content.kind === 'parcel' || tile.content.kind === 'portal');
+        if (tile.content && !isHousingStaticContent && !(isScoutable && !visible)) poi.push({ tile, cx, cy, visible });
       }
     }
 

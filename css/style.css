@@ -4177,7 +4177,7 @@ html, body {
     text-transform: uppercase;
   }
   .desktop-stat-grid b { display: block; overflow: hidden; margin-top: 2px; color: #4d2d16; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
-  .desktop-equipment-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 8px; }
+  .desktop-equipment-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-top: 8px; }
   .desktop-equipment-item {
     display: grid;
     grid-template-columns: 48px minmax(0, 1fr) auto;
@@ -4191,7 +4191,21 @@ html, body {
   .desktop-equipment-item img { width: 48px; height: 48px; object-fit: contain; filter: drop-shadow(0 5px 5px rgba(72, 42, 17, 0.2)); }
   .desktop-equipment-item span { min-width: 0; }
   .desktop-equipment-item b { display: block; overflow: hidden; color: #4d2d16; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+  .desktop-equipment-item em { display: block; overflow: hidden; margin-top: 2px; color: #8c6a43; font-size: 10px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
   .desktop-equipment-item .tier { font-style: normal; }
+  .desktop-equipment-item-artifact { grid-template-columns: 48px minmax(0, 1fr); }
+  .desktop-equipment-item-artifact.empty { background: rgba(91, 63, 31, 0.04); }
+  .desktop-equipment-empty-glyph {
+    display: grid;
+    width: 48px;
+    height: 48px;
+    place-items: center;
+    border-radius: 14px;
+    color: #b59970;
+    font-size: 24px;
+    background: rgba(255, 255, 255, 0.26);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32);
+  }
   .desktop-mastery-row { display: flex; justify-content: space-between; gap: 10px; margin-top: 8px; color: #7a6244; font-size: 11px; }
   .desktop-mastery-row b { color: #4d2d16; }
   .desktop-buff { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 7px 10px; border-radius: 11px; background: rgba(122, 86, 30, 0.06); }

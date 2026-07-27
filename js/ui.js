@@ -2624,13 +2624,14 @@ showDungeonPopup(tile, onEnter) {
     const cls = CLASSES[me.speciesClass];
     const skin = skinFor(me.skinId);
     const buffKey = me.buff ? [me.buff.type, me.buff.tier, me.buff.combats].join(':') : 'none';
-    const signature = [me.username, me.speciesClass, me.skinId || 'base', me.accessoryId || 'none', me.mountId || 'none', me.hp, me.gold,
+    const signature = [me.username, me.speciesClass, me.skinId || 'base', me.accessoryId || 'none', me.mountId || 'none', me.artifactId || 'none', me.hp, me.gold,
       me.weapon.type, me.weapon.tier, me.armor.type, me.armor.tier,
       me.harvestLevel, me.weaponMastery, buffKey].join('|');
     if (!force && signature === this.desktopProfileSignature) return;
     this.desktopProfileSignature = signature;
     const buff = me.buff && CONSUMABLES[me.buff.type];
     const buffAsset = buff ? this.consumableIconSrc[me.buff.type] : '';
+    const artifact = artifactFor(me.artifactId);
     $('desktopProfileBody').innerHTML =
       '<div class="desktop-hero-summary">' +
         this.spriteAvatar(me.speciesClass, 'hero', me.skinId, me.accessoryId) +
@@ -2648,6 +2649,10 @@ showDungeonPopup(tile, onEnter) {
       '<div class="desktop-equipment-grid">' +
         '<div class="desktop-equipment-item"><img src="' + equipmentAsset('weapon', me.weapon.type) + '" alt=""><span><small>Arme</small><b>' + esc(me.weapon.type) + '</b></span><i class="tier t' + me.weapon.tier + '">T' + me.weapon.tier + '</i></div>' +
         '<div class="desktop-equipment-item"><img src="' + equipmentAsset('armor', me.armor.type) + '" alt=""><span><small>Armure</small><b>' + esc(me.armor.type) + '</b></span><i class="tier t' + me.armor.tier + '">T' + me.armor.tier + '</i></div>' +
+        '<div class="desktop-equipment-item desktop-equipment-item-artifact' + (artifact ? '' : ' empty') + '">' +
+          (artifact ? '<img src="' + artifact.asset + '" alt="">' : '<span class="desktop-equipment-empty-glyph">✦</span>') +
+          '<span><small>Artefact</small><b>' + esc((artifact && artifact.label) || 'Aucun artefact') + '</b><em>' + esc(this.artifactStatSummary(me)) + '</em></span>' +
+        '</div>' +
       '</div>' +
       '<div class="desktop-mastery-row"><span>Récolte <b>T' + me.harvestLevel + '</b></span><span>Maîtrise <b>T' + me.weaponMastery + '</b></span></div>' +
       '<div class="desktop-buff' + (buff ? ' active' : '') + '">' +
