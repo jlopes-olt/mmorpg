@@ -475,9 +475,15 @@
   // même seuil de 12 px que la distinction tap/drag ci-dessous, pour ne rien
   // changer au comportement existant tant qu'on reste sous ce seuil.
   const recenterBtn = document.getElementById('recenterBtn');
-  document.getElementById('helpBtn').addEventListener('click', () => ui.toggleQuestsHidden());
-  document.getElementById('questBanner').addEventListener('click', () => ui.showQuestLog());
-  document.getElementById('questParallelBadge').addEventListener('click', () => ui.showQuestLog());
+  // Le « ? » OUVRE le journal des quetes. Il basculait auparavant la
+  // visibilite du suivi a l'ecran : le journal n'etait alors atteignable
+  // qu'en touchant la banniere de suivi, donc plus du tout des qu'il n'y
+  // avait plus rien a suivre (chaine terminee) — precisement l'etat d'un
+  // joueur T6, celui qui a le plus besoin d'y lire ses contrats du jour.
+  // Le reglage du suivi a migre DANS le journal (voir showQuestLog).
+  document.getElementById('helpBtn').addEventListener('click', () => ui.showQuestLog());
+  // Les tuiles de suivi sont generees et cablees dans renderTrackedStack :
+  // #questBanner / #questParallelBadge n'existent plus.
   let downPos = null;
   let lastPos = null;
   let isPanning = false;

@@ -113,12 +113,10 @@
       <button id="lobbyStart" class="hidden">⚡ Lancer le combat maintenant</button>
     </div>
 
-    <button id="questBanner" class="hidden" aria-label="Voir les quêtes">
-      <div class="quest-banner-kicker">Quête</div>
-      <div class="quest-banner-title" id="questBannerTitle"></div>
-      <div class="quest-banner-step" id="questBannerStep"></div>
-    </button>
-    <button id="questParallelBadge" class="hidden" aria-label="Quête parallèle débloquée"></button>
+    <!-- Suivi a l'ecran : une tuile par element epingle depuis le journal des
+         quetes (chaine d'histoire, quete parallele, contrat du jour). La pile
+         est generee — voir renderTrackedStack. -->
+    <div id="trackedStack" class="hidden"></div>
 
     <div id="toasts"></div>
 
@@ -146,7 +144,7 @@
 
     <!-- Afficher/masquer la bannière de quête (le guide du débutant reste
          accessible depuis le journal des quêtes, voir showQuestLog) -->
-    <button id="helpBtn" aria-label="Afficher ou masquer les quêtes">?</button>
+    <button id="helpBtn" aria-label="Ouvrir le journal des quêtes">?</button>
 
     <!-- Etats actifs avant combat : mets cuisine et lames engagees. Empiles
          dans un conteneur flex plutot que positionnes chacun de leur cote —

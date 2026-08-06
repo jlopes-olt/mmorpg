@@ -42,7 +42,8 @@ class UI {
     this.lastSeenGuildInviteKey = null;
     this.seenFriendRequestKeys = new Set();
     this.onAdminReset = null;
-    this.questsHidden = this.loadQuestsHidden();   // préférence persistée, voir toggleQuestsHidden
+    this.questsHidden = this.loadQuestsHidden();   // préférence persistée, voir setQuestsHidden
+    this.trackedIds = this.loadTrackedIds();      // éléments épinglés à l'écran, voir isTracked
     this.pushSupported = false;   // calculé de façon asynchrone, voir checkPushSupport()
     this.pushSubscribed = false;
     this.checkPushSupport();
@@ -1986,35 +1987,48 @@ showDungeonPopup(tile, onEnter) {
     const dungeonVisible = !dungeonBanner.classList.contains('hidden');
     let stackTop = (hudEl ? hudEl.offsetHeight + 10 : 118) + (dungeonVisible ? dungeonBanner.offsetHeight + 10 : 0);
 
-    // Bannière compacte (titre + étape, 2 lignes) — le détail des ressources
-    // à récolter (have/need) vit désormais dans le journal des quêtes (voir
-    // showQuestLog), pas dans la bannière : c'était la principale source
-    // d'encombrement à l'écran. #helpBtn permet de la masquer entièrement
-    // (voir toggleQuestsHidden, câblé depuis js/main.js).
-    const questBanner = $('questBanner');
-    const current = !this.questsHidden && currentQuestFor(me);
-    if (current) {
-      const { quest, step } = current;
-      questBanner.style.top = stackTop + 'px';
-      questBanner.classList.remove('hidden');
-      $('questBannerTitle').textContent = quest.title;
-      $('questBannerStep').textContent = step.label;
-      stackTop += questBanner.offsetHeight + 10;
-    } else {
-      questBanner.style.top = '';
-      questBanner.classList.add('hidden');
-    }
+    // Suivi a l'ecran : une tuile par element epingle (voir trackedEntries).
+    // Le detail des ressources a recolter vit dans le journal des quetes,
+    // pas ici — c'etait la principale source d'encombrement.
+    this.renderTrackedStack(me, stackTop);
+  }
 
-    const parallelBadge = $('questParallelBadge');
-    const activeParallel = this.questsHidden ? [] : activeParallelQuestsFor(me);
-    if (activeParallel.length) {
-      parallelBadge.style.top = stackTop + 'px';
-      parallelBadge.classList.remove('hidden');
-      parallelBadge.textContent = '🐉 ' + activeParallel.map((q) => q.steps[0].label).join(' · ');
-    } else {
-      parallelBadge.style.top = '';
-      parallelBadge.classList.add('hidden');
+  /* Rend la pile de suivi. Le HTML n'est reecrit que si le contenu a
+   * VRAIMENT change : updateStackedBanners tourne plusieurs fois par seconde,
+   * un innerHTML systematique ferait clignoter les tuiles et casserait un
+   * appui en cours. */
+  renderTrackedStack(me, top) {
+    const stack = $('trackedStack');
+    const entries = this.trackedEntries(me);
+    if (!entries.length) {
+      stack.classList.add('hidden');
+      stack.style.top = '';
+      if (this._trackedSignature !== '') { stack.innerHTML = ''; this._trackedSignature = ''; }
+      return;
     }
+    stack.style.top = top + 'px';
+    stack.classList.remove('hidden');
+    const signature = entries.map((e) =>
+      [e.id, e.text, e.progress, e.target].join('')).join('');
+    if (signature === this._trackedSignature) return;
+    this._trackedSignature = signature;
+
+    stack.innerHTML = entries.map((e) => {
+      const pct = e.target ? Math.min(100, Math.round((e.progress / e.target) * 100)) : null;
+      // Ni intitule de type ni titre : la teinte (et le liseré) disent la
+      // nature, l'objectif dit quoi faire. Deux lignes gagnees par tuile.
+      return '<button class="quest-banner' + (e.kind === 'parallel' ? ' parallel' : '') +
+          (e.kind === 'contract' ? ' contract' : '') + '" data-tracked="' + esc(e.id) + '">' +
+        '<div class="quest-banner-line">' +
+          '<span class="quest-banner-step">' + (e.icon ? e.icon + ' ' : '') + esc(e.text) + '</span>' +
+          (pct !== null ? '<span class="quest-banner-count">' + e.progress + ' / ' + e.target + '</span>' : '') +
+        '</div>' +
+        (pct !== null ? '<div class="contract-gauge"><span style="width:' + pct + '%"></span></div>' : '') +
+      '</button>';
+    }).join('');
+    stack.querySelectorAll('[data-tracked]').forEach((btn) => {
+      btn.addEventListener('click', () => this.showQuestLog());
+    });
   }
 
   /* ---------- Toasts ---------- */
@@ -3823,7 +3837,8 @@ showDungeonPopup(tile, onEnter) {
   // Contenu de la chaîne principale + des quêtes parallèles, réutilisé à la
   // fois par le Profil (inline) et par le popup ouvert depuis la bannière
   // HUD (voir showQuestLog).
-  questLogHtml(me) {
+  questLogHtml(me, opts) {
+    const pins = !!(opts && opts.pins);
     const completed = new Set(me.completedQuests || []);
     let reachedCurrent = false;
     const rows = QUESTS.map((q) => {
@@ -3853,7 +3868,7 @@ showDungeonPopup(tile, onEnter) {
         '<span class="ach-status">' + (done ? '✓' : '—') + '</span>' +
         '<span class="ach-copy"><b>' + esc(q.title) + '</b>' + stepsHtml +
         (bits.length ? '<small>' + esc(bits.join(' · ')) + '</small>' : '') +
-        '</span></div>';
+        '</span>' + (pins ? this.questPinHtml('chain', isCurrent) : '') + '</div>';
     }).join('');
 
     const parallelRows = PARALLEL_QUESTS.map((q) => {
@@ -3868,7 +3883,7 @@ showDungeonPopup(tile, onEnter) {
         '<span class="ach-status">' + (done ? '✓' : (unlocked ? '—' : '🔒')) + '</span>' +
         '<span class="ach-copy"><b>' + esc(q.title) + '</b>' + detail +
         (bits.length ? '<small>' + esc(bits.join(' · ')) + '</small>' : '') +
-        '</span></div>';
+        '</span>' + (pins ? this.questPinHtml(q.id, unlocked && !done) : '') + '</div>';
     }).join('');
 
     return rows + '<div class="ach-cat">Quêtes parallèles</div><div class="ach-list">' + parallelRows + '</div>';
@@ -3887,38 +3902,106 @@ showDungeonPopup(tile, onEnter) {
    * qu'au Tableau des contrats, a la Capitale : impossible de savoir ou on en
    * etait sans faire l'aller-retour. Lecture seule ici — l'echange de sceaux
    * reste au comptoir, mais la progression se suit de partout. */
+  /* Bouton d'epingle d'une ligne du journal. `id` est le jeton de suivi (voir
+   * trackedEntries). Renvoie une chaine vide pour une entree terminee : on
+   * n'epingle pas ce qui n'a plus rien a suivre. */
+  questPinHtml(id, trackable) {
+    if (!trackable) return '';
+    const on = this.isTracked(id);
+    return '<button class="quest-pin' + (on ? ' on' : '') + '" data-quest-pin="' + esc(id) + '" type="button" ' +
+      'title="' + (on ? 'Retirer du suivi à l’écran' : 'Suivre à l’écran') + '" ' +
+      'aria-label="' + (on ? 'Retirer du suivi' : 'Suivre à l’écran') + '">' +
+      (on ? '★' : '☆') + '</button>';
+  }
+
   dailyLogHtml(me) {
     const board = dailyBoardFor(me);
-    const entry = (c, weekly) => {
+    const entry = (c) => {
       const pct = c.target ? Math.min(100, Math.round((c.progress / c.target) * 100)) : 0;
       return '<div class="ach-item contract-log' + (c.done ? ' unlocked' : '') + '">' +
-        '<div class="ach-head"><b>' + c.icon + ' ' + esc(c.name) +
-          (weekly ? ' <span class="dim">(semaine)</span>' : '') + '</b>' +
-          '<span>' + (c.done ? '✓ Rempli' : c.progress + ' / ' + c.target) + '</span></div>' +
+        '<div class="ach-head"><b>' + c.icon + ' ' + esc(c.name) + '</b>' +
+          '<span>' + (c.done ? '✓ Rempli' : c.progress + ' / ' + c.target) + '</span>' +
+          this.questPinHtml('daily:' + c.id, !c.done) + '</div>' +
         '<div class="dim small">' + esc(c.label) + '</div>' +
         '<div class="contract-gauge"><span style="width:' + pct + '%"></span></div>' +
       '</div>';
     };
     const done = board.daily.filter((c) => c.done).length;
-    return '<div class="ach-cat">Contrats du jour ' +
+    return '<div class="ach-cat">Aujourd’hui ' +
       '<span class="sec-count">' + done + ' / ' + board.daily.length + '</span>' +
-      ' <span class="dim small">· ' + (board.seals || 0) + ' ' + SEAL_CURRENCY.icon + '</span></div>' +
-      '<div class="ach-list">' +
-        board.daily.map((c) => entry(c, false)).join('') +
-        (board.weekly ? entry(board.weekly, true) : '') +
-      '</div>';
+      ' <span class="dim small">· vous avez ' + (board.seals || 0) + ' ' + SEAL_CURRENCY.icon + '</span></div>' +
+      '<div class="ach-list">' + board.daily.map(entry).join('') + '</div>' +
+      (board.weekly
+        ? '<div class="ach-cat">Cette semaine</div><div class="ach-list">' + entry(board.weekly) + '</div>'
+        : '');
   }
 
   showQuestLog() {
     const me = this.server.me;
     if (!me) return;
+    // Deux natures de contenu qui n'ont rien a voir : la chaine d'histoire
+    // (ordonnee, jouee une fois) et les contrats du jour (remis en jeu chaque
+    // matin). Les empiler dans une meme liste obligeait a faire defiler
+    // l'onboarding pour verifier une progression quotidienne. Onglets plutot
+    // qu'un simple espacement : la liste complete fait une douzaine d'entrees.
+    const board = dailyBoardFor(me);
+    const chainLeft = QUESTS.filter((q) => !(me.completedQuests || []).includes(q.id)).length;
+    // Par defaut, l'onglet reellement utile : l'histoire tant qu'elle n'est
+    // pas finie, les contrats ensuite (c'est alors la seule boucle vivante).
+    if (!this.questLogTab) this.questLogTab = chainLeft ? 'story' : 'contracts';
+    const tab = this.questLogTab === 'contracts' ? 'contracts' : 'story';
+    const dailyLeft = board.daily.filter((c) => !c.done).length + (board.weekly && !board.weekly.done ? 1 : 0);
     // .guide-scroll (déjà utilisée par showGuide) cantonne le défilement à
     // ce conteneur interne plutôt qu'à la carte entière — sinon le fond
     // décoratif de .popup-card ne suit pas un contenu qui déborde de sa
     // hauteur max et la liste des quêtes débordait de la popup.
-    const body = '<div class="guide-scroll">' + this.dailyLogHtml(me) + this.questLogHtml(me) + '</div>' +
-      '<p class="dim small quest-log-footer"><button id="questLogGuideBtn" class="link-btn" type="button">📖 Revoir le guide du débutant</button></p>';
+    const tabBtn = (id, label, left) =>
+      '<button class="housing-catalog-tab' + (tab === id ? ' active' : '') + '" data-quest-tab="' + id + '">' +
+        label + (left ? ' <span class="quest-tab-count">' + left + '</span>' : '') +
+      '</button>';
+    const body =
+      '<div class="housing-catalog-tabs quest-log-tabs">' +
+        tabBtn('story', 'Histoire', chainLeft) +
+        tabBtn('contracts', 'Contrats', dailyLeft) +
+      '</div>' +
+      '<div class="guide-scroll">' +
+        (tab === 'contracts' ? this.dailyLogHtml(me) : this.questLogHtml(me, { pins: true })) +
+      '</div>' +
+      (tab === 'story'
+        ? '<p class="dim small quest-log-footer"><button id="questLogGuideBtn" class="link-btn" type="button">📖 Revoir le guide du débutant</button></p>'
+        : '<p class="dim small quest-log-footer">Réinitialisation à ' + board.resetHour +
+          ' h · échange des sceaux au Tableau des contrats (Capitale ou village).</p>') +
+      // Le reglage vit ici, dans le panneau qu'il concerne, plutot que cache
+      // derriere le bouton qui sert desormais a l'ouvrir.
+      '<label class="quest-track-toggle">' +
+        '<input type="checkbox" id="questTrackToggle"' + (this.questsHidden ? '' : ' checked') + '>' +
+        '<span>Afficher le suivi de quête à l’écran</span>' +
+      '</label>';
     this.popup('Quêtes', body, [{ label: 'Fermer', primary: true }], { mode: 'generic' });
+    $('popup').querySelectorAll('[data-quest-tab]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.questLogTab = btn.dataset.questTab;
+        this.showQuestLog();
+      });
+    });
+    $('popup').querySelectorAll('[data-quest-pin]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.toggleTracked(btn.dataset.questPin);
+        // La signature de la pile n'a pas bouge (memes titres) : on la force,
+        // sinon renderTrackedStack court-circuiterait le re-rendu.
+        this._trackedSignature = null;
+        if (this.server.me) this.updateStackedBanners(this.server.me);
+        this.showQuestLog();
+      });
+    });
+    const trackToggle = $('questTrackToggle');
+    if (trackToggle) {
+      trackToggle.addEventListener('change', () => {
+        this.setQuestsHidden(!trackToggle.checked);
+        // Effet immediat derriere la popup, sans attendre le prochain 'self'
+        if (this.server.me) this.updateStackedBanners(this.server.me);
+      });
+    }
     const guideBtn = $('questLogGuideBtn');
     if (guideBtn) guideBtn.addEventListener('click', () => this.showGuide());
   }
@@ -3929,10 +4012,96 @@ showDungeonPopup(tile, onEnter) {
     this.toast('📜 Quête terminée : ' + q.title + (bits.length ? ' (' + bits.join(' · ') + ')' : ''));
   }
 
-  /* ---------- Visibilité de la bannière de quête (préférence persistée) ----------
-   * #helpBtn (le « ? » en bas à gauche) bascule cette préférence plutôt que
-   * d'ouvrir directement le guide — le guide reste accessible depuis le
-   * journal des quêtes (voir showQuestLog) ou en le rouvrant depuis là. */
+  /* ---------- Suivi a l'ecran, element par element ----------
+   * Chaque entree epinglee depuis le journal produit sa propre tuile. Trois
+   * natures d'identifiant :
+   *   'chain'        la quete d'histoire EN COURS — jeton special, et non
+   *                  l'id de la quete du moment : la chaine avance toute
+   *                  seule, un id fige aurait cesse de suivre a la premiere
+   *                  etape franchie ;
+   *   <id de quete>  une quete parallele ;
+   *   'daily:<id>'   un contrat du jour ou de la semaine.
+   * Par defaut on epingle 'chain', ce qui reproduit exactement le
+   * comportement d'avant pour qui n'y touche jamais. */
+  trackedStorageKey() { return CONFIG.SAVE_KEY + '_quest_tracked'; }
+  loadTrackedIds() {
+    try {
+      const raw = localStorage.getItem(this.trackedStorageKey());
+      if (raw === null) return new Set(['chain']);
+      const list = JSON.parse(raw);
+      return new Set(Array.isArray(list) ? list : []);
+    } catch (e) { return new Set(['chain']); }
+  }
+  saveTrackedIds() {
+    try { localStorage.setItem(this.trackedStorageKey(), JSON.stringify([...this.trackedIds])); }
+    catch (e) { /* stockage indisponible (navigation privee, quota...) */ }
+  }
+  isTracked(id) { return this.trackedIds.has(id); }
+  toggleTracked(id) {
+    if (this.trackedIds.has(id)) this.trackedIds.delete(id);
+    else this.trackedIds.add(id);
+    this.saveTrackedIds();
+  }
+
+  /* Elements epingles ENCORE valides, dans l'ordre d'affichage. Un contrat
+   * rempli ou une quete terminee disparait de la pile et se depingle tout
+   * seul : garder a l'ecran quelque chose qui n'a plus rien a suivre serait
+   * du bruit, et l'utilisateur ne peut de toute facon plus l'epingler. */
+  trackedEntries(me) {
+    if (this.questsHidden) return [];
+    const out = [];
+    const stale = [];
+
+    if (this.trackedIds.has('chain')) {
+      const current = currentQuestFor(me);
+      if (current) {
+        out.push({ id: 'chain', kind: 'quest', text: current.step.label });
+      } else {
+        stale.push('chain');   // chaine terminee : plus rien a suivre
+      }
+    }
+
+    for (const q of activeParallelQuestsFor(me)) {
+      if (this.trackedIds.has(q.id)) {
+        out.push({ id: q.id, kind: 'parallel', text: q.steps[0].label });
+      }
+    }
+    // Une parallele epinglee puis terminee n'est plus rendue par
+    // activeParallelQuestsFor : on la retire du jeu d'epingles.
+    const activeParallelIds = new Set(activeParallelQuestsFor(me).map((q) => q.id));
+    for (const id of this.trackedIds) {
+      if (id === 'chain' || id.indexOf('daily:') === 0) continue;
+      if (!activeParallelIds.has(id)) stale.push(id);
+    }
+
+    const board = dailyBoardFor(me);
+    const contracts = board.daily.concat(board.weekly ? [board.weekly] : []);
+    const contractIds = new Set(contracts.map((c) => 'daily:' + c.id));
+    for (const c of contracts) {
+      const key = 'daily:' + c.id;
+      if (!this.trackedIds.has(key)) continue;
+      if (c.done) { stale.push(key); continue; }
+      // L'icone reste : elle ne coute aucune hauteur et distingue d'un coup
+      // d'oeil deux contrats qui partagent la meme teinte ambre.
+      out.push({ id: key, kind: 'contract', icon: c.icon, text: c.label, progress: c.progress, target: c.target });
+    }
+    // Contrats d'une journee revolue : le tirage a change, l'epingle est morte
+    for (const id of this.trackedIds) {
+      if (id.indexOf('daily:') === 0 && !contractIds.has(id)) stale.push(id);
+    }
+
+    if (stale.length) {
+      for (const id of stale) this.trackedIds.delete(id);
+      this.saveTrackedIds();
+    }
+    return out;
+  }
+
+  /* ---------- Visibilité du suivi de quête à l'écran (préférence persistée) ----------
+   * Réglée par l'interrupteur en bas du journal des quêtes (voir
+   * showQuestLog). #helpBtn, lui, OUVRE le journal : il basculait autrefois
+   * cette préférence, ce qui rendait le journal introuvable dès qu'il n'y
+   * avait plus rien à suivre. */
   questsHiddenStorageKey() {
     return CONFIG.SAVE_KEY + '_quests_hidden';
   }
@@ -3940,11 +4109,12 @@ showDungeonPopup(tile, onEnter) {
     try { return localStorage.getItem(this.questsHiddenStorageKey()) === '1'; }
     catch (e) { return false; }
   }
-  toggleQuestsHidden() {
-    this.questsHidden = !this.questsHidden;
+  setQuestsHidden(hidden) {
+    this.questsHidden = !!hidden;
     try { localStorage.setItem(this.questsHiddenStorageKey(), this.questsHidden ? '1' : '0'); }
     catch (e) { /* stockage indisponible (navigation privée, quota…) */ }
   }
+  toggleQuestsHidden() { this.setQuestsHidden(!this.questsHidden); }
 
   /* ---------- Hauts faits ---------- */
   buildAchievementsSectionHtml(me) {
