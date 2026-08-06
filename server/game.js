@@ -10,6 +10,7 @@ const crypto = require('crypto');
 Object.assign(globalThis, require('../js/config.js'));
 Object.assign(globalThis, require('../js/achievements.js'));
 Object.assign(globalThis, require('../js/quests.js'));
+Object.assign(globalThis, require('../js/dailies.js'));
 Object.assign(globalThis, require('../js/world.js'));
 
 const MAX_GUILD_MEMBERS = 20;
@@ -191,6 +192,17 @@ class Game {
       this.send(p.id, 'questCompleted', { id: q.id, title: q.title, reward: q.reward || {} });
     }
   }
+  /* Contrats quotidiens : à appeler après toute action susceptible de faire
+   * avancer un compteur (combat, récolte, cuisine, déplacement). checkDailies
+   * est idempotent et ne récompense qu'une fois — l'appeler trop souvent ne
+   * coûte qu'un parcours de trois entrées. */
+  notifyDailies(p) {
+    if (!p || p.bot) return;
+    const done = checkDailies(p);
+    for (const c of done) this.send(p.id, 'contractCompleted', c);
+    if (done.length) this.pushSelf(p);
+    return done;
+  }
   setActiveTitle(p, title) {
     const t = title ? String(title).slice(0, 40) : null;
     if (t && !p.titles.includes(t)) return { ok: false, error: 'Titre non débloqué.' };
@@ -365,6 +377,12 @@ class Game {
       furnitureInventory: {},
       gold: 0,
       [PREMIUM_CURRENCY.key]: 0,
+      [SEAL_CURRENCY.key]: 0,
+      // Mercenaires actifs : [{ id, speciesClass, tier, combatsLeft }] —
+      // engagés automatiquement dans chaque raid, voir raidMercsOf().
+      mercs: [],
+      // Contrats quotidiens : rempli/réinitialisé par ensureDailyState().
+      daily: null,
       pushSubscriptions: [],
       pushPaFullAt: null,
       pushPaFullSent: false,
@@ -402,6 +420,7 @@ class Game {
       role: (this.players.size === 0 || isForcedAdminUsername(username)) ? 'admin' : 'user',
     };
     ensureAchievementState(p);
+    ensureDailyState(p);
     this.skinStateOf(p);
     this.questStateOf(p);
     applyCharacter(p, 0);
@@ -606,7 +625,11 @@ class Game {
   // deux côtés, sinon un client déjà connecté ne voit jamais la transition
   // apparaître/disparaître sur la carte tant qu'il ne se reconnecte pas.
   worldBossPayload() {
-    return { alive: this.worldBossAlive, nextSpawnAt: this.worldBossNextSpawnAt, pos: WORLD_BOSS.pos, label: WORLD_BOSS.label };
+    return {
+      alive: this.worldBossAlive, nextSpawnAt: this.worldBossNextSpawnAt,
+      pos: WORLD_BOSS.pos, label: WORLD_BOSS.label,
+      window: WORLD_BOSS.spawnWindow,
+    };
   }
 
   grantArtifactFragment(p, artifactId, qty) {
@@ -2149,6 +2172,9 @@ class Game {
       leaderId: r.leaderId,
       participants: r.participants,
       engines: r.siege ? (r.engines || []) : undefined,
+      // Mercenaires effectivement engages (plafond deja applique) : le client
+      // ne peut pas les recalculer, il ne connait pas les escouades des autres.
+      mercs: r.siege ? undefined : this.raidMercsOf(r).map((m) => ({ speciesClass: m.speciesClass, tier: m.tier })),
       teamForce: this.teamForce(r),
       winChance: this.raidChance(r),
     }));
@@ -2229,7 +2255,12 @@ class Game {
     // Réveil du boss mondial : horloge RÉELLE (Date.now()), jamais this.now
     // (qui accélère avec SPEED en dev) — un évènement à 36h doit rester à 36h
     // même en test accéléré.
-    if (!this.worldBossAlive && Date.now() >= this.worldBossNextSpawnAt) {
+    // Le délai de 36 h est une condition NÉCESSAIRE, pas suffisante : le
+    // réveil attend en plus la fenêtre horaire (voir WORLD_BOSS.spawnWindow),
+    // sans quoi un raid à 5 joueurs tomberait une nuit sur deux à 4 h du
+    // matin. La date cible n'est pas repoussée, seul le réveil l'est.
+    if (!this.worldBossAlive && Date.now() >= this.worldBossNextSpawnAt &&
+        isWithinSiegeWindow(WORLD_BOSS.spawnWindow)) {
       this.worldBossAlive = true;
       this.onWorldBossDirty();
       this.worldNotify('🐉 Le Wyrm Ancestral s’est réveillé dans son repaire !');
@@ -2294,6 +2325,14 @@ class Game {
         this.notifyAchievements(p, checkAchievements(p, ['Exploration']));
         this.plog(p, '📍 ' + (arrived.content.name || 'Village') + ' découvert — téléporteur débloqué !');
       }
+      // Suivi JOURNALIER, distinct de visitedVillages (qui ne fait que
+      // croître et se sature à 8) : sans lui le contrat « Tournée des
+      // villages » deviendrait irréalisable une fois la carte explorée.
+      const d = ensureDailyState(p);
+      if (!d.villagesToday.includes(vk)) {
+        d.villagesToday.push(vk);
+        this.notifyDailies(p);
+      }
     }
     // Inconditionnel (pas seulement dans la branche village ci-dessus) : la
     // toute première quête (intro_move) ne dépend que de la position, un
@@ -2357,6 +2396,7 @@ class Game {
     p.stats.harvest[node.type] = (p.stats.harvest[node.type] || 0) + qty;
     this.notifyAchievements(p, checkAchievements(p, ['Récolte']));
     this.notifyQuests(p, checkQuests(p));
+    this.notifyDailies(p);
     this.pushSelf(p);
   }
 
@@ -2367,6 +2407,13 @@ class Game {
     if (!monster || monster.kind !== 'monster') return { ok: false, error: 'Aucun monstre ici.' };
     if (this.now < monster.inactiveUntil) return { ok: false, error: 'Ce groupe est déjà vaincu.' };
     if (monster.worldBoss && !this.worldBossAlive) {
+      const win = WORLD_BOSS.spawnWindow;
+      // Délai écoulé mais hors fenêtre : ce n'est plus une question de temps
+      // restant, c'est l'heure qui ne s'y prête pas — le dire franchement
+      // plutôt que d'afficher « revient dans 1 min » en boucle.
+      if (Date.now() >= this.worldBossNextSpawnAt && win && !isWithinSiegeWindow(win)) {
+        return { ok: false, error: 'Le Wyrm ne se réveille qu’entre ' + win.startHour + ' h et ' + win.endHour + ' h (heure de Paris).' };
+      }
       const totalMin = Math.max(1, Math.ceil((this.worldBossNextSpawnAt - Date.now()) / 60000));
       const h = Math.floor(totalMin / 60);
       const m = totalMin % 60;
@@ -2437,9 +2484,49 @@ class Game {
     raid.participants.push(bot.id);
   }
 
+  /* Mercenaires effectivement ENGAGÉS dans ce raid. Calculé à la volée (pas
+   * stocké sur le raid) pour que la bannière de lobby reflète en direct
+   * l'arrivée d'un joueur qui amène les siens. Priorité au chef de raid puis
+   * à l'ordre d'arrivée, plafonné à MERC_MAX_PER_RAID : c'est ce plafond,
+   * pas le nombre de contrats détenus, qui tient l'équilibrage. */
+  raidMercsOf(raid) {
+    // Les sièges refusent les mercenaires : un territoire de guilde ne doit
+    // pas se prendre à coups de portefeuille (les bots y sont déjà exclus
+    // partout, voir resolveSiege).
+    if (!raid || raid.siege) return [];
+    const ordered = [raid.leaderId].concat(raid.participants.filter((id) => id !== raid.leaderId));
+    const out = [];
+    for (const id of ordered) {
+      const p = this.memberById(id);
+      if (!p || p.bot || !Array.isArray(p.mercs)) continue;
+      for (const m of p.mercs) {
+        if (out.length >= MERC_MAX_PER_RAID) return out;
+        if (Number(m.combatsLeft) > 0) out.push({ ownerId: id, mercId: m.id, speciesClass: m.speciesClass, tier: m.tier });
+      }
+    }
+    return out;
+  }
+
+  /* Décompte un combat aux seuls mercenaires ayant obtenu une place. Un
+   * mercenaire resté sur le banc (plafond atteint) ne perd rien : sinon les
+   * contrats d'un duo fondraient deux fois plus vite pour aucun effet. */
+  consumeRaidMercs(engaged) {
+    for (const e of engaged) {
+      const p = this.memberById(e.ownerId);
+      if (!p || !Array.isArray(p.mercs)) continue;
+      const m = p.mercs.find((x) => x.id === e.mercId);
+      if (!m) continue;
+      m.combatsLeft = Math.max(0, Number(m.combatsLeft) - 1);
+      if (m.combatsLeft <= 0) {
+        p.mercs = p.mercs.filter((x) => x.id !== m.id);
+        this.toast(p, '📜 Contrat terminé : ' + (CLASSES[m.speciesClass] || {}).label + ' T' + m.tier + ' reprend la route.');
+      }
+    }
+  }
+
   teamForce(raid) {
     const members = raid.participants.map((id) => this.memberById(id)).filter(Boolean);
-    let force = teamPowerOf(members);
+    let force = teamPowerOf(members, this.raidMercsOf(raid));
     if (raid.siege && raid.engines && raid.engines.length) {
       force += raid.engines.reduce((sum, e) => sum + (SIEGE_ENGINE_FORCE[e.tier] || 0), 0);
     }
@@ -2457,7 +2544,15 @@ class Game {
     const monster = tile.content;
     const members = raid.participants.map((id) => this.memberById(id)).filter(Boolean);
     const humans = members.filter((p) => !p.bot);
-    const force = this.teamForce(raid);
+    // Mercenaires figés AVANT la résolution : la même liste sert au calcul de
+    // puissance et au décompte des combats restants, pour qu'on ne puisse pas
+    // consommer un contrat qui n'a pas combattu (ni l'inverse).
+    const engagedMercs = this.raidMercsOf(raid);
+    // Les bonus de classe (Sève, Rempart, réveil adouci) regardent aussi les
+    // mercenaires : puisqu'ils accordent déjà leur bonus de PUISSANCE, un
+    // Cerf engagé qui ne soignerait pas serait incompréhensible.
+    const roster = members.concat(engagedMercs);
+    const force = teamPowerOf(members, engagedMercs);
     // Combat probabiliste : le sort en décide, à hauteur des puissances.
     // Issue COLLECTIVE (tout le groupe gagne ou perd ensemble, butin
     // partagé) : un seul jet a du sens, pas un par participant — mais on
@@ -2470,8 +2565,8 @@ class Game {
     const critical = roll === 1 ? 'fail' : (roll === 100 ? 'success' : null);
     const rollerPool = humans.length ? humans : members;
     const roller = rollerPool[Math.floor(this.rng() * rollerPool.length)];
-    const druid = victory && members.some((p) => p.speciesClass === 'CERF_DRUIDE');
-    const rampart = members.some((p) => p.speciesClass === 'OURS_GUERRIER');
+    const druid = victory && roster.some((p) => p.speciesClass === 'CERF_DRUIDE');
+    const rampart = roster.some((p) => p.speciesClass === 'OURS_GUERRIER');
 
     const rewards = new Map();   // accountId -> { loot, gold, xp }
     const lossById = new Map();  // accountId -> PV perdus (victoire)
@@ -2483,7 +2578,7 @@ class Game {
       if (!victory) {
         // Défaite = mort : rapatriement à la Capitale, sans autre pénalité
         // (Rempart et Sève adoucissent aussi cette blessure totale, voir reviveHpPct)
-        p.hp = Math.max(1, Math.ceil(maxHp(p) * reviveHpPct(members)));
+        p.hp = Math.max(1, Math.ceil(maxHp(p) * reviveHpPct(roster)));
         if (p.bot) {
           p.pos = { ...p.home };
         } else {
@@ -2584,12 +2679,26 @@ class Game {
         this.checkLevelUp(p, 'weapon');
         p.stats.monsterKills = (p.stats.monsterKills || 0) + 1;
         p.stats.kills[monster.type] = (p.stats.kills[monster.type] || 0) + 1;
+        // Kills par TIER : p.stats.kills est indexé par type de monstre, or le
+        // contrat « Battue » vise « du tier N ou plus » — sans ce compteur il
+        // faudrait rétro-mapper chaque type vers son tier à chaque lecture.
+        if (!p.stats.killsByTier || typeof p.stats.killsByTier !== 'object') p.stats.killsByTier = {};
+        p.stats.killsByTier[monster.tier] = (p.stats.killsByTier[monster.tier] || 0) + 1;
         if (monster.boss) p.stats.bossKills = (p.stats.bossKills || 0) + 1;
         this.notifyAchievements(p, checkAchievements(p, ['Combat', 'Équipement', 'Commerce']));
         this.notifyQuests(p, checkQuests(p));
       }
       if (!p.bot) this.pushSelf(p);
     }
+
+    // Combats livrés à plusieurs vrais joueurs (contrat hebdomadaire
+    // « Compagnons d'armes ») : compté victoire OU défaite, s'être présenté
+    // ensemble est ce qu'on récompense.
+    if (humans.length > 1) {
+      for (const p of humans) p.stats.coopFights = (p.stats.coopFights || 0) + 1;
+    }
+    this.consumeRaidMercs(engagedMercs);
+    for (const p of humans) this.notifyDailies(p);
 
     // Les buffs de cuisine se consument à chaque combat, victoire ou défaite
     for (const p of humans) {
@@ -2802,7 +2911,131 @@ class Game {
     }
     const key = stackKey(item, tier);
     p.inventory[key] = (p.inventory[key] || 0) + 1;
+    // Compteur du contrat « À la marmite » : seuls les plats T3+ comptent,
+    // sinon on le remplirait en enchaînant des recettes T1 à 5 🪙 pièce.
+    if (tier >= 3) p.stats.cookedT3Plus = (p.stats.cookedT3Plus || 0) + 1;
     this.plog(p, CONSUMABLES[item].icon + ' ' + CONSUMABLES[item].label + ' T' + tier + ' cuisiné !');
+    this.notifyDailies(p);
+    this.pushSelf(p);
+    return { ok: true };
+  }
+
+  /* ---------- La Compagnie Franche : mercenaires ----------
+   * Trois actions seulement : on achète un contrat (sanctuaire), on
+   * l'active (n'importe où — c'est un papier qu'on a sur soi), on peut
+   * renvoyer une lame pour libérer une place. Tout le reste est
+   * automatique : voir raidMercsOf/consumeRaidMercs. */
+
+  buyMercContract(p, speciesClass, tier) {
+    tier = Math.floor(Number(tier));
+    if (!MERC_CONTRACT_TYPES[speciesClass]) return { ok: false, error: 'Classe de mercenaire inconnue.' };
+    if (!MERC_TIERS.includes(tier)) return { ok: false, error: 'Tier de contrat invalide.' };
+    if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
+    if (!this.atSanctuaryPlayer(p)) {
+      return { ok: false, error: 'La Compagnie Franche tient comptoir à la Capitale et dans les villages.' };
+    }
+    if ((p.weaponMastery || 1) < MERC_MIN_MASTERY) {
+      return { ok: false, error: 'Maîtrise d’arme ' + MERC_MIN_MASTERY + ' requise pour engager une lame.' };
+    }
+    const price = MERC_PRICE_GOLD[tier];
+    if ((p.gold || 0) < price) return { ok: false, error: 'Il faut ' + price + ' 🪙 pour ce contrat.' };
+    p.gold -= price;
+    const key = mercContractKey(speciesClass, tier);
+    p.inventory[key] = (p.inventory[key] || 0) + 1;
+    this.plog(p, '🗡 ' + mercContractLabel(speciesClass) + ' T' + tier + ' signé.');
+    this.pushSelf(p);
+    return { ok: true };
+  }
+
+  activateMerc(p, speciesClass, tier) {
+    tier = Math.floor(Number(tier));
+    if (!MERC_CONTRACT_TYPES[speciesClass]) return { ok: false, error: 'Classe de mercenaire inconnue.' };
+    if (!Array.isArray(p.mercs)) p.mercs = [];
+    if (p.mercs.length >= MERC_MAX_ACTIVE_PER_PLAYER) {
+      return { ok: false, error: 'Déjà ' + MERC_MAX_ACTIVE_PER_PLAYER + ' lames à vos côtés — renvoyez-en une d’abord.' };
+    }
+    const key = mercContractKey(speciesClass, tier);
+    if ((p.inventory[key] || 0) < 1) return { ok: false, error: 'Vous ne possédez pas ce contrat.' };
+    p.inventory[key] -= 1;
+    if (p.inventory[key] <= 0) delete p.inventory[key];
+    p.mercs.push({
+      // Identifiant propre : deux contrats identiques (même classe, même
+      // tier) doivent rester distinguables au moment de décompter un combat.
+      id: 'm' + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36),
+      speciesClass, tier,
+      combatsLeft: MERC_CONTRACT_COMBATS,
+    });
+    this.plog(p, '🗡 ' + (CLASSES[speciesClass] || {}).label + ' T' + tier + ' rejoint votre escouade (' + MERC_CONTRACT_COMBATS + ' combats).');
+    this.pushSelf(p);
+    return { ok: true };
+  }
+
+  dismissMerc(p, mercId) {
+    if (!Array.isArray(p.mercs)) p.mercs = [];
+    const m = p.mercs.find((x) => x.id === String(mercId));
+    if (!m) return { ok: false, error: 'Mercenaire introuvable.' };
+    if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
+    p.mercs = p.mercs.filter((x) => x.id !== m.id);
+    // Le contrat est perdu, pas rendu : renvoyer une lame pour la réengager
+    // ailleurs sans coût viderait le plafond de tout sens.
+    this.plog(p, '🗡 ' + (CLASSES[m.speciesClass] || {}).label + ' est congédié. Le contrat est perdu.');
+    this.pushSelf(p);
+    return { ok: true };
+  }
+
+  /* ---------- Tableau des contrats ---------- */
+
+  contractsBoard(p) {
+    return { ok: true, board: dailyBoardFor(p) };
+  }
+
+  /* Boutique aux sceaux. Le paramètre libre `choice` porte l'artefact visé
+   * (fragment) ou la classe voulue (contrat de mercenaire). */
+  buySealItem(p, itemId, choice) {
+    const item = SEAL_SHOP_BY_ID[String(itemId || '')];
+    if (!item) return { ok: false, error: 'Article inconnu.' };
+    if (p.status !== 'IDLE') return { ok: false, error: 'Action en cours…' };
+    if (!this.atSanctuaryPlayer(p)) {
+      return { ok: false, error: 'Le Tableau des contrats est à la Capitale et dans les villages.' };
+    }
+    ensureDailyState(p);
+    if ((p.seals || 0) < item.cost) {
+      return { ok: false, error: 'Il faut ' + item.cost + ' ' + SEAL_CURRENCY.icon + ' (vous en avez ' + (p.seals || 0) + ').' };
+    }
+
+    // Validation AVANT de débiter : aucun échange ne doit pouvoir consommer
+    // des sceaux sans rien rendre.
+    let apply = null;
+    if (item.needsArtifact) {
+      const artifact = artifactFor(String(choice || ''));
+      if (!artifact) return { ok: false, error: 'Choisissez un artefact.' };
+      if ((p.ownedArtifacts || []).includes(artifact.id)) {
+        return { ok: false, error: 'Vous possédez déjà ' + artifact.label + '.' };
+      }
+      apply = () => this.grantArtifactFragment(p, artifact.id, 1);
+    } else if (item.needsClass) {
+      const cls = String(choice || '');
+      if (!MERC_CONTRACT_TYPES[cls]) return { ok: false, error: 'Choisissez une classe de mercenaire.' };
+      apply = () => {
+        const key = mercContractKey(cls, 6);
+        p.inventory[key] = (p.inventory[key] || 0) + 1;
+      };
+    } else if (item.grant && item.grant.title) {
+      if ((p.titles || []).includes(item.grant.title)) return { ok: false, error: 'Titre déjà obtenu.' };
+      apply = () => { p.titles.push(item.grant.title); };
+    } else if (item.grant && item.grant.moonstones) {
+      apply = () => { p[PREMIUM_CURRENCY.key] = (p[PREMIUM_CURRENCY.key] || 0) + item.grant.moonstones; };
+    } else if (item.grant && item.grant.item) {
+      apply = () => {
+        p.inventory[item.grant.item] = (p.inventory[item.grant.item] || 0) + (item.grant.qty || 1);
+      };
+    }
+    if (!apply) return { ok: false, error: 'Article indisponible.' };
+
+    p.seals -= item.cost;
+    apply();
+    this.plog(p, SEAL_CURRENCY.icon + ' Échangé : ' + item.label + ' (−' + item.cost + ').');
+    this.pushSelf(p);
     return { ok: true };
   }
 
@@ -2970,6 +3203,21 @@ class Game {
       armorTier: p.armor ? p.armor.tier : null,
       gold: p.gold || 0,
       premium: p[PREMIUM_CURRENCY.key] || 0,
+      seals: p[SEAL_CURRENCY.key] || 0,
+      // Mercenaires actifs et contrats en stock : sans ça, impossible de
+      // vérifier depuis le backoffice pourquoi un joueur a (ou n'a pas) la
+      // puissance attendue en raid.
+      mercs: (p.mercs || []).map((m) => ({ speciesClass: m.speciesClass, tier: m.tier, combatsLeft: m.combatsLeft })),
+      mercContracts: Object.entries(p.inventory || {})
+        .filter(([k]) => isMercContractType(parseStackKey(k).type))
+        .map(([k, n]) => ({ key: k, qty: n })),
+      dailies: p.daily ? {
+        day: p.daily.day || null,
+        done: (p.daily.done || []).length,
+        total: (p.daily.ids || []).length,
+        weeklyId: p.daily.weeklyId || null,
+        weeklyDone: !!p.daily.weeklyDone,
+      } : null,
       charSlots: p.charSlots,
       charCount: (p.characters || []).length,
       ownedAccessories: p.ownedAccessories || [],
@@ -3088,11 +3336,45 @@ class Game {
       return { ok: true };
     }
     const parsed = parseStackKey(itemKey);
-    if (!RESOURCES[parsed.type] && !CONSUMABLES[parsed.type]) return { ok: false, error: 'Objet inconnu.' };
+    // Contrats de mercenaire et engins de siège sont des objets d'inventaire
+    // au même titre qu'une ressource : sans ces deux cas, ils restaient
+    // impossibles à attribuer depuis le backoffice (donc intestables sans
+    // farmer l'or ou les matériaux à la main).
+    const known = !!RESOURCES[parsed.type] || !!CONSUMABLES[parsed.type] ||
+      isMercContractType(parsed.type) || parsed.type === SIEGE_ENGINE_ITEM;
+    if (!known) return { ok: false, error: 'Objet inconnu.' };
     const n = Math.max(1, Math.min(999, Math.floor(Number(qty)) || 1));
     target.inventory[itemKey] = (target.inventory[itemKey] || 0) + n;
     this.pushSelf(target);
     return { ok: true };
+  }
+
+  adminGrantSeals(admin, username, amount) {
+    if (!admin || admin.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
+    const target = this.adminFindTarget(username);
+    if (!target) return { ok: false, error: 'Joueur introuvable.' };
+    ensureDailyState(target);
+    // Montant signé : permet aussi de RETIRER des sceaux pour retester un
+    // achat, sans devoir supprimer le compte.
+    const n = Math.max(-99999, Math.min(99999, Math.floor(Number(amount)) || 0));
+    target.seals = Math.max(0, (target.seals || 0) + n);
+    this.pushSelf(target);
+    return { ok: true, seals: target.seals };
+  }
+
+  /* Remise à zéro du tableau des contrats : retire un jour au marqueur pour
+   * forcer ensureDailyState à retirer au sort et à reprendre un baseline
+   * neuf. Indispensable pour tester les contrats sans attendre 5 h du matin. */
+  adminRerollDailies(admin, username) {
+    if (!admin || admin.role !== 'admin') return { ok: false, error: 'Accès réservé aux administrateurs.' };
+    const target = this.adminFindTarget(username);
+    if (!target) return { ok: false, error: 'Joueur introuvable.' };
+    ensureDailyState(target);
+    target.daily.day = '';
+    target.daily.week = '';
+    ensureDailyState(target);
+    this.pushSelf(target);
+    return { ok: true, board: dailyBoardFor(target) };
   }
 
   adminGrantAccessory(admin, username, accessoryId) {
@@ -3325,6 +3607,13 @@ class Game {
       p.charSlots = Math.min(p.charSlots, MAX_CHAR_SLOTS);
       if (typeof p.gold !== 'number') p.gold = 0;
       if (typeof p[PREMIUM_CURRENCY.key] !== 'number') p[PREMIUM_CURRENCY.key] = 0;
+      if (typeof p[SEAL_CURRENCY.key] !== 'number') p[SEAL_CURRENCY.key] = 0;
+      // Mercenaires : purge les contrats épuisés qu'une sauvegarde aurait pu
+      // figer à 0 combat restant (ex. arrêt du serveur pile après un raid).
+      if (!Array.isArray(p.mercs)) p.mercs = [];
+      p.mercs = p.mercs
+        .filter((m) => m && MERC_CONTRACT_TYPES[m.speciesClass] && Number(m.combatsLeft) > 0)
+        .slice(0, MERC_MAX_ACTIVE_PER_PLAYER);
       if (!Array.isArray(p.pushSubscriptions)) p.pushSubscriptions = [];
       if (typeof p.pushPaFullAt === 'undefined') p.pushPaFullAt = null;
       if (typeof p.pushPaFullSent !== 'boolean') p.pushPaFullSent = false;
@@ -3353,6 +3642,11 @@ class Game {
         }
       }
       ensureAchievementState(p);
+      // Tire les contrats du jour pour les comptes existants (et rattrape un
+      // serveur resté éteint plusieurs jours : la journée a tourné, on
+      // repart d'un baseline propre plutôt que de créditer des contrats
+      // « remplis » par l'activité d'avant l'arrêt).
+      ensureDailyState(p);
       // Rééquilibrage des PV par classe : évite qu'un compte existant se
       // retrouve avec plus de PV affichés que son nouveau maximum.
       p.hp = Math.min(p.hp, maxHp(p));

@@ -149,11 +149,21 @@ html, body {
   text-transform: uppercase;
   color: #7a5410;
 }
-#buffBadge {
+#hudBadges {
   position: absolute;
   left: 12px;
   bottom: 152px;
   z-index: 22;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  pointer-events: none;
+}
+/* #mercBadge n'est qu'une colonne : ce sont ses pastilles filles qui portent
+   le fond (une par lame engagee), voir updateHud. */
+#mercBadge { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+#buffBadge, .hud-pill {
   padding: 6px 12px;
   border-radius: 999px;
   background: linear-gradient(180deg, rgba(70, 48, 26, 0.94), rgba(42, 28, 18, 0.92));
@@ -163,8 +173,27 @@ html, body {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
-  pointer-events: none;
+  max-width: min(320px, 62vw);
 }
+/* Vert froid plutot que l'ambre du buff : deux etats actifs distincts ne
+   doivent pas se confondre du coin de l'oeil. */
+.merc-pill {
+  background: linear-gradient(180deg, rgba(38, 62, 48, 0.94), rgba(22, 38, 30, 0.92));
+  border: 1px solid rgba(134, 220, 174, 0.42);
+  border-radius: 999px;
+  color: #cfeadb;
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+}
+
+
+/* Carte « Escouade » du profil : jumelle de .desktop-buff (voir
+   mercSquadCardHtml), avec l'accent vert du badge d'escouade. */
+.desktop-squad { margin-top: 6px; }
+.desktop-squad.active { border-color: rgba(94, 158, 122, 0.45); }
 
 /* ---------- Bannière d'installation PWA (haut du HUD) ---------- */
 #installBanner {
@@ -1771,6 +1800,16 @@ html, body {
   border: 1px solid rgba(171, 129, 70, 0.24);
 }
 .avatar.sprite.small { width: 38px; height: 38px; border-radius: 8px; }
+/* Portrait de classe sur une carte d'inventaire (contrat de mercenaire) :
+   meme portrait qu'au comptoir de la Compagnie Franche, mais a la taille des
+   autres illustrations d'objet (.inv-card-art fait 72px) — sans quoi la lame
+   paraissait deux fois plus petite qu'une buche de bois. */
+.avatar.inv-card-avatar {
+  --skin-scale: 1;
+  width: 76px;
+  height: 76px;
+  border-radius: 14px;
+}
 .avatar.sprite.big { width: 56px; height: 56px; }
 .avatar.skin-avatar.small { width: 38px; height: 38px; }
 .avatar.skin-avatar.big { width: 56px; height: 56px; }
@@ -4194,10 +4233,34 @@ html, body {
     cursor: pointer;
   }
   .desktop-panel-link:hover { background: rgba(232, 195, 99, 0.38); }
-  .desktop-profile-panel { flex: 0 0 auto; }
+  /* flex-shrink autorise + colonne : le panneau peut maintenant se comprimer
+     quand le rail manque de hauteur, et c'est son corps qui defile — avant,
+     .desktop-panel { overflow: hidden } coupait purement et simplement tout
+     ce qui depassait (escouade, effet actif...), sans aucun moyen d'y acceder. */
+  .desktop-profile-panel {
+    flex: 0 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    max-height: 68%;
+  }
   .desktop-map-panel { flex: 1 1 auto; }
   .desktop-social-panel { display: flex; flex: 1; flex-direction: column; }
-  .desktop-profile-body { position: relative; z-index: 1; padding: 12px 18px 16px; }
+  .desktop-profile-body {
+    position: relative;
+    z-index: 1;
+    padding: 12px 18px 16px;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  /* Barre de defilement discrete, dans les tons du parchemin */
+  .desktop-profile-body::-webkit-scrollbar { width: 8px; }
+  .desktop-profile-body::-webkit-scrollbar-thumb {
+    background: rgba(133, 91, 35, 0.28);
+    border-radius: 999px;
+  }
+  .desktop-profile-body::-webkit-scrollbar-track { background: transparent; }
   .desktop-hero-summary { display: flex; align-items: center; gap: 12px; min-width: 0; }
   .desktop-hero-summary .avatar.skin-avatar.hero,
   .desktop-hero-summary .avatar.sprite.hero {
@@ -4300,3 +4363,165 @@ html, body {
   0%, 100% { filter: brightness(1); }
   45% { filter: brightness(1.08); box-shadow: inset 0 0 0 5px rgba(113, 73, 29, 0.07), 0 0 0 2px rgba(232, 178, 63, 0.42), 0 18px 42px rgba(0,0,0,0.34); }
 }
+
+/* ---------- La Compagnie Franche (mercenaires) ----------
+ * Un mercenaire est un contrat, pas un personnage : l'affichage tourne
+ * autour des charges restantes (jauge) plutôt que d'un portrait. */
+.merc-active-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 6px; }
+.merc-active {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.16);
+  border: 1px solid rgba(232, 178, 63, 0.22);
+}
+.merc-active-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.merc-active-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
+.merc-gauge, .contract-gauge {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  margin-top: 7px;
+}
+.merc-gauge span, .contract-gauge span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #c89a3a, #f0c565);
+  transition: width 0.25s ease;
+}
+.merc-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 12px; margin-bottom: 6px;
+  border-radius: 10px; background: rgba(0, 0, 0, 0.12);
+}
+.merc-row-name { font-weight: 700; }
+.merc-buy-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; margin-bottom: 12px; }
+.merc-buy {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 11px; width: 100%; text-align: left;
+  border-radius: 12px; cursor: pointer;
+  border: 1px solid rgba(232, 178, 63, 0.22);
+  background: rgba(0, 0, 0, 0.16);
+  color: inherit; font-family: inherit;
+}
+.merc-buy:hover:not(:disabled) { background: rgba(232, 178, 63, 0.12); }
+.merc-buy:disabled { opacity: 0.45; cursor: not-allowed; }
+.merc-buy-avatar { flex: 0 0 38px; }
+/* Fragment d'artefact : l'oeuvre de l'artefact complet, volontairement
+   assombrie et desaturee — on possede un eclat, pas encore l'objet. */
+.inv-card-fragment { filter: grayscale(0.45) brightness(0.82); }
+.merc-buy-body { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.merc-buy-price { display: flex; align-items: center; gap: 4px; font-weight: 800; white-space: nowrap; }
+
+/* ---------- Tableau des contrats ---------- */
+.contract-card {
+  padding: 10px 12px; margin-bottom: 8px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+.contract-card.weekly { border-color: rgba(232, 178, 63, 0.4); }
+.contract-card.done { opacity: 0.62; }
+.contract-head { display: flex; align-items: center; gap: 8px; }
+.contract-icon { font-size: 17px; }
+.contract-name { font-weight: 800; flex: 1; }
+.contract-count { font-variant-numeric: tabular-nums; font-weight: 700; opacity: 0.8; }
+.contract-done { color: #86dcae; font-weight: 800; }
+.contract-label { font-size: 12.5px; opacity: 0.82; margin-top: 3px; }
+.contract-reward { font-size: 12px; margin-top: 6px; font-weight: 700; opacity: 0.9; }
+
+.seal-shop { display: flex; flex-direction: column; gap: 8px; }
+.seal-item {
+  padding: 10px 12px; border-radius: 12px;
+  background: rgba(0, 0, 0, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.seal-item-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.seal-cost { font-weight: 800; white-space: nowrap; }
+.seal-choice { width: 100%; }
+.merc-locked { color: #b4462f; font-weight: 700; }
+
+/* ---------- Décomposition de la puissance (profil) ----------
+ * Une ligne par source, des sous-totaux en relief : on doit pouvoir lire d'un
+ * coup d'œil ce que rapporte un artefact, un ragoût ou une lame de plus. */
+.pw-table {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 4px 0 6px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.pw-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 10px;
+  border-radius: 7px;
+}
+.pw-row > span { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.pw-row b { font-weight: 800; white-space: nowrap; }
+.pw-row:nth-child(odd) { background: rgba(91, 63, 31, 0.045); }
+.pw-gain b { color: #3f7d52; }
+.pw-loss b { color: #b4462f; }
+.pw-merc-avatar { width: 24px; height: 24px; border-radius: 6px; flex: 0 0 24px; }
+/* Sous-totaux : filet au-dessus plutôt qu'un fond, pour marquer la coupure
+   sans alourdir une liste déjà zébrée. */
+.pw-sub {
+  border-top: 1px solid rgba(91, 63, 31, 0.18);
+  margin-top: 3px;
+  font-weight: 700;
+}
+.pw-sub, .pw-total { background: none !important; }
+.pw-total {
+  margin-top: 4px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  background: linear-gradient(180deg, rgba(232, 178, 63, 0.22), rgba(200, 154, 58, 0.12)) !important;
+  border: 1px solid rgba(200, 154, 58, 0.42);
+  font-weight: 800;
+}
+.pw-total b { font-size: 15px; }
+
+/* Contrats du jour dans le journal des quêtes : le compteur doit rester sur
+   une ligne, sinon un nom long ("Charrettes pleines") le colle à lui. */
+.contract-log .ach-head { display: flex; align-items: baseline; gap: 10px; }
+.contract-log .ach-head b { flex: 1; min-width: 0; }
+.contract-log .ach-head span { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.contract-log .contract-gauge { margin-top: 6px; }
+
+/* Volet repliable de la décomposition (rail de bureau uniquement).
+   .desktop-panel est en overflow:hidden et le rail a une hauteur fixe :
+   déployée, la liste chassait « Effet actif » et « Escouade » hors du cadre. */
+.pw-details { margin-top: 6px; }
+.pw-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  cursor: pointer;
+  list-style: none;
+  background: linear-gradient(180deg, rgba(232, 178, 63, 0.22), rgba(200, 154, 58, 0.12));
+  border: 1px solid rgba(200, 154, 58, 0.42);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #6b4c1f;
+}
+.pw-summary::-webkit-details-marker { display: none; }
+.pw-summary b { font-size: 15px; font-variant-numeric: tabular-nums; text-transform: none; }
+.pw-summary::after {
+  content: '⌄';
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.6;
+  transition: transform 0.18s ease;
+}
+.pw-details[open] .pw-summary::after { transform: rotate(180deg); }
+.pw-details .pw-table { margin-top: 4px; }

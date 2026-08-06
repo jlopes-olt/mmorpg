@@ -291,6 +291,72 @@ const CASTLE_FORTIFY_RESOURCES = {
   5: { tier: 5, qty: 1400 },
 };
 
+/* ---------- Mercenaires ----------
+ * Réponse au blocage de fin de jeu : le monde ouvert est soloable jusqu'au
+ * T5, mais le premier contenu de groupe (mob de donjon, force 400) est hors
+ * de portée d'un joueur seul (~3 % même en T6 complet, plafond solo ~250).
+ * Sans population, un joueur T6 n'a donc littéralement plus rien à faire.
+ *
+ * Un mercenaire n'existe PAS sur la carte : c'est un contrat consommable
+ * d'inventaire, exactement comme l'engin de siège — acheté à l'avance,
+ * activé, puis engagé automatiquement dans chaque combat jusqu'à épuisement.
+ * Pas d'IA, pas de déplacement, pas de sprite : à la résolution on
+ * instancie un combattant éphémère que teamPowerOf() sait compter.
+ *
+ * Calibrage (2 mercenaires par combat, joueurs T6) :
+ *   solo  : couloir de donjon 98 %, boss 33 %  → il faut toujours quelqu'un
+ *   duo   : boss de donjon 96 %                → le donjon devient jouable à 2
+ *   trio  : Wyrm 78 % · quatuor : 98 %         → le raid mondial reste social
+ * MERC_MAX_PER_RAID est le curseur : à 4, un duo tombe le Wyrm à 92 %, ce qui
+ * vide l'évènement de son intérêt. */
+const MERC_CONTRACT_COMBATS = 15;   // 14 mobs pour réveiller le boss + le boss = une descente
+const MERC_MAX_ACTIVE_PER_PLAYER = 2;
+const MERC_MAX_PER_RAID = 2;        // tous joueurs confondus
+/* Un mercenaire vaut 70 % de la puissance BRUTE d'un joueur du même tier,
+ * mais accorde son bonus de rôle : un vrai joueur reste strictement
+ * supérieur, tout en rendant le CHOIX du mercenaire signifiant (on engage le
+ * rôle qui manque au groupe, pas le plus gros bâton). */
+const MERC_POWER_RATIO = 0.7;
+/* Verrouillé à la maîtrise 5 : le monde ouvert étant soloable à 98 % à
+ * chaque tier, un mercenaire plus tôt ne servirait qu'à acheter le saut
+ * d'une progression conçue pour être jouée. */
+const MERC_MIN_MASTERY = 5;
+const MERC_TIERS = [5, 6];
+/* Or seulement (pas de recette de ressources, contrairement à l'engin de
+ * siège) : on paie une lame, et le jeu manque cruellement de puits d'or pour
+ * un joueur solo. Calibré pour qu'une descente complète soit à peu près
+ * blanche en solo (~495 🪙 de butin contre 500 🪙 de deux contrats T6) et
+ * franchement rentable à deux. */
+const MERC_PRICE_GOLD = { 5: 170, 6: 250 };
+/* Type d'objet par classe. parseStackKey() coupe au DERNIER underscore :
+ * 'CONTRAT_OURS_6' se relit bien en (CONTRAT_OURS, 6). */
+const MERC_CONTRACT_TYPES = {
+  OURS_GUERRIER:        'CONTRAT_OURS',
+  CERF_DRUIDE:          'CONTRAT_CERF',
+  LION_PALADIN:         'CONTRAT_LION',
+  CHAT_MAGICIEN:        'CONTRAT_CHAT',
+  CORBEAU_NECROMANCIEN: 'CONTRAT_CORBEAU',
+  RENARD_VOLEUR:        'CONTRAT_RENARD',
+};
+const MERC_CLASS_BY_CONTRACT_TYPE = Object.fromEntries(
+  Object.entries(MERC_CONTRACT_TYPES).map(([cls, type]) => [type, cls])
+);
+function isMercContractType(type) { return !!MERC_CLASS_BY_CONTRACT_TYPE[type]; }
+function mercContractKey(speciesClass, tier) { return stackKey(MERC_CONTRACT_TYPES[speciesClass], tier); }
+function mercContractLabel(speciesClass) {
+  const cls = CLASSES[speciesClass];
+  return 'Contrat — ' + (cls ? cls.label : speciesClass);
+}
+
+/* ---------- Sceaux de contrat ----------
+ * Monnaie des contrats quotidiens (voir js/dailies.js), échangeable au
+ * Tableau des contrats. Le fragment d'artefact y est la pièce maîtresse :
+ * c'est ce qui rend la progression d'artefact atteignable SANS groupe (~1
+ * mois en solo pur) là où elle était jusqu'ici totalement verrouillée
+ * derrière un boss à 3 joueurs — tout en laissant un groupe aller dix fois
+ * plus vite via les drops directs. */
+const SEAL_CURRENCY = { key: 'seals', label: 'Sceaux de contrat', icon: '🔖' };
+
 const PREMIUM_CURRENCY = {
   key: 'moonstones',
   label: 'Écailles Lunaires',
@@ -570,6 +636,13 @@ const WORLD_BOSS = {
   tier: 6,
   pos: { x: 33, y: -33 },
   respawnMs: 36 * 60 * 60 * 1000,   // 36h
+  /* Fenêtre de réveil (heure de Paris), même principe que
+   * CASTLE_SIEGE_WINDOWS. Sans elle, un respawn de 36 h DÉRIVE sur
+   * l'horloge : une fois sur deux le Wyrm se réveille à 4 h du matin, et
+   * un raid qui demande 5 joueurs simultanés n'a alors aucune chance
+   * d'exister. Le délai de 36 h reste la règle — la fenêtre ne fait que
+   * repousser le réveil jusqu'à la prochaine heure jouable. */
+  spawnWindow: { startHour: 19, endHour: 23 },
   goldMin: 150,
   goldMax: 220,
   xp: 150,
@@ -1339,15 +1412,121 @@ function combatPower(p) {
  * Chats aligne une puissance brute supérieure (×1,3 sur l'arme chacun) mais
  * ne touche à AUCUN bonus de rôle, quand un Chat + un Ours + un Cerf cumule
  * +6 % (Ours) + 6 % (Cerf) malgré une puissance brute moindre. */
-function teamPowerOf(members) {
+function teamPowerOf(members, mercs) {
+  const hired = mercs || [];
   let total = 0;
   for (const p of members) total += combatPower(p);
+  for (const m of hired) total += mercCombatPower(m);
+  // Les bonus de rôle regardent l'ENSEMBLE des combattants présents,
+  // mercenaires compris : un Paladin engagé fait bien profiter l'équipe. La
+  // Nuée compte aussi les mercenaires — le talent parle de « participant au
+  // combat », et un mercenaire en est un.
+  const roster = members.map((p) => p.speciesClass).concat(hired.map((m) => m.speciesClass));
   const rb = CONFIG.COMBAT.ROLE_BONUS;
-  if (members.some((p) => p.speciesClass === 'LION_PALADIN')) total *= 1 + rb.PALADIN;
-  if (members.some((p) => p.speciesClass === 'OURS_GUERRIER')) total *= 1 + rb.OURS;
-  if (members.some((p) => p.speciesClass === 'CERF_DRUIDE')) total *= 1 + rb.CERF;
-  if (members.some((p) => p.speciesClass === 'CORBEAU_NECROMANCIEN')) total *= 1 + rb.CORBEAU_PER_MEMBER * members.length;
+  if (roster.includes('LION_PALADIN')) total *= 1 + rb.PALADIN;
+  if (roster.includes('OURS_GUERRIER')) total *= 1 + rb.OURS;
+  if (roster.includes('CERF_DRUIDE')) total *= 1 + rb.CERF;
+  if (roster.includes('CORBEAU_NECROMANCIEN')) total *= 1 + rb.CORBEAU_PER_MEMBER * roster.length;
   return Math.round(total);
+}
+
+/* Décomposition de la puissance : d'où vient chaque point, du socle de classe
+ * jusqu'au total réellement opposé au monstre.
+ *
+ * Raison d'être : le profil n'affichait que maxPower() — la puissance
+ * INDIVIDUELLE. Un joueur avec deux mercenaires engagés lisait « 273 » et se
+ * battait à 681, sans qu'aucun écran ne fasse le lien. Impossible non plus de
+ * voir ce que rapportait un artefact, un ragoût ou une lame de plus.
+ *
+ * Chaque étape est calculée à partir des VRAIES fonctions (playerForce,
+ * maxPower, combatPower, teamPowerOf) et non re-dérivée à la main : les
+ * lignes se réconcilient donc toujours avec le total, arrondis compris, et un
+ * changement d'équilibrage s'y répercute sans retouche. */
+function powerBreakdown(p, mercs) {
+  const hired = Array.isArray(mercs) ? mercs : [];
+  const cls = CLASSES[p.speciesClass] || {};
+  const weaponMult = p.speciesClass === 'CHAT_MAGICIEN' ? 1.3 : 1;
+  const armorPoints = p.armor.tier * 8;
+  const artifactPower = artifactStatsFor(p).power;
+  const gear = playerForce(p) + armorPoints + artifactPower;   // avant buff
+  const full = maxPower(p);                                    // buff compris, à pleine vie
+  const mine = combatPower(p);                                 // blessures comprises
+  const mercLines = hired.map((m) => ({
+    key: 'merc',
+    label: ((CLASSES[m.speciesClass] || {}).label || m.speciesClass) + ' T' + m.tier,
+    value: mercCombatPower(m),
+    speciesClass: m.speciesClass,
+  }));
+  const raw = mine + mercLines.reduce((n, l) => n + l.value, 0);
+  const total = teamPowerOf([p], hired);
+
+  const lines = [
+    { key: 'class',    label: 'Socle de classe',                       value: cls.baseForce || 0 },
+    { key: 'weapon',   label: 'Arme T' + p.weapon.tier +
+        (weaponMult !== 1 ? ' (Canalisation ×1,3)' : ''),              value: p.weapon.tier * 14 * weaponMult },
+    { key: 'mastery',  label: 'Maîtrise d’arme ' + p.weaponMastery,    value: p.weaponMastery * 6 },
+    { key: 'armor',    label: 'Armure T' + p.armor.tier,               value: armorPoints },
+  ];
+  if (artifactPower) {
+    lines.push({ key: 'artifact', label: (artifactFor(p.artifactId) || {}).label || 'Artefact', value: artifactPower });
+  }
+  // L'écart entre la somme des lignes et `gear` n'existe que par l'arrondi de
+  // playerForce() (Canalisation ×1,3) : on le reverse sur l'arme plutôt que
+  // d'afficher un total qui ne tombe pas juste.
+  const listed = lines.reduce((n, l) => n + l.value, 0);
+  if (listed !== gear) lines[1].value += gear - listed;
+
+  const buffGain = full - gear;
+  const woundLoss = mine - full;   // ≤ 0
+  const roleGain = total - raw;
+
+  return {
+    lines,
+    gear,
+    buff: buffGain ? { label: buffLabelFor(p), value: buffGain } : null,
+    wound: woundLoss < -0.5 ? { label: 'Blessures (' + Math.round(p.hp) + ' / ' + maxHp(p) + ' PV)', value: woundLoss } : null,
+    mine,
+    mercs: mercLines,
+    raw,
+    roles: roleGain > 0.5 ? { label: roleLabelsFor([p].concat(hired)), value: roleGain } : null,
+    total,
+  };
+}
+
+/* Intitulé du mets en cours, pour la ligne de buff de la décomposition. */
+function buffLabelFor(p) {
+  if (!p.buff || !CONSUMABLES[p.buff.type]) return 'Effet actif';
+  return CONSUMABLES[p.buff.type].label + ' T' + p.buff.tier +
+    ' (+' + Math.round(CONSUMABLE_EFFECTS[p.buff.type][p.buff.tier] * 100) + ' %)';
+}
+
+/* Talents d'équipe effectivement déclenchés par la composition présente —
+ * mercenaires compris, puisqu'ils accordent leur bonus de rôle. */
+function roleLabelsFor(roster) {
+  const classes = roster.map((m) => m.speciesClass);
+  const names = [];
+  if (classes.includes('LION_PALADIN')) names.push('Aura');
+  if (classes.includes('OURS_GUERRIER')) names.push('Rempart');
+  if (classes.includes('CERF_DRUIDE')) names.push('Sève');
+  if (classes.includes('CORBEAU_NECROMANCIEN')) names.push('Nuée');
+  return names.length ? 'Talents d’équipe : ' + names.join(', ') : 'Talents d’équipe';
+}
+
+/* Puissance apportée par un mercenaire engagé : un combattant de son tier à
+ * pleine vie, sans artefact ni buff (il n'en porte pas), réduit par
+ * MERC_POWER_RATIO. Volontairement dérivée de combatPower() plutôt que d'un
+ * barème en dur : un rééquilibrage des classes ou des tiers s'y répercute. */
+function mercCombatPower(merc) {
+  const tier = Math.max(0, Math.min(6, Number(merc.tier) || 0));
+  const fighter = {
+    speciesClass: merc.speciesClass,
+    weapon: { tier }, armor: { tier },
+    weaponMastery: tier,
+    artifactId: null, buff: null,
+    hp: 0,
+  };
+  fighter.hp = maxHp(fighter);   // toujours frais : un mercenaire n'accumule pas les blessures
+  return combatPower(fighter) * MERC_POWER_RATIO;
 }
 
 /* P(victoire) : sigmoïde du ratio de puissance, bornée [2 %, 98 %].
@@ -1445,7 +1624,11 @@ if (typeof module !== 'undefined' && module.exports) {
     artifactFor, artifactStatsFor, artifactProgressFor,
     levelFromXp, playerForce, maxHp, hpLossReduction, reviveHpPct, stackKey, parseStackKey, resourceFamily,
     newCharacter, syncActiveCharacter, applyCharacter, rollGoldLoot,
-    combatPower, maxPower, teamPowerOf, winChance, winThreshold, rollD100,
+    combatPower, maxPower, teamPowerOf, mercCombatPower, powerBreakdown, buffLabelFor, roleLabelsFor,
+    winChance, winThreshold, rollD100,
+    MERC_CONTRACT_COMBATS, MERC_MAX_ACTIVE_PER_PLAYER, MERC_MAX_PER_RAID, MERC_POWER_RATIO,
+    MERC_MIN_MASTERY, MERC_TIERS, MERC_PRICE_GOLD, MERC_CONTRACT_TYPES, MERC_CLASS_BY_CONTRACT_TYPE,
+    isMercContractType, mercContractKey, mercContractLabel, SEAL_CURRENCY,
     CONSUMABLES, CONSUMABLE_EFFECTS, CONSUMABLE_RECIPES, BUFF_COMBATS,
     consumableDesc, buffPowerMult, buffLossReduction, foodDropFor, resourceLabel, monsterFor,
   };

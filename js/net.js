@@ -358,6 +358,11 @@ class RemoteServer {
   fortifyCastle(terrain) { return this.req('castle:fortify', { terrain }); }
   assaultCastlePreview(terrain) { return this.req('castle:assaultPreview', { terrain }); }
   assaultCastle(terrain) { return this.req('castle:assault', { terrain }); }
+  buyMercContract(speciesClass, tier) { return this.req('merc:buy', { speciesClass, tier }); }
+  activateMerc(speciesClass, tier) { return this.req('merc:activate', { speciesClass, tier }); }
+  dismissMerc(mercId) { return this.req('merc:dismiss', { mercId }); }
+  contractsBoard() { return this.req('contracts:board', {}); }
+  buySealItem(itemId, choice) { return this.req('contracts:buy', { itemId, choice }); }
   craftSiegeEngine(tier) { return this.req('castle:craftEngine', { tier }); }
   deploySiegeEngine(key, tier) { return this.req('siege:deployEngine', { key, tier }); }
 }

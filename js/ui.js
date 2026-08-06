@@ -217,6 +217,12 @@ class UI {
     server.on('duelResult', (r) => this.showDuelResult(r));
     server.on('achievementUnlocked', (a) => this.showAchievementUnlocked(a));
     server.on('questCompleted', (q) => this.showQuestCompleted(q));
+    server.on('contractCompleted', (c) => {
+      const bits = [c.gold + ' 🪙', c.seals + ' ' + SEAL_CURRENCY.icon];
+      if (c.moonstones) bits.push(c.moonstones + ' ' + PREMIUM_CURRENCY.icon);
+      this.toast((c.kind === 'weekly' ? '🏅 Contrat de la semaine — ' : '✅ Contrat rempli — ') +
+        c.icon + ' ' + c.name + ' : ' + bits.join(', '));
+    });
     server.on('trade', (trade) => {
       if (trade) {
         // Le serveur rediffuse 'trade' aux DEUX joueurs dès que l'un des deux
@@ -240,6 +246,16 @@ class UI {
     });
     server.on('self', () => {
       this.updateDesktopProfile();
+      // Le serveur pousse 'self' toutes les 2 s (recharge passive de Regain/PV,
+      // voir index.js) et chaque panneau ouvert se reconstruisait alors
+      // ENTIÈREMENT (body.innerHTML = …) : 30 destructions/recréations de DOM
+      // par minute, d'où le clignotement visible sur les panneaux riches en
+      // images (Social, Échange, Boutique). On ne rebâtit donc que si quelque
+      // chose d'AFFICHABLE a réellement changé — même principe que
+      // desktopProfileSignature plus bas. Le HUD (PV/Regain/position), lui,
+      // continue de se rafraîchir à chaque frame : il n'écrit que du
+      // textContent, ce qui ne provoque aucun clignotement.
+      if (!this.selfRenderChanged()) return;
       if (this.openSheet === 'inventory') this.showSheet('inventory');
       if (this.openSheet === 'shop') this.showSheet('shop');
       if (this.openSheet === 'profile') this.showSheet('profile');
@@ -1861,6 +1877,24 @@ showDungeonPopup(tile, onEnter) {
       buffBadge.classList.add('hidden');
     }
 
+    // Badge d'escouade : meme role que le badge de nourriture juste au-dessus
+    // (savoir en un coup d'oeil ce qui est actif AVANT d'engager un combat),
+    // et meme unite de compte — des combats restants, pas du temps.
+    const mercBadge = $('mercBadge');
+    const mercs = Array.isArray(me.mercs) ? me.mercs : [];
+    if (mercs.length) {
+      mercBadge.classList.remove('hidden');
+      // Une pastille PAR lame : concatenees sur une seule ligne, deux
+      // mercenaires debordaient et coupaient le compteur de combats.
+      mercBadge.innerHTML = mercs.map((m) =>
+        '<span class="hud-pill merc-pill">🗡 ' +
+        esc((CLASSES[m.speciesClass] || {}).label || m.speciesClass) + ' T' + m.tier +
+        ' · ' + m.combatsLeft + ' ⚔</span>'
+      ).join('');
+    } else {
+      mercBadge.classList.add('hidden');
+    }
+
     // Bannière de lobby : compte à rebours + jet nécessaire en direct
     const banner = $('lobbyBanner');
     if (me.status === 'LOBBY_COMBAT' && me.raidKey) {
@@ -1871,10 +1905,15 @@ showDungeonPopup(tile, onEnter) {
         const threshold = winThreshold(chance);
         const secsLeft = Math.max(0, Math.ceil((raid.endsAt - this.server.now) / 1000));
         const engineCount = (raid.engines || []).length;
+        // Mercenaires réellement ENGAGÉS (plafond MERC_MAX_PER_RAID appliqué),
+        // pas le nombre de lames possédées : c'est ce que le jet affiché
+        // juste à côté prend en compte.
+        const mercCount = (raid.mercs || (this.server.raidMercsOf ? this.server.raidMercsOf(raid) : [])).length;
         $('lobbyText').textContent = raid.siege
           ? '🏰 Siège — ' + raid.label + ' — résolution dans ' + secsLeft + ' s — ' + raid.participants.length + ' assaillant(s)' +
             (engineCount ? ' — ' + engineCount + ' engin(s)' : '')
-          : '⚔ Raid ' + raid.label + ' T' + raid.tier + ' — résolution dans ' + secsLeft + ' s — ' + raid.participants.length + ' participant(s)';
+          : '⚔ Raid ' + raid.label + ' T' + raid.tier + ' — résolution dans ' + secsLeft + ' s — ' + raid.participants.length + ' participant(s)' +
+            (mercCount ? ' — ' + mercCount + ' mercenaire' + (mercCount > 1 ? 's' : '') : '');
         const chanceEl = $('lobbyChance');
         chanceEl.classList.remove('hidden');
         chanceEl.innerHTML = this.diceIconHtml() + 'Jet ' + threshold + '+';
@@ -2717,7 +2756,11 @@ showDungeonPopup(tile, onEnter) {
     const samePane = this.openSheet === name && !$('sheet').classList.contains('hidden');
     const prevScrollTop = samePane ? body.scrollTop : 0;
     this.openSheet = name;
-    const titles = { inventory: 'Inventaire', shop: 'Boutique', profile: 'Profil', map: 'Carte du monde', social: 'Social', capital: 'Capitale — PNJ Artisans', marmite: 'La Marmite — Cuisine' };
+    const titles = {
+      inventory: 'Inventaire', shop: 'Boutique', profile: 'Profil', map: 'Carte du monde',
+      social: 'Social', capital: 'Capitale — PNJ Artisans', marmite: 'La Marmite — Cuisine',
+      mercenaries: 'La Compagnie Franche — Mercenaires', contracts: 'Tableau des contrats',
+    };
     $('sheetTitle').textContent = titles[name];
     body.innerHTML = '';
     this['build_' + name](body);
@@ -2763,17 +2806,56 @@ showDungeonPopup(tile, onEnter) {
     setTimeout(() => panel.classList.remove('desktop-panel-emphasis'), 700);
   }
 
+  /* Quelque chose d'affichable a-t-il bougé depuis le dernier 'self' ?
+   * Empreinte de l'état complet du joueur, MOINS les seuls champs qui
+   * changent en permanence sans jamais être rendus tels quels :
+   *   - paMs / hpMs : compteurs de recharge, lus uniquement par updateHud()
+   *     qui écrit du textContent (voir $('paNext')), jamais du HTML ;
+   *   - lastSeen : horodatage de présence, purement serveur.
+   * Tout le reste (or, inventaire, escouade, sceaux, contrats, guilde…)
+   * compte : si ça change, les panneaux doivent se rebâtir.
+   * Prendre l'empreinte de l'objet entier plutôt qu'une liste de champs est
+   * volontaire — une nouvelle donnée joueur sera couverte d'office, alors
+   * qu'une liste manuelle se serait silencieusement périmée. */
+  selfRenderChanged() {
+    const me = this.server.me;
+    if (!me) return true;
+    let sig;
+    try {
+      sig = JSON.stringify(me, (k, v) => (
+        (k === 'paMs' || k === 'hpMs' || k === 'lastSeen') ? undefined : v
+      ));
+    } catch (e) {
+      return true;   // objet non sérialisable (cycle) : on ne prend pas le risque de figer l'UI
+    }
+    if (sig === this.lastSelfSignature) return false;
+    this.lastSelfSignature = sig;
+    return true;
+  }
+
   updateDesktopProfile(force) {
     if (!this.desktopPanelsActive()) return;
     const me = this.server.me;
     const cls = CLASSES[me.speciesClass];
     const skin = skinFor(me.skinId);
     const buffKey = me.buff ? [me.buff.type, me.buff.tier, me.buff.combats].join(':') : 'none';
+    // Sans cette cle, une charge de mercenaire consommee ne rafraichirait pas
+    // la carte d'escouade (updateDesktopProfile sort tot si la signature n'a
+    // pas bouge — voir desktopProfileSignature juste en dessous).
+    const mercKey = (me.mercs || []).map((m) => m.speciesClass + m.tier + ':' + m.combatsLeft).join(',') || 'none';
     const signature = [me.username, me.speciesClass, me.skinId || 'base', me.accessoryId || 'none', me.mountId || 'none', me.artifactId || 'none', me.hp, me.gold,
       me.weapon.type, me.weapon.tier, me.armor.type, me.armor.tier,
-      me.harvestLevel, me.weaponMastery, buffKey].join('|');
+      me.harvestLevel, me.weaponMastery, buffKey, mercKey].join('|');
     if (!force && signature === this.desktopProfileSignature) return;
     this.desktopProfileSignature = signature;
+    // Voir powerBreakdownHtml : l'attribut `open` du <details> est reinjecte a
+    // chaque rendu, il faut donc memoriser le choix du joueur.
+    if (!this._powerDetailsWired) {
+      this._powerDetailsWired = true;
+      $('desktopProfileBody').addEventListener('toggle', (e) => {
+        if (e.target && e.target.classList.contains('pw-details')) this.powerDetailsOpen = e.target.open;
+      }, true);
+    }
     const buff = me.buff && CONSUMABLES[me.buff.type];
     const buffAsset = buff ? this.consumableIconSrc[me.buff.type] : '';
     const artifact = artifactFor(me.artifactId);
@@ -2787,7 +2869,10 @@ showDungeonPopup(tile, onEnter) {
         '</div>' +
       '</div>' +
       '<div class="desktop-stat-grid">' +
-        '<div><span>Puissance</span><b>' + Math.round(maxPower(me)) + '</b></div>' +
+        // Pas de tuile « Puissance » ici : le volet repliable juste en dessous
+        // porte deja le total de combat, et le repeter volait une place
+        // precieuse sur un rail de hauteur fixe.
+        '<div><span>Maîtrise</span><b>T' + me.weaponMastery + '</b></div>' +
         '<div><span>PV</span><b>' + me.hp + ' / ' + maxHp(me) + '</b></div>' +
         '<div><span>Or</span><b>' + (me.gold || 0).toLocaleString('fr-FR') + '</b></div>' +
       '</div>' +
@@ -2800,11 +2885,36 @@ showDungeonPopup(tile, onEnter) {
         '</div>' +
       '</div>' +
       '<div class="desktop-mastery-row"><span>Récolte <b>T' + me.harvestLevel + '</b></span><span>Maîtrise <b>T' + me.weaponMastery + '</b></span></div>' +
+      this.powerBreakdownHtml(me, { collapsible: true }) +
       '<div class="desktop-buff' + (buff ? ' active' : '') + '">' +
         (buffAsset ? '<img src="' + buffAsset + '" alt="">' : '<span class="desktop-buff-empty">✦</span>') +
         '<span><small>Effet actif</small><b>' + (buff ? esc(buff.label + ' T' + me.buff.tier) : 'Aucun mets actif') + '</b>' +
         (buff ? '<em>' + me.buff.combats + ' combat' + (me.buff.combats > 1 ? 's' : '') + '</em>' : '') + '</span>' +
+      '</div>' +
+      this.mercSquadCardHtml(me);
+  }
+
+  /* Carte « Escouade », jumelle de la carte « Effet actif » : un mercenaire
+   * s'use exactement comme un buff de nourriture (en combats, pas en temps),
+   * il doit donc se lire au meme endroit et dans la meme unite. */
+  mercSquadCardHtml(me) {
+    const mercs = Array.isArray(me.mercs) ? me.mercs : [];
+    if (!mercs.length) {
+      return '<div class="desktop-buff desktop-squad">' +
+        '<span class="desktop-buff-empty">🗡</span>' +
+        '<span><small>Escouade</small><b>Aucune lame engagée</b></span>' +
       '</div>';
+    }
+    return mercs.map((m) => {
+      const cls = CLASSES[m.speciesClass] || {};
+      return '<div class="desktop-buff desktop-squad active">' +
+        this.spriteAvatar(m.speciesClass, 'small') +
+        '<span><small>Escouade · ' + esc(cls.role || '') + '</small>' +
+        '<b>' + esc(cls.label || m.speciesClass) + ' T' + m.tier + '</b>' +
+        '<em>+' + Math.round(mercCombatPower(m)) + ' puissance · ' +
+          m.combatsLeft + ' combat' + (m.combatsLeft > 1 ? 's' : '') + '</em></span>' +
+      '</div>';
+    }).join('');
   }
 
   refreshDesktopSocial(force) {
@@ -2904,6 +3014,45 @@ showDungeonPopup(tile, onEnter) {
         '</div>';
       }
 
+      // Fragment d'artefact : clé non tiersée (FRAGMENT_ARTEFACT_PLAINE →
+      // tier NaN) et absente de RESOURCES. Sans cette branche, la carte
+      // affichait « Tier NaN » et la branche générique plantait sur
+      // res.label dès qu'on triait par tier. D'autant plus visible depuis
+      // que le Comptoir aux sceaux en distribue (voir js/dailies.js).
+      const fragArtifact = ARTIFACT_BY_FRAGMENT_KEY[k];
+      if (fragArtifact) {
+        const prog = artifactProgressFor(me, fragArtifact.id);
+        return '<div class="inv-card">' +
+          '<div class="inv-card-art-wrap">' +
+            '<img class="inv-card-art inv-card-fragment" src="' + fragArtifact.asset + '" alt="">' +
+          '</div>' +
+          '<div class="inv-card-name">' + esc(fragArtifact.fragmentLabel) + '</div>' +
+          '<div class="inv-card-meta">' + prog.count + ' / ' + prog.required + ' pour ' + esc(fragArtifact.label) + '</div>' +
+          '<div class="inv-card-qty">×' + inv[k] + '</div>' +
+        '</div>';
+      }
+
+      // Contrat de mercenaire : cliquable → engage la lame (RESOURCES ne le
+      // connaît pas, la branche générique plus bas planterait sur res.label).
+      if (isMercContractType(p.type)) {
+        const cls = MERC_CLASS_BY_CONTRACT_TYPE[p.type];
+        const c = CLASSES[cls] || {};
+        const full = (me.mercs || []).length >= MERC_MAX_ACTIVE_PER_PLAYER;
+        return '<button class="inv-card inv-consumable" data-activate-merc="' + cls + '" data-tier="' + p.tier + '"' +
+            (full ? ' disabled' : '') + '>' +
+          '<div class="inv-card-art-wrap">' +
+            // Meme portrait qu'au comptoir de la Compagnie Franche : on doit
+            // reconnaitre la lame qu'on a signee, pas lire une dague generique.
+            this.spriteAvatar(cls, 'inv-card-avatar') +
+            '<span class="tier t' + p.tier + ' inv-card-tier">T' + p.tier + '</span>' +
+          '</div>' +
+          '<div class="inv-card-name">' + esc(c.label || cls) + '</div>' +
+          '<div class="inv-card-meta">Contrat · ' + MERC_CONTRACT_COMBATS + ' combats</div>' +
+          '<div class="inv-card-qty">×' + inv[k] + '</div>' +
+          '<div class="inv-card-use">' + (full ? 'Escouade pleine' : 'Engager') + '</div>' +
+        '</button>';
+      }
+
       const res = RESOURCES[p.type];
       const displayName = resourceLabel(p.type, p.tier);
       const iconSrc = this.getResourceTargetSrc(p.type, p.tier);
@@ -2914,7 +3063,7 @@ showDungeonPopup(tile, onEnter) {
           '<span class="tier t' + p.tier + ' inv-card-tier">T' + p.tier + '</span>' +
         '</div>' +
         '<div class="inv-card-name">' + displayName + '</div>' +
-        '<div class="inv-card-meta">' + (this.inventorySort === 'tier' ? res.label + ' · ' : '') + 'Tier ' + p.tier + '</div>' +
+        '<div class="inv-card-meta">' + (this.inventorySort === 'tier' && res ? res.label + ' · ' : '') + 'Tier ' + p.tier + '</div>' +
         '<div class="inv-card-qty">×' + inv[k] + '</div>' +
       '</div>';
     });
@@ -2932,6 +3081,12 @@ showDungeonPopup(tile, onEnter) {
       btn.addEventListener('click', () => {
         this.inventorySort = btn.dataset.inventorySort;
         this.showSheet('inventory');
+      });
+    });
+    body.querySelectorAll('[data-activate-merc]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.activateMerc(btn.dataset.activateMerc, Number(btn.dataset.tier)));
+        this.toast(r.ok ? '🗡 La lame rejoint votre escouade.' : r.error);
       });
     });
     body.querySelectorAll('[data-consume]').forEach((btn) => {
@@ -3232,10 +3387,87 @@ showDungeonPopup(tile, onEnter) {
     '</div>';
   }
 
+  /* Decomposition de la puissance : d'ou vient chaque point, du socle de
+   * classe au total reellement oppose au monstre. Sans elle, le profil
+   * n'affichait que la puissance INDIVIDUELLE (maxPower) — un joueur a 273
+   * avec deux lames engagees se battait a 655 sans qu'aucun ecran ne le dise,
+   * et rien ne montrait ce que rapportait un artefact ou un ragout de plus.
+   * Le calcul vit dans config.js (powerBreakdown), ici on ne fait qu'afficher. */
+  powerBreakdownHtml(me, opts) {
+    const collapsible = !!(opts && opts.collapsible);
+    const b = powerBreakdown(me, (me.mercs || []).slice(0, MERC_MAX_PER_RAID));
+    const sign = (v) => (v >= 0 ? '+' : '−') + Math.abs(Math.round(v));
+    const row = (label, value, extraClass) =>
+      '<div class="pw-row ' + (extraClass || '') + '"><span>' + label + '</span><b>' + value + '</b></div>';
+
+    let html = '<div class="pw-table">';
+    for (const l of b.lines) html += row(esc(l.label), sign(l.value));
+    html += row('Équipement', Math.round(b.gear), 'pw-sub');
+    if (b.buff) html += row(esc(b.buff.label), sign(b.buff.value), 'pw-gain');
+    if (b.wound) html += row(esc(b.wound.label), sign(b.wound.value), 'pw-loss');
+    html += row('Votre puissance', Math.round(b.mine), 'pw-sub');
+    for (const m of b.mercs) {
+      html += row(this.spriteAvatar(m.speciesClass, 'small pw-merc-avatar') +
+        '<span>' + esc(m.label) + ' <span class="dim">mercenaire</span></span>', sign(m.value), 'pw-merc');
+    }
+    if (b.mercs.length) html += row('Puissance brute', Math.round(b.raw), 'pw-sub');
+    if (b.roles) html += row(esc(b.roles.label), sign(b.roles.value), 'pw-gain');
+    if (!collapsible) html += row('Total de combat', b.total, 'pw-total');
+    html += '</div>';
+    if (b.total !== Math.round(b.mine)) {
+      html += '<p class="dim small">C’est le <b>total de combat</b> qui est opposé au monstre, ' +
+        'pas votre puissance individuelle.</p>';
+    }
+    if (!collapsible) return html;
+    // L'etat ouvert/ferme vit sur l'instance : le panneau se reconstruit
+    // entierement a chaque changement de puissance, un <details> nu se
+    // refermerait tout seul sous les yeux du joueur.
+    return '<details class="pw-details"' + (this.powerDetailsOpen ? ' open' : '') + '>' +
+      '<summary class="pw-summary"><span>Puissance de combat</span><b>' + b.total + '</b></summary>' +
+      html +
+    '</details>';
+  }
+
+  /* Etats actifs : le mets en cours et les lames engagees. Les deux se
+   * comptent en COMBATS restants (pas en temps) et conditionnent la meme
+   * decision — « est-ce que je lance ce raid maintenant ? » —, donc ils se
+   * lisent au meme endroit. Miroir de la carte du profil de bureau, voir
+   * mercSquadCardHtml. */
+  buildActiveStatesSectionHtml(me) {
+    const buff = me.buff && CONSUMABLES[me.buff.type];
+    const mercs = Array.isArray(me.mercs) ? me.mercs : [];
+    let html = '<div class="profile-sec-title">États actifs</div>';
+    html += '<div class="gear-line">' +
+      (buff
+        ? '<img class="gear-art" src="' + this.getConsumableTargetSrc(me.buff.type) + '" alt="">' +
+          '<span class="gear-name">' + esc(buff.label) + ' T' + me.buff.tier + '</span>' +
+          '<span class="tier">' + me.buff.combats + ' combat' + (me.buff.combats > 1 ? 's' : '') + '</span>'
+        : '<span class="gear-ico">🍲</span><span class="gear-name dim">Aucun mets actif</span><span class="tier">—</span>') +
+      '</div>';
+    if (mercs.length) {
+      for (const m of mercs) {
+        const cls = CLASSES[m.speciesClass] || {};
+        html += '<div class="gear-line">' +
+          this.spriteAvatar(m.speciesClass, 'small') +
+          '<span class="gear-name">' + esc(cls.label || m.speciesClass) + ' T' + m.tier +
+            ' <span class="dim">· +' + Math.round(mercCombatPower(m)) + ' puissance</span></span>' +
+          '<span class="tier">' + m.combatsLeft + ' combat' + (m.combatsLeft > 1 ? 's' : '') + '</span>' +
+        '</div>';
+      }
+    } else {
+      html += '<div class="gear-line"><span class="gear-ico">🗡</span>' +
+        '<span class="gear-name dim">Aucune lame engagée</span><span class="tier">—</span></div>';
+    }
+    return html;
+  }
+
   build_profile(body) {
     const me = this.server.me;
     const cls = CLASSES[me.speciesClass];
-    const power = Math.round(maxPower(me));
+    // Total de COMBAT (mercenaires + talents d'equipe), pas maxPower() qui ne
+    // compte que le joueur : c'est ce chiffre qui affronte le monstre, et le
+    // decalage entre les deux etait precisement la source de confusion.
+    const power = teamPowerOf([me], (me.mercs || []).slice(0, MERC_MAX_PER_RAID));
     // En solo (sandbox locale), les outils de triche restent toujours accessibles ;
     // en multijoueur, ils sont réservés au rôle admin.
     const showCheats = !this.server.remote || me.role === 'admin';
@@ -3249,7 +3481,7 @@ showDungeonPopup(tile, onEnter) {
       '</div>' +
 
       '<div class="stat-line">' +
-        '<span>⚔ Puissance <b>' + power + '</b></span>' +
+        '<span>⚔ Puissance de combat <b>' + power + '</b></span>' +
         '<span>♥ PV max <b>' + maxHp(me) + '</b></span>' +
         '<span>' + this.currencyIcon('gold') + ' Or <b>' + (me.gold || 0).toLocaleString('fr-FR') + '</b></span>' +
         '<span>' + this.currencyIcon('premium') + ' ' + PREMIUM_CURRENCY.label + ' <b>' + (me[PREMIUM_CURRENCY.key] || 0).toLocaleString('fr-FR') + '</b></span>' +
@@ -3268,6 +3500,13 @@ showDungeonPopup(tile, onEnter) {
       '<div class="gear-line"><span class="gear-ico">✨</span><span class="gear-name">Apparence ' + esc((skinFor(me.skinId) || {}).label || 'Tenue de base') + '</span><span class="tier">Actuelle</span></div>' +
       '<button id="profileSkinBtn" class="btn wide">Changer d’apparence</button>' +
       '<p class="dim small profile-hint">Unique et évolutif — chez le Forgeron de la Capitale.</p>' +
+
+      '<div class="section-divider">✦</div>' +
+      '<div class="profile-sec-title">Puissance</div>' +
+      this.powerBreakdownHtml(me, { collapsible: true }) +
+
+      '<div class="section-divider">✦</div>' +
+      this.buildActiveStatesSectionHtml(me) +
 
       '<div class="section-divider">✦</div>' +
       this.buildArtifactSectionHtml(me) +
@@ -3644,6 +3883,32 @@ showDungeonPopup(tile, onEnter) {
       '</details>';
   }
 
+  /* Contrats du jour dans le journal des quetes. Ils n'etaient consultables
+   * qu'au Tableau des contrats, a la Capitale : impossible de savoir ou on en
+   * etait sans faire l'aller-retour. Lecture seule ici — l'echange de sceaux
+   * reste au comptoir, mais la progression se suit de partout. */
+  dailyLogHtml(me) {
+    const board = dailyBoardFor(me);
+    const entry = (c, weekly) => {
+      const pct = c.target ? Math.min(100, Math.round((c.progress / c.target) * 100)) : 0;
+      return '<div class="ach-item contract-log' + (c.done ? ' unlocked' : '') + '">' +
+        '<div class="ach-head"><b>' + c.icon + ' ' + esc(c.name) +
+          (weekly ? ' <span class="dim">(semaine)</span>' : '') + '</b>' +
+          '<span>' + (c.done ? '✓ Rempli' : c.progress + ' / ' + c.target) + '</span></div>' +
+        '<div class="dim small">' + esc(c.label) + '</div>' +
+        '<div class="contract-gauge"><span style="width:' + pct + '%"></span></div>' +
+      '</div>';
+    };
+    const done = board.daily.filter((c) => c.done).length;
+    return '<div class="ach-cat">Contrats du jour ' +
+      '<span class="sec-count">' + done + ' / ' + board.daily.length + '</span>' +
+      ' <span class="dim small">· ' + (board.seals || 0) + ' ' + SEAL_CURRENCY.icon + '</span></div>' +
+      '<div class="ach-list">' +
+        board.daily.map((c) => entry(c, false)).join('') +
+        (board.weekly ? entry(board.weekly, true) : '') +
+      '</div>';
+  }
+
   showQuestLog() {
     const me = this.server.me;
     if (!me) return;
@@ -3651,7 +3916,7 @@ showDungeonPopup(tile, onEnter) {
     // ce conteneur interne plutôt qu'à la carte entière — sinon le fond
     // décoratif de .popup-card ne suit pas un contenu qui déborde de sa
     // hauteur max et la liste des quêtes débordait de la popup.
-    const body = '<div class="guide-scroll">' + this.questLogHtml(me) + '</div>' +
+    const body = '<div class="guide-scroll">' + this.dailyLogHtml(me) + this.questLogHtml(me) + '</div>' +
       '<p class="dim small quest-log-footer"><button id="questLogGuideBtn" class="link-btn" type="button">📖 Revoir le guide du débutant</button></p>';
     this.popup('Quêtes', body, [{ label: 'Fermer', primary: true }], { mode: 'generic' });
     const guideBtn = $('questLogGuideBtn');
@@ -4305,6 +4570,8 @@ showDungeonPopup(tile, onEnter) {
       '<button id="restBtn" class="btn wide">⛲ Se reposer à la fontaine — PV restaurés (gratuit)</button>' +
       '<button id="travelBtn" class="btn wide">🌀 Réseau de téléporteurs</button>' +
       '<button id="marmiteBtn" class="btn wide">🍲 La Marmite — cuisine & buffs</button>' +
+      '<button id="contractsBtn" class="btn wide">🔖 Tableau des contrats — quotidiens & sceaux</button>' +
+      '<button id="mercBtn" class="btn wide">🗡 La Compagnie Franche — mercenaires</button>' +
       this.upgradeCard('weapon') +
       this.upgradeCard('armor') +
       this.engineCraftSection();
@@ -4314,6 +4581,8 @@ showDungeonPopup(tile, onEnter) {
     });
     $('travelBtn').addEventListener('click', () => this.showFastTravelPopupFromCapital());
     $('marmiteBtn').addEventListener('click', () => this.showSheet('marmite'));
+    $('contractsBtn').addEventListener('click', () => this.showSheet('contracts'));
+    $('mercBtn').addEventListener('click', () => this.showSheet('mercenaries'));
     body.querySelectorAll('[data-upgrade]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const r = await Promise.resolve(this.server.upgrade(btn.dataset.upgrade));
@@ -4327,6 +4596,201 @@ showDungeonPopup(tile, onEnter) {
         if (r.ok) this.showSheet('capital');
       });
     });
+  }
+
+  /* ---------- La Compagnie Franche ----------
+   * Un mercenaire n'existe pas sur la carte : on achète un contrat (objet
+   * d'inventaire), on l'active, et il rejoint ensuite TOUT SEUL chaque
+   * combat jusqu'à épuisement de ses charges — même principe que le buff
+   * de nourriture, qu'on ne réapplique pas à chaque coup. */
+  build_mercenaries(body) {
+    const me = this.server.me;
+    const mastery = me.weaponMastery || 1;
+    const locked = mastery < MERC_MIN_MASTERY;
+    const atShop = this.atSanctuaryClient(me);
+    const active = Array.isArray(me.mercs) ? me.mercs : [];
+
+    const activeHtml = active.length
+      ? '<div class="merc-active-list">' + active.map((m) => {
+          const cls = CLASSES[m.speciesClass] || {};
+          const pct = Math.round((m.combatsLeft / MERC_CONTRACT_COMBATS) * 100);
+          return '<div class="merc-active">' +
+            '<div class="merc-active-head">' +
+              '<b style="color:' + (cls.color || '#e4e8ee') + '">' + esc(cls.label || m.speciesClass) + ' T' + m.tier + '</b>' +
+              '<span class="dim small">' + esc(cls.role || '') + '</span>' +
+            '</div>' +
+            '<div class="merc-gauge"><span style="width:' + pct + '%"></span></div>' +
+            '<div class="merc-active-foot">' +
+              '<span class="dim small">' + m.combatsLeft + ' / ' + MERC_CONTRACT_COMBATS + ' combats restants</span>' +
+              '<button class="btn danger btn-small" data-dismiss-merc="' + m.id + '">Congédier</button>' +
+            '</div>' +
+          '</div>';
+        }).join('') + '</div>'
+      : '<p class="empty">Aucune lame à vos côtés.</p>';
+
+    // Contrats détenus mais pas encore activés
+    const owned = Object.keys(me.inventory || {})
+      .map((k) => ({ k, p: parseStackKey(k) }))
+      .filter((e) => isMercContractType(e.p.type));
+    const ownedHtml = owned.length
+      ? owned.map((e) => {
+          const cls = MERC_CLASS_BY_CONTRACT_TYPE[e.p.type];
+          const label = (CLASSES[cls] || {}).label || cls;
+          const full = active.length >= MERC_MAX_ACTIVE_PER_PLAYER;
+          return '<div class="merc-row">' +
+            '<span class="merc-row-name">' + esc(label) + ' T' + e.p.tier + ' <span class="dim">×' + me.inventory[e.k] + '</span></span>' +
+            '<button class="btn primary btn-small" data-activate-merc="' + cls + '" data-tier="' + e.p.tier + '"' +
+              (full ? ' disabled' : '') + '>Engager</button>' +
+          '</div>';
+        }).join('')
+      : '<p class="empty">Aucun contrat en réserve.</p>';
+
+    const shopHtml = MERC_TIERS.map((tier) => {
+      const price = MERC_PRICE_GOLD[tier];
+      const afford = (me.gold || 0) >= price;
+      const rows = Object.keys(MERC_CONTRACT_TYPES).map((cls) => {
+        const c = CLASSES[cls];
+        const power = Math.round(mercCombatPower({ speciesClass: cls, tier }));
+        return '<button class="merc-buy" data-buy-merc="' + cls + '" data-tier="' + tier + '"' +
+            (afford && !locked && atShop ? '' : ' disabled') + '>' +
+          this.spriteAvatar(cls, 'small merc-buy-avatar') +
+          '<span class="merc-buy-body">' +
+            '<b>' + esc(c.label) + '</b>' +
+            '<span class="dim small">' + esc(c.role) + ' · +' + power + ' de puissance</span>' +
+          '</span>' +
+          '<span class="merc-buy-price">' + this.currencyIcon('gold', 'small') + ' ' + price + '</span>' +
+        '</button>';
+      }).join('');
+      return '<h3>Lames de tier ' + tier + ' — ' + price + ' 🪙 · ' + MERC_CONTRACT_COMBATS + ' combats</h3>' +
+        '<div class="merc-buy-grid">' + rows + '</div>';
+    }).join('');
+
+    body.innerHTML =
+      '<p class="dim">Des lames à louer pour qui n’a personne sous la main. ' +
+        'Un mercenaire vaut <b>' + Math.round(MERC_POWER_RATIO * 100) + ' %</b> de la puissance brute d’un joueur de son tier, ' +
+        'mais <b>apporte son bonus de rôle</b> — engagez celui qui manque à votre groupe, pas le plus gros bâton.</p>' +
+      '<p class="dim small">Un contrat dure ' + MERC_CONTRACT_COMBATS + ' combats, soit une descente de donjon complète (' +
+        CONFIG.DUNGEON.BOSS_KILLS_REQUIRED + ' mobs + le boss). ' +
+        MERC_MAX_ACTIVE_PER_PLAYER + ' lames actives par joueur, ' + MERC_MAX_PER_RAID + ' engagées par combat au maximum. ' +
+        'Les sièges de château n’en acceptent aucune.</p>' +
+      (locked ? '<p class="merc-locked">Maîtrise d’arme ' + MERC_MIN_MASTERY + ' requise (vous êtes ' + mastery + ').</p>' : '') +
+      (atShop ? '' : '<p class="dim small">Le comptoir est à la Capitale et dans les villages — l’achat y est réservé. Engager une lame déjà signée reste possible partout.</p>') +
+      '<h3>À vos côtés (' + active.length + ' / ' + MERC_MAX_ACTIVE_PER_PLAYER + ')</h3>' +
+      activeHtml +
+      '<h3>Contrats en réserve</h3>' +
+      ownedHtml +
+      shopHtml;
+
+    body.querySelectorAll('[data-buy-merc]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.buyMercContract(btn.dataset.buyMerc, Number(btn.dataset.tier)));
+        this.toast(r.ok ? '🗡 Contrat signé.' : r.error);
+        if (r.ok) this.showSheet('mercenaries');
+      });
+    });
+    body.querySelectorAll('[data-activate-merc]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const r = await Promise.resolve(this.server.activateMerc(btn.dataset.activateMerc, Number(btn.dataset.tier)));
+        this.toast(r.ok ? '🗡 La lame rejoint votre escouade.' : r.error);
+        if (r.ok) this.showSheet('mercenaries');
+      });
+    });
+    body.querySelectorAll('[data-dismiss-merc]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.confirm('Congédier cette lame ?', '<p>Le contrat restant est <b>perdu</b>, pas rendu.</p>', 'Congédier', async () => {
+          const r = await Promise.resolve(this.server.dismissMerc(btn.dataset.dismissMerc));
+          if (!r.ok) this.toast(r.error);
+          else this.showSheet('mercenaries');
+        });
+      });
+    });
+  }
+
+  /* ---------- Tableau des contrats ----------
+   * Les récompenses sont créditées AUTOMATIQUEMENT dès qu'un contrat est
+   * rempli (même contrat que les quêtes et les hauts faits) : ce panneau
+   * est un tableau de bord, pas un guichet où l'on risquerait d'oublier de
+   * réclamer. Seule la boutique aux sceaux exige d'être au comptoir. */
+  build_contracts(body) {
+    const me = this.server.me;
+    const board = dailyBoardFor(me);
+    const atShop = this.atSanctuaryClient(me);
+
+    const card = (c, weekly) => {
+      const pct = c.target ? Math.round((c.progress / c.target) * 100) : 0;
+      const bits = [c.reward.gold + ' 🪙', c.reward.seals + ' ' + SEAL_CURRENCY.icon];
+      if (c.reward.moonstones) bits.push(c.reward.moonstones + ' ' + PREMIUM_CURRENCY.icon);
+      return '<div class="contract-card' + (c.done ? ' done' : '') + (weekly ? ' weekly' : '') + '">' +
+        '<div class="contract-head">' +
+          '<span class="contract-icon">' + c.icon + '</span>' +
+          '<span class="contract-name">' + esc(c.name) + '</span>' +
+          (c.done ? '<span class="contract-done">✓ Rempli</span>' : '<span class="contract-count">' + c.progress + ' / ' + c.target + '</span>') +
+        '</div>' +
+        '<div class="contract-label">' + esc(c.label) + '</div>' +
+        '<div class="contract-gauge"><span style="width:' + Math.min(100, pct) + '%"></span></div>' +
+        '<div class="contract-reward">' + bits.join(' · ') + '</div>' +
+      '</div>';
+    };
+
+    const artifactOptions = ARTIFACT_ORDER
+      .filter((id) => !(me.ownedArtifacts || []).includes(id))
+      .map((id) => '<option value="' + id + '">' + esc(ARTIFACT_ITEMS[id].label) + '</option>').join('');
+    const classOptions = Object.keys(MERC_CONTRACT_TYPES)
+      .map((c) => '<option value="' + c + '">' + esc(CLASSES[c].label) + '</option>').join('');
+
+    const shopHtml = SEAL_SHOP.map((item) => {
+      const afford = (board.seals || 0) >= item.cost;
+      let picker = '';
+      if (item.needsArtifact) {
+        picker = artifactOptions
+          ? '<select class="seal-choice" data-choice-for="' + item.id + '">' + artifactOptions + '</select>'
+          : '<p class="dim small">Tous les artefacts sont déjà en votre possession.</p>';
+      } else if (item.needsClass) {
+        picker = '<select class="seal-choice" data-choice-for="' + item.id + '">' + classOptions + '</select>';
+      }
+      const blocked = !afford || !atShop || (item.needsArtifact && !artifactOptions);
+      return '<div class="seal-item">' +
+        '<div class="seal-item-head"><b>' + esc(item.label) + '</b><span class="seal-cost">' + item.cost + ' ' + SEAL_CURRENCY.icon + '</span></div>' +
+        '<div class="dim small">' + esc(item.desc) + '</div>' +
+        picker +
+        '<button class="btn primary wide btn-small" data-seal-buy="' + item.id + '"' + (blocked ? ' disabled' : '') + '>Échanger</button>' +
+      '</div>';
+    }).join('');
+
+    body.innerHTML =
+      '<div class="gold-banner">' +
+        '<span class="gold-coin">' + SEAL_CURRENCY.icon + '</span>' +
+        '<span class="gold-label">' + SEAL_CURRENCY.label + '</span>' +
+        '<span class="gold-amount">' + (board.seals || 0) + '</span>' +
+      '</div>' +
+      '<p class="dim small">Trois contrats par jour, un par semaine. Réinitialisation à ' + board.resetHour + ' h (heure de Paris). ' +
+        'Les récompenses tombent dès qu’un contrat est rempli — rien à réclamer.</p>' +
+      '<h3>Contrats du jour</h3>' +
+      (board.daily.length ? board.daily.map((c) => card(c, false)).join('') : '<p class="empty">Aucun contrat disponible.</p>') +
+      (board.weekly ? '<h3>Contrat de la semaine</h3>' + card(board.weekly, true) : '') +
+      '<h3>Comptoir aux sceaux</h3>' +
+      (atShop ? '' : '<p class="dim small">Rendez-vous à la Capitale ou dans un village pour échanger vos sceaux.</p>') +
+      '<div class="seal-shop">' + shopHtml + '</div>';
+
+    body.querySelectorAll('[data-seal-buy]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.sealBuy;
+        const sel = body.querySelector('[data-choice-for="' + id + '"]');
+        const r = await Promise.resolve(this.server.buySealItem(id, sel ? sel.value : ''));
+        this.toast(r.ok ? '🔖 Échange effectué.' : r.error);
+        if (r.ok) this.showSheet('contracts');
+      });
+    });
+  }
+
+  /* La case porte-t-elle un comptoir (Capitale ou village) ? Miroir client de
+   * atSanctuaryPlayer() côté serveur — sert uniquement à griser les boutons,
+   * le serveur revérifie de toute façon. */
+  atSanctuaryClient(p) {
+    if (!p || !p.pos || (p.mapId || 'world') !== 'world') return false;
+    if (p.pos.x === 0 && p.pos.y === 0) return true;
+    const tile = this.server.tiles && this.server.tiles.get(tileKey(p.pos.x, p.pos.y));
+    return !!(tile && tile.content && (tile.content.kind === 'capital' || tile.content.kind === 'village'));
   }
 
   engineCraftSection() {

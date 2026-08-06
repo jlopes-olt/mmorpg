@@ -327,6 +327,172 @@ td.name-cell { font-weight: 700; white-space: normal; }
   75% { transform: translateX(-3px); }
 }
 
+/* ---------- Panneau d'équilibrage des groupes ---------- */
+.balance-panel {
+  top: 50%;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  transform: translate(-50%, -50%);
+  width: min(1180px, 96vw);
+  max-height: 92vh;
+  border-radius: 16px;
+  border: 1px solid rgba(228, 232, 238, 0.1);
+}
+.balance-panel h2 { margin: 0 0 6px; font-size: 20px; padding-right: 34px; }
+.balance-panel > .player-panel-inner > p.dim { margin: 0 0 4px; max-width: 78ch; line-height: 1.5; }
+.balance-panel code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(228, 232, 238, 0.08);
+  color: #c7cdda;
+}
+
+.bal-section { margin-top: 26px; }
+.bal-section h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  color: #f0c565;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(228, 232, 238, 0.09);
+}
+.bal-section > p.dim { margin: 0 0 10px; max-width: 84ch; line-height: 1.5; }
+
+.bal-model {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+.bal-card {
+  padding: 11px 13px;
+  border-radius: 10px;
+  background: #12151b;
+  border: 1px solid rgba(228, 232, 238, 0.07);
+}
+.bal-card-title {
+  display: block;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8992a3;
+  margin-bottom: 4px;
+}
+.bal-card b { display: block; font-size: 14px; color: #f0c565; font-weight: 800; line-height: 1.35; }
+.bal-card-desc { display: block; margin-top: 6px; font-size: 11.5px; color: #8992a3; line-height: 1.45; }
+
+.bal-controls { display: flex; gap: 12px; flex-wrap: wrap; margin: 10px 0 12px; }
+.bal-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  color: #8992a3;
+  /* max-width : sans lui, un bloc de contrôles à une seule liste (« seuil de
+     fiabilité », « tier équipé ») s'étirerait sur toute la largeur du panneau. */
+  flex: 1 1 210px;
+  max-width: 340px;
+}
+.bal-controls select { width: 100%; }
+
+.bal-table-wrap {
+  overflow-x: auto;
+  border-radius: 10px;
+  border: 1px solid rgba(228, 232, 238, 0.08);
+}
+table.bal-table { width: 100%; min-width: 0; border-collapse: separate; border-spacing: 0; font-size: 12px; }
+table.bal-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 8px 9px;
+  text-align: center;
+  background: #1f242e;
+  color: #8992a3;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+table.bal-table tbody tr { cursor: default; border-top: none; }
+table.bal-table tbody tr:hover { background: transparent; }
+table.bal-table td {
+  padding: 7px 9px;
+  text-align: center;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  border-top: 1px solid rgba(228, 232, 238, 0.05);
+}
+/* Colonne de gauche épinglée : les matrices débordent en largeur, on doit
+   toujours savoir de quel contenu parle la ligne qu'on lit. */
+table.bal-table .bal-sticky {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  text-align: left;
+  background: #181c24;
+  min-width: 200px;
+  white-space: normal;
+}
+table.bal-table thead .bal-sticky { z-index: 3; background: #1f242e; }
+table.bal-table .bal-name { font-weight: 600; color: #e4e8ee; line-height: 1.3; }
+.bal-subnote { display: block; font-size: 10.5px; font-weight: 400; color: #737b8c; margin-top: 2px; }
+table.bal-table .bal-force { color: #8992a3; font-weight: 600; }
+table.bal-table .bal-need { font-weight: 800; font-size: 13px; }
+table.bal-table .bal-compo { text-align: left; font-weight: 600; color: #c7cdda; }
+
+tr.bal-group-row td {
+  background: #12151b;
+  text-align: left;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8992a3;
+  font-weight: 700;
+  padding: 6px 9px;
+}
+tr.bal-boss-row .bal-sticky { box-shadow: inset 3px 0 0 #c89a3a; }
+tr.bal-power-row td { color: #8992a3; font-style: italic; background: rgba(228, 232, 238, 0.02); }
+tr.bal-power-row .bal-sticky { font-style: normal; }
+
+/* Échelle de lisibilité des chances de victoire — quatre paliers plutôt qu'un
+   dégradé continu : on cherche à repérer d'un coup d'œil le seuil où un
+   contenu bascule, pas à lire une valeur exacte (elle est écrite dedans). */
+.wc-lo  { background: rgba(200, 60, 45, 0.20); color: #ff9c8c; }
+.wc-mid { background: rgba(210, 140, 40, 0.20); color: #f0be6d; }
+.wc-hi  { background: rgba(150, 175, 60, 0.18); color: #cadb8a; }
+.wc-max { background: rgba(60, 165, 105, 0.20); color: #86dcae; }
+
+.bal-legend { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11.5px; color: #8992a3; margin: 8px 0 0; }
+.wc-swatch { display: inline-block; width: 14px; height: 14px; border-radius: 4px; vertical-align: middle; }
+.bal-legend .wc-swatch:not(:first-child) { margin-left: 10px; }
+
+.bal-note { margin: 10px 0 0; font-size: 12px; color: #8992a3; line-height: 1.55; max-width: 100ch; }
+.bal-note b { color: #c7cdda; }
+
+.bal-warnings { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.bal-warn {
+  padding: 11px 14px;
+  border-radius: 10px;
+  background: #12151b;
+  border: 1px solid rgba(228, 232, 238, 0.07);
+  border-left: 3px solid #4a5163;
+}
+.bal-warn b { display: block; font-size: 13px; color: #e4e8ee; margin-bottom: 4px; }
+.bal-warn p { margin: 0; font-size: 12.5px; color: #8992a3; line-height: 1.55; }
+.bal-warn p b { display: inline; color: #c7cdda; margin: 0; font-size: inherit; }
+.bal-warn.warn { border-left-color: #d2a03c; }
+.bal-warn.warn b { color: #f0c565; }
+.bal-warn.info { border-left-color: #5b7fa8; }
+.bal-warn.ok { border-left-color: #4caf6f; }
+
+@media (max-width: 760px) {
+  .balance-panel { width: 100vw; max-height: 100vh; height: 100vh; border-radius: 0; }
+  table.bal-table .bal-sticky { min-width: 150px; }
+}
+
 /* ---------- Toasts ---------- */
 .toasts {
   position: fixed;

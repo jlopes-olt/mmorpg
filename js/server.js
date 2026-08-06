@@ -586,8 +586,12 @@ class ServerSim {
       activeChar: 0,
       charSlots: CONFIG.FREE_CHAR_SLOTS,
       visitedVillages: [],
+      [SEAL_CURRENCY.key]: 0,
+      mercs: [],
+      daily: null,
     };
     ensureAchievementState(p);
+    ensureDailyState(p);
     this.skinStateOf(p);
     this.questStateOf(p);
     applyCharacter(p, 0);
@@ -828,7 +832,9 @@ class ServerSim {
     }
     const key = stackKey(item, tier);
     me.inventory[key] = (me.inventory[key] || 0) + 1;
+    if (tier >= 3) me.stats.cookedT3Plus = (me.stats.cookedT3Plus || 0) + 1;
     this.log(CONSUMABLES[item].icon + ' ' + CONSUMABLES[item].label + ' T' + tier + ' cuisiné !');
+    this.notifyDailies();
     this.emit('self', me);
     return { ok: true };
   }
@@ -958,6 +964,10 @@ class ServerSim {
         for (const a of checkAchievements(me, ['Exploration'])) this.emit('achievementUnlocked', { id: a.id, label: a.label, category: a.category, reward: a.reward || {} });
         this.log('📍 ' + (arrived.content.name || 'Village') + ' découvert — téléporteur débloqué !');
       }
+      // Suivi journalier distinct de visitedVillages (qui sature a 8) :
+      // voir le contrat « Tournee des villages » dans js/dailies.js.
+      const d = ensureDailyState(me);
+      if (!d.villagesToday.includes(vk)) { d.villagesToday.push(vk); this.notifyDailies(); }
     }
     // Inconditionnel : intro_move ne dépend que de la position (voir
     // server/game.js pour le raisonnement complet).
@@ -1005,6 +1015,7 @@ class ServerSim {
     this.log('+' + qty + ' ' + resourceLabel(node.type, node.tier) + ' (+' + xp + ' XP récolte)');
     this.checkLevelUp(me, 'harvest');
     me.stats.harvest[node.type] = (me.stats.harvest[node.type] || 0) + qty;
+    this.notifyDailies();
     for (const a of checkAchievements(me, ['Récolte'])) this.emit('achievementUnlocked', { id: a.id, label: a.label, category: a.category, reward: a.reward || {} });
     for (const q of checkQuests(me)) this.emit('questCompleted', { id: q.id, title: q.title, reward: q.reward || {} });
     this.emit('self', me);
@@ -1067,9 +1078,144 @@ class ServerSim {
     raid.participants.push(bot.id);
   }
 
+  /* ---------- Mercenaires & contrats quotidiens ----------
+   * Même comportement qu'en ligne : la logique commune vit dans
+   * js/config.js (MERC_*) et js/dailies.js, ce fichier ne fait que la
+   * brancher sur l'état local. Contrairement aux châteaux (multijoueur
+   * uniquement, cf. craftSiegeEngine plus haut), ce sont précisément les
+   * systèmes destinés au jeu en solo : les stubber ici n'aurait aucun sens. */
+
+  notifyDailies() {
+    const me = this.me;
+    if (!me) return [];
+    const done = checkDailies(me);
+    for (const c of done) this.emit('contractCompleted', c);
+    if (done.length) this.emit('self', me);
+    return done;
+  }
+
+  buyMercContract(speciesClass, tier) {
+    const me = this.me;
+    tier = Math.floor(Number(tier));
+    if (!MERC_CONTRACT_TYPES[speciesClass]) return { ok: false, error: 'Classe de mercenaire inconnue.' };
+    if (!MERC_TIERS.includes(tier)) return { ok: false, error: 'Tier de contrat invalide.' };
+    if (!this.atSanctuary(me)) return { ok: false, error: 'La Compagnie Franche tient comptoir à la Capitale et dans les villages.' };
+    if ((me.weaponMastery || 1) < MERC_MIN_MASTERY) {
+      return { ok: false, error: 'Maîtrise d’arme ' + MERC_MIN_MASTERY + ' requise pour engager une lame.' };
+    }
+    const price = MERC_PRICE_GOLD[tier];
+    if ((me.gold || 0) < price) return { ok: false, error: 'Il faut ' + price + ' 🪙 pour ce contrat.' };
+    me.gold -= price;
+    const key = mercContractKey(speciesClass, tier);
+    me.inventory[key] = (me.inventory[key] || 0) + 1;
+    this.log('🗡 ' + mercContractLabel(speciesClass) + ' T' + tier + ' signé.');
+    this.emit('self', me);
+    return { ok: true };
+  }
+
+  activateMerc(speciesClass, tier) {
+    const me = this.me;
+    tier = Math.floor(Number(tier));
+    if (!MERC_CONTRACT_TYPES[speciesClass]) return { ok: false, error: 'Classe de mercenaire inconnue.' };
+    if (!Array.isArray(me.mercs)) me.mercs = [];
+    if (me.mercs.length >= MERC_MAX_ACTIVE_PER_PLAYER) {
+      return { ok: false, error: 'Déjà ' + MERC_MAX_ACTIVE_PER_PLAYER + ' lames à vos côtés — renvoyez-en une d’abord.' };
+    }
+    const key = mercContractKey(speciesClass, tier);
+    if ((me.inventory[key] || 0) < 1) return { ok: false, error: 'Vous ne possédez pas ce contrat.' };
+    me.inventory[key] -= 1;
+    if (me.inventory[key] <= 0) delete me.inventory[key];
+    me.mercs.push({
+      id: 'm' + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36),
+      speciesClass, tier, combatsLeft: MERC_CONTRACT_COMBATS,
+    });
+    this.log('🗡 ' + (CLASSES[speciesClass] || {}).label + ' T' + tier + ' rejoint votre escouade (' + MERC_CONTRACT_COMBATS + ' combats).');
+    this.emit('self', me);
+    return { ok: true };
+  }
+
+  dismissMerc(mercId) {
+    const me = this.me;
+    if (!Array.isArray(me.mercs)) me.mercs = [];
+    const m = me.mercs.find((x) => x.id === String(mercId));
+    if (!m) return { ok: false, error: 'Mercenaire introuvable.' };
+    me.mercs = me.mercs.filter((x) => x.id !== m.id);
+    this.log('🗡 ' + (CLASSES[m.speciesClass] || {}).label + ' est congédié. Le contrat est perdu.');
+    this.emit('self', me);
+    return { ok: true };
+  }
+
+  contractsBoard() { return { ok: true, board: dailyBoardFor(this.me) }; }
+
+  buySealItem(itemId, choice) {
+    const me = this.me;
+    const item = SEAL_SHOP_BY_ID[String(itemId || '')];
+    if (!item) return { ok: false, error: 'Article inconnu.' };
+    if (!this.atSanctuary(me)) return { ok: false, error: 'Le Tableau des contrats est à la Capitale et dans les villages.' };
+    ensureDailyState(me);
+    if ((me.seals || 0) < item.cost) {
+      return { ok: false, error: 'Il faut ' + item.cost + ' ' + SEAL_CURRENCY.icon + ' (vous en avez ' + (me.seals || 0) + ').' };
+    }
+    let apply = null;
+    if (item.needsArtifact) {
+      const artifact = artifactFor(String(choice || ''));
+      if (!artifact) return { ok: false, error: 'Choisissez un artefact.' };
+      if ((me.ownedArtifacts || []).includes(artifact.id)) return { ok: false, error: 'Vous possédez déjà ' + artifact.label + '.' };
+      apply = () => this.grantArtifactFragment(me, artifact.id, 1);
+    } else if (item.needsClass) {
+      const cls = String(choice || '');
+      if (!MERC_CONTRACT_TYPES[cls]) return { ok: false, error: 'Choisissez une classe de mercenaire.' };
+      apply = () => { const k = mercContractKey(cls, 6); me.inventory[k] = (me.inventory[k] || 0) + 1; };
+    } else if (item.grant && item.grant.title) {
+      if ((me.titles || []).includes(item.grant.title)) return { ok: false, error: 'Titre déjà obtenu.' };
+      apply = () => { me.titles.push(item.grant.title); };
+    } else if (item.grant && item.grant.moonstones) {
+      apply = () => { me[PREMIUM_CURRENCY.key] = (me[PREMIUM_CURRENCY.key] || 0) + item.grant.moonstones; };
+    } else if (item.grant && item.grant.item) {
+      apply = () => { me.inventory[item.grant.item] = (me.inventory[item.grant.item] || 0) + (item.grant.qty || 1); };
+    }
+    if (!apply) return { ok: false, error: 'Article indisponible.' };
+    me.seals -= item.cost;
+    apply();
+    this.log(SEAL_CURRENCY.icon + ' Échangé : ' + item.label + ' (−' + item.cost + ').');
+    this.emit('self', me);
+    return { ok: true };
+  }
+
+  /* Mercenaires engagés (même règle qu'en ligne : chef d'abord, plafonné à
+   * MERC_MAX_PER_RAID) — voir Game.raidMercsOf côté serveur. */
+  raidMercsOf(raid) {
+    if (!raid || raid.siege) return [];
+    const ordered = [raid.leaderId].concat(raid.participants.filter((id) => id !== raid.leaderId));
+    const out = [];
+    for (const id of ordered) {
+      const p = this.players.get(id);
+      if (!p || p.bot || !Array.isArray(p.mercs)) continue;
+      for (const m of p.mercs) {
+        if (out.length >= MERC_MAX_PER_RAID) return out;
+        if (Number(m.combatsLeft) > 0) out.push({ ownerId: id, mercId: m.id, speciesClass: m.speciesClass, tier: m.tier });
+      }
+    }
+    return out;
+  }
+
+  consumeRaidMercs(engaged) {
+    for (const e of engaged) {
+      const p = this.players.get(e.ownerId);
+      if (!p || !Array.isArray(p.mercs)) continue;
+      const m = p.mercs.find((x) => x.id === e.mercId);
+      if (!m) continue;
+      m.combatsLeft = Math.max(0, Number(m.combatsLeft) - 1);
+      if (m.combatsLeft <= 0) {
+        p.mercs = p.mercs.filter((x) => x.id !== m.id);
+        this.log('Contrat termine : ' + (CLASSES[m.speciesClass] || {}).label + ' T' + m.tier + ' reprend la route.');
+      }
+    }
+  }
+
   teamForce(raid) {
     const members = raid.participants.map((id) => this.players.get(id)).filter(Boolean);
-    return teamPowerOf(members);
+    return teamPowerOf(members, this.raidMercsOf(raid));
   }
 
   raidChance(raid) {
@@ -1082,7 +1228,8 @@ class ServerSim {
     if (!tile || !tile.content) return;
     const monster = tile.content;
     const members = raid.participants.map((id) => this.players.get(id)).filter(Boolean);
-    const force = this.teamForce(raid);
+    const engagedMercs = this.raidMercsOf(raid);
+    const force = teamPowerOf(members, engagedMercs);
     // Combat probabiliste : le sort en décide, à hauteur des puissances —
     // même jet de dé + attribution aléatoire qu'en mode connecté (voir
     // Game.resolveRaid côté serveur).
@@ -1172,11 +1319,16 @@ class ServerSim {
         this.checkLevelUp(p, 'weapon');
         p.stats.monsterKills = (p.stats.monsterKills || 0) + 1;
         p.stats.kills[monster.type] = (p.stats.kills[monster.type] || 0) + 1;
+        if (!p.stats.killsByTier || typeof p.stats.killsByTier !== 'object') p.stats.killsByTier = {};
+        p.stats.killsByTier[monster.tier] = (p.stats.killsByTier[monster.tier] || 0) + 1;
         if (monster.boss) p.stats.bossKills = (p.stats.bossKills || 0) + 1;
         for (const a of checkAchievements(p, ['Combat', 'Équipement', 'Commerce'])) this.emit('achievementUnlocked', { id: a.id, label: a.label, category: a.category, reward: a.reward || {} });
         for (const q of checkQuests(p)) this.emit('questCompleted', { id: q.id, title: q.title, reward: q.reward || {} });
       }
     }
+
+    this.consumeRaidMercs(engagedMercs);
+    this.notifyDailies();
 
     // Les buffs de cuisine se consument à chaque combat, victoire ou défaite
     const meP = this.me;

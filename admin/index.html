@@ -10,7 +10,7 @@
        Du coup les refs de CETTE page (admin.css/admin.js) doivent rester en /admin/... . -->
   <base href="/">
   <link rel="icon" type="image/png" sizes="192x192" href="/assets/icons/icon-192.png">
-  <link rel="stylesheet" href="/admin/admin.css?v=6">
+  <link rel="stylesheet" href="/admin/admin.css?v=7">
 </head>
 <body>
 
@@ -33,6 +33,7 @@
       <div class="topbar-right">
         <span id="whoami" class="dim"></span>
         <button id="openSimulatorBtn" class="btn" title="Aperçu classe/skin/accessoire/monture">🎨 Simulateur d’apparence</button>
+        <button id="openBalanceBtn" class="btn" title="Combien de joueurs faut-il pour chaque contenu de groupe ?">⚖️ Équilibrage des groupes</button>
         <button id="refreshBtn" class="btn" title="Rafraîchir">↻ Rafraîchir</button>
         <button id="logoutBtn" class="btn">Se déconnecter</button>
       </div>
@@ -60,6 +61,7 @@
             <th>Armure</th>
             <th>Or</th>
             <th>Écailles Lunaires</th>
+            <th>Sceaux</th>
             <th>Perso.</th>
             <th>Inscrit le</th>
             <th>Dernière connexion</th>
@@ -117,10 +119,141 @@
   </aside>
   <div id="simOverlay" class="panel-overlay hidden"></div>
 
+  <!-- Équilibrage des contenus de groupe : combien de joueurs faut-il, à quel
+       tier, pour chaque contenu ? Tout est RECALCULÉ en direct à partir des
+       vraies fonctions de js/config.js (teamPowerOf/winChance/maxHp) et des
+       forces de js/world.js (boss de donjon) — aucune valeur n'est recopiée
+       à la main, la page ne peut donc pas dériver de l'équilibrage réel. -->
+  <aside id="balancePanel" class="player-panel balance-panel hidden">
+    <div class="player-panel-inner">
+      <button id="balancePanelClose" class="panel-close" aria-label="Fermer">✕</button>
+      <h2>Équilibrage des contenus de groupe</h2>
+      <p class="dim small">Combien de joueurs faut-il, et à quel équipement, pour chaque contenu ?
+        Tout est recalculé en direct depuis <code>js/config.js</code> et <code>js/world.js</code> —
+        modifier l’équilibrage met cette page à jour automatiquement.</p>
+
+      <section class="bal-section">
+        <h3>Comment le combat est résolu</h3>
+        <div id="balModel" class="bal-model"></div>
+        <p class="bal-note" id="balModelNote"></p>
+      </section>
+
+      <section class="bal-section">
+        <h3>Hypothèses de simulation</h3>
+        <div class="bal-controls">
+          <label>Composition
+            <select id="balComp">
+              <option value="balanced">Équilibrée (Ours, Cerf, Lion, Chat, Corbeau, Renard…)</option>
+              <option value="best">Optimale (meilleure combinaison possible)</option>
+              <option value="worst">Défavorable (pire combinaison possible)</option>
+            </select>
+          </label>
+          <label>Artefact équipé
+            <select id="balArtifact"></select>
+          </label>
+          <label>Buff nourriture
+            <select id="balBuff">
+              <option value="0">Aucun</option>
+              <option value="1">Ragoût T1 (+5 %)</option>
+              <option value="3">Ragoût T3 (+15 %)</option>
+              <option value="5">Ragoût T5 (+25 %)</option>
+              <option value="6">Ragoût T6 (+30 %)</option>
+            </select>
+          </label>
+          <label>Points de vie
+            <select id="balHp">
+              <option value="1">100 % (frais)</option>
+              <option value="0.75">75 %</option>
+              <option value="0.5">50 %</option>
+              <option value="0.25">25 % (agonie)</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <section class="bal-section">
+        <h3>Nombre de joueurs requis, par contenu et par tier</h3>
+        <p class="dim small">Effectif minimum pour atteindre le seuil de fiabilité choisi. C’est le tableau à lire en premier.</p>
+        <div class="bal-controls">
+          <label>Seuil de fiabilité
+            <select id="balTarget">
+              <option value="0.5">50 % — pile ou face</option>
+              <option value="0.7" selected>70 % — jouable</option>
+              <option value="0.9">90 % — fiable</option>
+            </select>
+          </label>
+        </div>
+        <div class="bal-table-wrap" id="balRequired"></div>
+      </section>
+
+      <section class="bal-section">
+        <h3>Matrice détaillée : chance de victoire</h3>
+        <div class="bal-controls">
+          <label>Tier équipé (arme + armure + maîtrise)
+            <select id="balTier"></select>
+          </label>
+        </div>
+        <div class="bal-table-wrap" id="balMatrix"></div>
+        <p class="bal-legend">
+          <span class="wc-swatch wc-lo"></span> &lt; 25 %
+          <span class="wc-swatch wc-mid"></span> 25–60 %
+          <span class="wc-swatch wc-hi"></span> 60–90 %
+          <span class="wc-swatch wc-max"></span> ≥ 90 %
+        </p>
+      </section>
+
+      <section class="bal-section">
+        <h3>Siège de château</h3>
+        <p class="dim small">Défense = <code>(300 + niveau × 150 + fortification × <span id="balFortPerLvl"></span>) × facteur de blessure</code>,
+          plus la puissance de chaque défenseur présent sur la case à la résolution (voir <code>castleDefenseForce</code>, server/game.js).</p>
+        <div class="bal-controls">
+          <label>Tier des assaillants
+            <select id="balCastleTier"></select>
+          </label>
+          <label>PS du château
+            <select id="balCastleHp">
+              <option value="1">100 % (intact)</option>
+              <option value="0.6">60 %</option>
+              <option value="0.3">30 % (entamé)</option>
+            </select>
+          </label>
+          <label>Défenseurs présents
+            <select id="balDefenders">
+              <option value="0">0 — château désert</option>
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="5">5</option>
+            </select>
+          </label>
+        </div>
+        <div class="bal-table-wrap" id="balCastle"></div>
+        <p class="bal-note" id="balSiegeNote"></p>
+      </section>
+
+      <section class="bal-section">
+        <h3>Poids de la composition</h3>
+        <p class="dim small">Toutes les combinaisons de classes possibles pour un effectif donné, à équipement identique.
+          L’écart mesure ce que les bonus de rôle (qui ne se cumulent jamais avec eux-mêmes) rapportent réellement.</p>
+        <div class="bal-table-wrap" id="balCompos"></div>
+      </section>
+
+      <section class="bal-section">
+        <h3>Points d’attention</h3>
+        <div id="balWarnings" class="bal-warnings"></div>
+      </section>
+    </div>
+  </aside>
+  <div id="balanceOverlay" class="panel-overlay hidden"></div>
+
   <div id="toasts" class="toasts"></div>
 
   <script src="/js/config.js?v=20260726-portal-dungeon-door"></script>
+  <!-- world.js : uniquement pour dungeonBossFor()/tierAtDistance() dans le
+       panneau d'équilibrage — les forces des boss de donjon y vivent, pas
+       dans config.js. Aucune carte n'est générée ici. -->
+  <script src="/js/world.js?v=20260726-portal-dungeon-door"></script>
   <script src="/js/render.js?v=20260726-portal-dungeon-door"></script>
-  <script src="/admin/admin.js?v=10"></script>
+  <script src="/admin/admin.js?v=12"></script>
 </body>
 </html>

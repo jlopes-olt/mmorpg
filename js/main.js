@@ -406,7 +406,13 @@
           return;
         }
         const nowChance = server.raidChance(raid);
-        const withMeChance = winChance(server.teamForce(raid) + combatPower(me), raid.monsterForce);
+        const freeMercSlots = Math.max(0, MERC_MAX_PER_RAID - ((raid.mercs || []).length));
+        const joiningMercs = (me.mercs || []).slice(0, freeMercSlots);
+        const withMeChance = winChance(
+          server.teamForce(raid) + combatPower(me) +
+            joiningMercs.reduce((n, m) => n + mercCombatPower(m), 0),
+          raid.monsterForce
+        );
         const regainOk = me.pa >= CONFIG.COSTS.RAID;
         ui.confirmAction({
           title: 'Rejoindre le raid ' + ml + ' ?',
@@ -431,11 +437,19 @@
         walkTo(tx, ty);
         return;
       }
-      const soloChance = winChance(teamPowerOf([me]), c.force);
+      // Les mercenaires actifs sont engages AUTOMATIQUEMENT dans le combat a
+      // venir (voir Game.raidMercsOf) : les omettre ici affichait un seuil
+      // catastrophique sans rapport avec la resolution reelle.
+      const myMercs = (me.mercs || []).slice(0, MERC_MAX_PER_RAID);
+      const soloChance = winChance(teamPowerOf([me], myMercs), c.force);
       const soloRegainOk = me.pa >= CONFIG.COSTS.RAID;
       ui.confirmAction({
         title: 'Lancer Raid ' + ml + ' ?',
-        bodyHtml: '<p>Seul, jet nécessaire ' + ui.thresholdHtml(soloChance) + ' pour l’emporter.</p>' +
+        bodyHtml: '<p>' +
+          (myMercs.length
+            ? 'Avec votre escouade (' + myMercs.length + ' lame' + (myMercs.length > 1 ? 's' : '') + '), jet nécessaire '
+            : 'Seul, jet nécessaire ') +
+          ui.thresholdHtml(soloChance) + ' pour l’emporter.</p>' +
           '<p class="dim hp-c">⚠ Une défaite est mortelle : retour à la Capitale.</p>' +
           '<p class="dim">Le lobby reste ouvert 30 s — chaque allié qui rejoint fait grimper vos chances (visibles en direct dans la bannière).</p>' +
           (soloRegainOk ? '<p class="ok-c small">✨ Regain disponible : XP doublée en cas de victoire !</p>' : ''),

@@ -148,8 +148,13 @@
          accessible depuis le journal des quêtes, voir showQuestLog) -->
     <button id="helpBtn" aria-label="Afficher ou masquer les quêtes">?</button>
 
-    <!-- Buff de nourriture actif -->
-    <div id="buffBadge" class="hidden"></div>
+    <!-- Etats actifs avant combat : mets cuisine et lames engagees. Empiles
+         dans un conteneur flex plutot que positionnes chacun de leur cote —
+         sinon masquer l'un laisserait un trou sous l'autre. -->
+    <div id="hudBadges">
+      <div id="buffBadge" class="hidden"></div>
+      <div id="mercBadge" class="hidden"></div>
+    </div>
 
     <!-- Bottom sheet (Inventaire / Profil / Carte / Social / Capitale) -->
     <section id="sheet" class="hidden">
@@ -213,6 +218,7 @@
   <script src="js/config.js?v=20260727-housing-perf-pass-2"></script>
   <script src="js/achievements.js?v=20260727-housing-perf-pass-2"></script>
   <script src="js/quests.js?v=20260727-housing-perf-pass-2"></script>
+  <script src="js/dailies.js?v=20260727-housing-perf-pass-2"></script>
   <script src="js/world.js?v=20260727-housing-perf-pass-2"></script>
   <script src="js/server.js?v=20260727-housing-perf-pass-2"></script>
   <script src="js/net.js?v=20260727-housing-perf-pass-2"></script>

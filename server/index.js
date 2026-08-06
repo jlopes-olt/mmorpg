@@ -427,6 +427,18 @@ app.post('/admin/api/players/:username/premium', adminAuth, (req, res) => {
   res.json(r);
 });
 
+app.post('/admin/api/players/:username/seals', adminAuth, (req, res) => {
+  const r = game.adminGrantSeals(req.adminPlayer, req.params.username, Number((req.body || {}).amount));
+  res.json(r);
+});
+
+// Retire les contrats du jour et de la semaine : sans ça, tester le tableau
+// des contrats imposerait d'attendre 5 h du matin.
+app.post('/admin/api/players/:username/dailies/reroll', adminAuth, (req, res) => {
+  const r = game.adminRerollDailies(req.adminPlayer, req.params.username);
+  res.json(r);
+});
+
 app.post('/admin/api/players/:username/item', adminAuth, (req, res) => {
   const b = req.body || {};
   const r = game.adminGrantItem(req.adminPlayer, req.params.username, String(b.key || ''), Number(b.qty));
@@ -655,6 +667,11 @@ io.on('connection', (socket) => {
     }
     return { ok: true };
   }));
+  socket.on('merc:buy', act((d) => game.buyMercContract(player, String(d.speciesClass), Number(d.tier))));
+  socket.on('merc:activate', act((d) => game.activateMerc(player, String(d.speciesClass), Number(d.tier))));
+  socket.on('merc:dismiss', act((d) => game.dismissMerc(player, String(d.mercId))));
+  socket.on('contracts:board', act(() => game.contractsBoard(player)));
+  socket.on('contracts:buy', act((d) => game.buySealItem(player, String(d.itemId), String(d.choice || ''))));
   socket.on('cook', act((d) => game.cook(player, String(d.item), Number(d.tier))));
   socket.on('consume', act((d) => game.consume(player, String(d.key))));
   socket.on('trade:request', act((d) => game.requestTrade(player, String(d.targetId))));

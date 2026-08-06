@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node index.js",
     "sprites": "node tools/strip-bg.js",
-    "test": "node test-game.js && node test-socket.js"
+    "test": "node test-game.js && node test-contracts.js && node test-socket.js",
+    "test:contracts": "node test-contracts.js"
   },
   "dependencies": {
     "express": "^4.21.2",
